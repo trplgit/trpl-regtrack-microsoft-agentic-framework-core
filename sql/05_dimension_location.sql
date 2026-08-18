@@ -54,6 +54,20 @@ BEGIN
 
     EXEC dbo.usp_Insights_AssertStatusCoverage;   -- THROWs on dictionary gap
 
+    /*  The RiskType value meaning Critical comes from the DICTIONARY, never from a
+        literal. `RiskType = 3` in a WHERE clause is an enum literal - non-negotiable
+        #4 - and if the mapping is ever wrong or re-ruled, a literal makes this proc
+        silently report the wrong critical count with no error. Fail closed if the
+        dictionary cannot supply it.                                                 */
+    DECLARE @criticalRisk INT = (
+        SELECT TRY_CAST(p.RawValue AS INT)
+        FROM dbo.InsightsEnumPolarity p
+        JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
+        WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
+
+    IF @criticalRisk IS NULL
+        THROW 51032, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute a critical-risk count.', 1;
+
     /*═══════════════════════════════════════════════════════════════════
       1. SCOPED INSTANCE BASE
     ═══════════════════════════════════════════════════════════════════*/
@@ -171,7 +185,7 @@ BEGIN
                   AND w.ComplianceInstanceID IS NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
-        SUM(CASE WHEN i.RiskType = 3 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.RiskType = @criticalRisk THEN 1 ELSE 0 END),
         ISNULL(MAX(p.Performers), 0),
         ISNULL(MAX(p.Reviewers), 0),
         ISNULL(MAX(cl.ClosureEventsLifetime), 0),
@@ -269,7 +283,16 @@ BEGIN
                   AND Instances >= 50
                   AND ClosureRatio < @artifactThreshold
                  THEN ',onboarding_artifact' ELSE '' END +
-            CASE WHEN DistinctPerformers <= 1 OR DistinctReviewers <= 1 THEN ',single_point_of_failure' ELSE '' END +
+            /*  [TRAP] SPOF IS ONLY MEANINGFUL WHERE THERE IS WORK TO DO.
+                Without the Instances > 0 guard this fires on every EMPTY branch
+                (0 performers satisfies <= 1), so Flagged counts all branches while
+                Eligible counts only branches with obligations - producing 191 of 109
+                = 175.2%, an impossible rate. Same defect class as the per-user
+                concentration sum that produced 155% (spec 6.8). A location with no
+                obligations cannot depend on a single person; there is nothing to do. */
+            CASE WHEN Instances > 0
+                  AND (DistinctPerformers <= 1 OR DistinctReviewers <= 1)
+                 THEN ',single_point_of_failure' ELSE '' END +
             CASE WHEN NodeType = 'intermediate' THEN ',instances_on_intermediate_node' ELSE '' END +
             CASE WHEN RootKind = 'orphan' THEN ',orphaned_parent_deleted' ELSE '' END +
             CASE WHEN OwnerlessPct >= 10.0 THEN ',high_ownerless' ELSE '' END +
@@ -523,19 +546,25 @@ BEGIN
            CONCAT(N'', ScopeLabel, N''' s clean record is an onboarding artifact, not performance'),
            AssertionId, 
            N'MUST NOT be presented as a top performer. Lifetime closure events are far below configured obligations.'
-    FROM #assert WHERE AssertionId LIKE 'A-ONB-%';
+    FROM #assert WHERE AssertionId LIKE 'A-ONB-[0-9]%';   -- consistent with F-SPOF / F-OWN / F-GHOST
 
+    /*  [TRAP] MATCH THE NUMBERED ASSERTIONS ONLY, NEVER THE AGGREGATE.
+        'A-SPOF-%' also matches 'A-SPOF-AGG', so the aggregate assertion produced a
+        SECOND, individual-shaped finding reading "tenant depends on a single person
+        for performance or review" - duplicating F-SPOF-AGG and asserting nonsense
+        about a scope label of 'tenant'. The emission policy exists precisely to make
+        these mutually exclusive. Anchor on [0-9], as F-GHOST already does.          */
     INSERT #find
     SELECT 'F-SPOF','medium',
            CONCAT(N'', ScopeLabel, N' depends on a single person for performance or review'),
            AssertionId, NULL
-    FROM #assert WHERE AssertionId LIKE 'A-SPOF-%';
+    FROM #assert WHERE AssertionId LIKE 'A-SPOF-[0-9]%';
 
     INSERT #find
     SELECT 'F-OWN','high',
            CONCAT(N'', ScopeLabel, N' has ', Value, N'% of obligations with no assigned owner'),
            AssertionId, NULL
-    FROM #assert WHERE AssertionId LIKE 'A-OWN-%';
+    FROM #assert WHERE AssertionId LIKE 'A-OWN-[0-9]%';   -- [0-9] excludes A-OWN-AGG
 
     INSERT #find
     SELECT 'F-GHOST','high',

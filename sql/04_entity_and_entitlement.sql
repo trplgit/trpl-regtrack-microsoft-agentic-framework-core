@@ -198,7 +198,13 @@ BEGIN
     SELECT
         t.ApexId, t.ApexName,
         SUM(CASE WHEN i.ID IS NOT NULL THEN 1 ELSE 0 END) AS SubtreeInstances,
-        SUM(CASE WHEN t.BranchID <> t.ApexId THEN 1 ELSE 0 END) AS DescendantNodes
+        /*  [TRAP] COUNT DISTINCT NODES, NEVER SUM OVER THE JOINED ROWSET.
+            This SELECT LEFT JOINs ComplianceInstance, so one node produces one row
+            PER INSTANCE. A SUM(CASE ...) here counts instance rows, not nodes: an
+            8-descendant subtree holding 209 instances reported 213 descendants.
+            Same defect class as the per-user concentration sum that produced an
+            impossible 155% (spec 6.8). Count the entity, not the fact rows.        */
+        COUNT(DISTINCT CASE WHEN t.BranchID <> t.ApexId THEN t.BranchID END) AS DescendantNodes
     INTO #apex
     FROM dbo.tvfInsightsEntityTree(@CustomerID) t
     LEFT JOIN ComplianceInstance i

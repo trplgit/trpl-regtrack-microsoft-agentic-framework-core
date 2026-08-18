@@ -132,6 +132,20 @@ BEGIN
 
     EXEC dbo.usp_Insights_AssertStatusCoverage;   -- fail closed on dictionary gap
 
+    /*  The RiskType value meaning Critical comes from the DICTIONARY, never from a
+        literal (non-negotiable #4). This matters more here than anywhere: a wrong
+        literal makes the free digest tell a compliance manager they have 2 critical
+        obligations due when they have 140 - silently, with no error, in an email
+        that goes to 600 tenants.                                                    */
+    DECLARE @criticalRisk INT = (
+        SELECT TRY_CAST(p.RawValue AS INT)
+        FROM dbo.InsightsEnumPolarity p
+        JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
+        WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
+
+    IF @criticalRisk IS NULL
+        THROW 51040, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to send a digest carrying a critical-risk count.', 1;
+
     /* Scoped instance base. Same 2-D scope rules as the paid engine — a free
        recipient must never receive numbers outside their authorised scope. */
     IF OBJECT_ID('tempdb..#i') IS NOT NULL DROP TABLE #i;
@@ -186,7 +200,7 @@ BEGIN
 
         -- this week: next 7 days (4)
         (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf))                       AS DueNext7,
-        (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf) AND RiskType = 3)      AS CriticalDueNext7,
+        (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf) AND RiskType = @criticalRisk) AS CriticalDueNext7,
         (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf) AND Imprisonment = 1)  AS ImprisonmentDueNext7,
         (SELECT COUNT(DISTINCT BranchID) FROM #i)                                                  AS BranchesInScope,
 
@@ -194,7 +208,7 @@ BEGIN
         (SELECT COUNT(*) FROM #due)                                                                AS DueNext30,
         (SELECT COUNT(*) FROM #due WHERE Imprisonment = 1)                                         AS ImprisonmentDueNext30,
         (SELECT COUNT(*) FROM #due WHERE ComplianceType = 2)                                       AS LicencesLapsingNext30,
-        (SELECT COUNT(*) FROM #due WHERE RiskType = 3)                                             AS CriticalDueNext30,
+        (SELECT COUNT(*) FROM #due WHERE RiskType = @criticalRisk)                                  AS CriticalDueNext30,
 
         -- momentum: backward, ABSOLUTE COUNT ONLY (1)
         @completedLast7                                                                            AS CompletedLast7,

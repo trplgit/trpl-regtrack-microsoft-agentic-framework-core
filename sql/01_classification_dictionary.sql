@@ -295,17 +295,22 @@ BEGIN
 
     DECLARE @pastdue INT, @nullStatus INT, @unmapped INT;
 
+    /*  [TRAP] SQL Server rejects a NOT EXISTS subquery used inside a CASE that is
+        itself an argument to an aggregate (Msg 130, "Cannot perform an aggregate
+        function on an expression containing an aggregate or a subquery") — this
+        fires even in the simplest single-table form, confirmed empirically against
+        production. Fix: LEFT JOIN the dictionary and test for a NULL match instead
+        of a correlated NOT EXISTS — same semantics, no aggregate/subquery nesting.  */
     SELECT
         @pastdue    = COUNT(*),
         @nullStatus = SUM(CASE WHEN rct.ComplianceStatusID IS NULL THEN 1 ELSE 0 END),
-        @unmapped   = SUM(CASE WHEN rct.ComplianceStatusID IS NOT NULL
-                                AND NOT EXISTS (SELECT 1 FROM dbo.vInsightsStatusCurrent d
-                                                WHERE d.StatusId = rct.ComplianceStatusID)
+        @unmapped   = SUM(CASE WHEN rct.ComplianceStatusID IS NOT NULL AND d.StatusId IS NULL
                                THEN 1 ELSE 0 END)
     FROM ComplianceScheduleOn cso
     JOIN ComplianceInstance i ON i.ID = cso.ComplianceInstanceID
     JOIN CustomerBranch cb    ON cb.ID = i.CustomerBranchID
     JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID = cso.ID
+    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = rct.ComplianceStatusID
     WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND i.IsDeleted = 0
       AND cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1
       AND cso.ScheduleOn <= GETDATE();

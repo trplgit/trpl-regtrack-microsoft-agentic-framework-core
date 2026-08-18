@@ -169,17 +169,30 @@ BEGIN
 
     DECLARE @branchViolations INT, @categoryViolations INT, @pairViolations INT;
 
+    /*  [TRAP] SQL Server rejects a NOT EXISTS subquery used inside a CASE that is
+        itself an argument to an aggregate (Msg 130, "Cannot perform an aggregate
+        function on an expression containing an aggregate or a subquery"). It fires
+        at CREATE PROCEDURE time, so the procedure is NEVER created - and because a
+        failed CREATE does not stop later batches, the trailing PRINT still says
+        "installed". Same trap as usp_Insights_StatusDataQuality in sql/01.
+
+        EXISTS is legal in a SELECT list, so flag each row first, then SUM the flags. */
     ;WITH scoped AS (SELECT * FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID)),
-          pairs  AS (SELECT * FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
-    SELECT
-        @branchViolations = SUM(CASE WHEN NOT EXISTS
-            (SELECT 1 FROM pairs p WHERE p.BranchID = s.BranchID) THEN 1 ELSE 0 END),
-        @categoryViolations = SUM(CASE WHEN NOT EXISTS
-            (SELECT 1 FROM pairs p WHERE p.CategoryId = s.CategoryId) THEN 1 ELSE 0 END),
-        @pairViolations = SUM(CASE WHEN NOT EXISTS
-            (SELECT 1 FROM pairs p WHERE p.BranchID = s.BranchID
-                                     AND p.CategoryId = s.CategoryId) THEN 1 ELSE 0 END)
-    FROM scoped s;
+          pairs  AS (SELECT * FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID)),
+          flagged AS (
+        SELECT
+            CASE WHEN EXISTS (SELECT 1 FROM pairs p WHERE p.BranchID = s.BranchID)
+                 THEN 0 ELSE 1 END AS BranchViolation,
+            CASE WHEN EXISTS (SELECT 1 FROM pairs p WHERE p.CategoryId = s.CategoryId)
+                 THEN 0 ELSE 1 END AS CategoryViolation,
+            CASE WHEN EXISTS (SELECT 1 FROM pairs p WHERE p.BranchID   = s.BranchID
+                                                     AND p.CategoryId = s.CategoryId)
+                 THEN 0 ELSE 1 END AS PairViolation
+        FROM scoped s)
+    SELECT @branchViolations   = SUM(BranchViolation),
+           @categoryViolations = SUM(CategoryViolation),
+           @pairViolations     = SUM(PairViolation)
+    FROM flagged;
 
     SET @branchViolations   = ISNULL(@branchViolations, 0);
     SET @categoryViolations = ISNULL(@categoryViolations, 0);

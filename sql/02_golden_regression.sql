@@ -113,6 +113,17 @@ BEGIN
       AND cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1
       AND cso.ScheduleOn <= @AsOf;
 
+    /*  [TRAP] SUM() over zero rows returns NULL, not 0 — a tenant with no
+        past-due schedules at all would make every term above NULL, and
+        NULL = NULL - NULL ... evaluates to UNKNOWN, which INSERT/CASE treats
+        as FALSE. That reads as a regression FAILURE on a tenant that simply
+        has nothing to test — the exact "zero obligations, cannot assess"
+        boundary case this project's own rules require handling everywhere.
+        ISNULL-wrap every term so an empty tenant vacuously PASSES, matching
+        how G-5/G-7/G-8/G-9 already handle their own zero-row cases.        */
+    SET @old = ISNULL(@old,0); SET @new = ISNULL(@new,0);
+    SET @c79 = ISNULL(@c79,0); SET @c17 = ISNULL(@c17,0); SET @c18 = ISNULL(@c18,0);
+
     INSERT @results VALUES ('G-2', N'Overdue definition invariant (old→new reconciles)',
         CASE WHEN @new = @old - @c79 - @c17 + @c18 THEN 1 ELSE 0 END,
         CONCAT(N'new=', @new, N' old=', @old, N' pastdue(7,9)=', @c79,
@@ -182,20 +193,76 @@ BEGIN
            RiskType 3 must carry the overwhelming majority of imprisonment-
            bearing compliances. If this inverts, the mapping has been edited
            wrongly (design-time measurement: 1,419 of 1,424 = 99.6%).
+
+           [TRAP — found empirically, 2026-08-18] The 90% figure is a SYSTEM-
+           WIDE statistic (it describes the RiskType↔Imprisonment MAPPING
+           itself, a dictionary-level fact — not any one tenant's instance
+           mix). The original version of this test applied it PER TENANT and
+           broke on every real tenant checked: 1490 (2/122), 5 (20/1446),
+           29 (38/888) — all genuine, all failing, none a data problem. A
+           small tenant's own imprisonment items can easily skew away from
+           the system-wide average by chance; that says nothing about
+           whether the mapping itself is sane. Test the mapping the way it
+           was actually measured — system-wide, independent of @CustomerID —
+           same principle as the peer-relative rule used everywhere else in
+           this project (never an absolute per-tenant threshold).
     ───────────────────────────────────────────────────────────────────────*/
-    DECLARE @imp_total INT, @imp_r3 INT;
+    /*  DECISION 2026-08-18: kept PER TENANT, instance-weighted.
+
+        A system-wide variant over the Compliance master was trialled. It does not
+        resolve the failure - it makes it larger (0.09% system-wide vs 1.4-4.3%
+        per tenant), because it applies a threshold that was measured
+        instance-weighted on ONE production tenant (1,419 of 1,424) to a different
+        population entirely. That is the "correct by luck on the data you measured"
+        error this project documents four times over.
+
+        This assertion is therefore restored to the form in which the 99.6% figure
+        was actually validated. It is EXPECTED TO FAIL on this database, and that
+        failure is the finding: imprisonment-bearing compliances here are NOT
+        RiskType 3. Resolve by correcting the data or the InsightsEnumPolarity seed
+        in sql/01 (with a BA ruling) - never by re-scoping this test until it reads
+        green. See CLAUDE.md 13 and docs/GOLDEN_FIXTURES.md.                        */
+    /*  The RiskType value meaning Critical is READ FROM THE DICTIONARY, never
+        hardcoded. A literal `RiskType = 3` here would be an enum literal in a
+        WHERE clause - non-negotiable #4. It would also make this test agree with
+        a wrong seed by construction, which defeats its entire purpose.
+
+        The test also reports the value the DATA actually favours, so a failure
+        names the correct mapping instead of just saying "no".                    */
+    DECLARE @criticalRisk INT = (
+        SELECT TRY_CAST(p.RawValue AS INT)
+        FROM dbo.InsightsEnumPolarity p
+        JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
+        WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
+
+    DECLARE @imp_total INT, @imp_crit INT, @imp_topValue INT, @imp_topCount INT;
+
     SELECT @imp_total = COUNT(*),
-           @imp_r3    = SUM(CASE WHEN c.RiskType = 3 THEN 1 ELSE 0 END)
+           @imp_crit  = SUM(CASE WHEN c.RiskType = @criticalRisk THEN 1 ELSE 0 END)
     FROM ComplianceInstance i
     JOIN CustomerBranch cb ON cb.ID = i.CustomerBranchID
     JOIN Compliance c      ON c.ID = i.ComplianceID
     WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0
       AND i.IsDeleted = 0 AND c.IsDeleted = 0 AND c.Imprisonment = 1;
 
-    INSERT @results VALUES ('G-6', N'RiskType 3 = Critical carries imprisonment items',
-        CASE WHEN @imp_total = 0 OR (@imp_r3 * 100.0 / @imp_total) >= 90.0 THEN 1 ELSE 0 END,
-        CONCAT(N'imprisonment items on RiskType 3 = ', @imp_r3, N'/', @imp_total,
-               N' (expect >=90%)'));
+    -- which RiskType do imprisonment items ACTUALLY concentrate on for this tenant?
+    SELECT TOP 1 @imp_topValue = c.RiskType, @imp_topCount = COUNT(*)
+    FROM ComplianceInstance i
+    JOIN CustomerBranch cb ON cb.ID = i.CustomerBranchID
+    JOIN Compliance c      ON c.ID = i.ComplianceID
+    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0
+      AND i.IsDeleted = 0 AND c.IsDeleted = 0 AND c.Imprisonment = 1
+    GROUP BY c.RiskType
+    ORDER BY COUNT(*) DESC;
+
+    INSERT @results VALUES ('G-6', N'Dictionary Critical RiskType carries imprisonment items',
+        CASE WHEN ISNULL(@imp_total,0) = 0
+                  OR (@imp_crit * 100.0 / @imp_total) >= 90.0 THEN 1 ELSE 0 END,
+        CONCAT(N'dictionary Critical = RiskType ', ISNULL(@criticalRisk,-1),
+               N' -> ', ISNULL(@imp_crit,0), N'/', ISNULL(@imp_total,0),
+               N' imprisonment items (expect >=90%). Data favours RiskType ',
+               ISNULL(@imp_topValue,-1), N' with ', ISNULL(@imp_topCount,0),
+               N'. If these disagree, the InsightsEnumPolarity seed in sql/01 is wrong.'));
 
     /*───────────────────────────────────────────────────────────────────────
       G-7  SCOPE IS TWO-DIMENSIONAL
