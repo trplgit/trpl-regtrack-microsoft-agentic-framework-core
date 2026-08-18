@@ -1,0 +1,49 @@
+<Project>
+
+  <!--
+    Central package management. Versions are pinned HERE, once. A .csproj names the
+    package it needs and never carries a Version attribute.
+
+    Versions below are aligned with the existing RegTrack API (RegtrackCompliance.csproj)
+    so the two solutions do not disagree on a shared dependency.
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="Data access - versions matched to the RegTrack API">
+    <PackageVersion Include="Dapper" Version="2.1.66" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.0.2" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.23" />
+  </ItemGroup>
+
+  <ItemGroup Label="Azure - versions matched to the RegTrack API">
+    <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.8.0" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Presentation">
+    <PackageVersion Include="HtmlSanitizer" Version="9.0.892" />
+  </ItemGroup>
+
+  <ItemGroup Label="Host">
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Test">
+    <PackageVersion Include="coverlet.collector" Version="6.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageVersion Include="xunit" Version="2.5.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <!--
+    Phase 1d additions, not yet pinned:
+      Microsoft.DurableTask.Worker / .Client + the SQL Server provider  (durable state)
+      Microsoft.Agents.AI (MAF) + the Anthropic provider                (compose / narrate)
+      Microsoft.Playwright                                              (cosmetic render QA)
+      OpenTelemetry.Exporter.OpenTelemetryProtocol                      (LangFuse)
+  -->
+
+</Project>
