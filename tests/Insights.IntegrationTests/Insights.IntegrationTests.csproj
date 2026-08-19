@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../RegtrackInsights.csproj" />
+    <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
   </ItemGroup>
 
 </Project>

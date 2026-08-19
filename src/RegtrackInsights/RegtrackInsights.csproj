@@ -1,8 +1,21 @@
-<Project Sdk="Microsoft.NET.Sdk.Worker">
+﻿<Project Sdk="Microsoft.NET.Sdk.Worker">
 
   <!--
     The single project for this repo: Program.cs, appsettings, launch profiles, and all
-    the code under src\Insights.*.
+    the code under Insights.*.
+
+    It lives in src\RegtrackInsights\ rather than at the repo root ON PURPOSE, and that
+    is load-bearing. The SDK's default globs are rooted at the PROJECT directory and
+    exclude only that project's own bin\ and obj\. A project at the repo root therefore
+    globs tests\**\bin, copies it into its own output, then globs THAT copy on the next
+    build - nesting until paths blow past MAX_PATH and the build dies in MSB3030 before
+    the compiler ever runs. Keeping every project a sibling under src\ or tests\ makes
+    that impossible by construction, which is why no EnableDefault*Items overrides are
+    needed here.
+
+    RULE: never place a project directory above another project directory. If Insights.*
+    below are ever promoted to real projects, move them OUT to src\Insights.X\ as
+    siblings of this folder - do not leave a csproj nested underneath this one.
 
     PRIVATE: no public endpoints, no ingress. The Insights API endpoints live in the
     existing RegTrack API, where auth already lives (CLAUDE.md 6).
@@ -12,28 +25,11 @@
     <AssemblyName>RegtrackInsights</AssemblyName>
     <RootNamespace>RegtrackInsights</RootNamespace>
     <UserSecretsId>regtrack-insights-worker</UserSecretsId>
-
-    <!--
-      This project sits at the repo root, so the SDK's default glob would sweep in every
-      .cs under tests\ (which the test projects already compile) and every generated file
-      under obj\. Turn the glob off and list what this project owns, below.
-    -->
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
   </PropertyGroup>
-
-  <!--
-    Program.cs plus everything under src\. Add a new folder under src\ and its .cs files
-    compile automatically - nothing to register here.
-    appsettings*.json are picked up and copied by the SDK's default Content items.
-  -->
-  <ItemGroup>
-    <Compile Include="Program.cs" />
-    <Compile Include="src\**\*.cs" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Dapper" />
     <PackageReference Include="Microsoft.Data.SqlClient" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
@@ -52,8 +48,11 @@
   <!--
     Prompts and email templates ship as CONTENT, not embedded strings.
     Agents:PromptDirectory defaults to ./prompts, Email:TemplatePath to ./templates.
+    The None Remove stops the SDK's default None glob claiming them first.
   -->
   <ItemGroup>
+    <None Remove="prompts\**\*.md" />
+    <None Remove="templates\**\*.*" />
     <Content Include="prompts\**\*.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -62,9 +61,12 @@
     </Content>
   </ItemGroup>
 
-  <!-- SQL is installed with sqlcmd, never compiled or deployed with the host. -->
+  <!--
+    SQL is installed with sqlcmd, never compiled or deployed with the host. Linked in
+    from the repo root purely so it is visible in Solution Explorer.
+  -->
   <ItemGroup>
-    <None Include="sql\**\*.sql" />
+    <None Include="..\..\sql\**\*.sql" LinkBase="sql" />
   </ItemGroup>
 
 </Project>

@@ -43,7 +43,7 @@ Angular → RegTrack API (auth, endpoints, enqueue)
 | `docs/API_CONTRACTS.md` | The 5 API endpoints |
 | `docs/GOLDEN_FIXTURES.md` | CI fixture database spec |
 | `docs/RegTrack_Classification_Dictionary_v1.xlsx` | BA-signed status/enum semantics |
-| `prompts/` | Agent prompts — composition, narrative, reflection, HTML, digest |
+| `src/RegtrackInsights/prompts/` | Agent prompts — composition, narrative, reflection, HTML, digest |
 | `sql/01`–`sql/06` | Foundation + Location dimension + free-tier aggregates |
 | `sql/99_rollback.sql` | Clean teardown |
 | `PHASE_1A_BUILD_BRIEF.md` | Phase 1a tasks, acceptance criteria, validation findings |

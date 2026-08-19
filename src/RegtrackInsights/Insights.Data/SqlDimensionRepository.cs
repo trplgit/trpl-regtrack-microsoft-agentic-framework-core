@@ -1,0 +1,266 @@
+﻿using System.Data;
+using Dapper;
+using Insights.Domain;
+using Microsoft.Data.SqlClient;
+
+namespace Insights.Data;
+
+/// <inheritdoc cref="IDimensionRepository"/>
+public sealed class SqlDimensionRepository(string connectionString) : IDimensionRepository
+{
+    /*  Each dimension owns a block of ten error numbers, allocated uniformly:
+            base + 0  SCOPE DENIED
+            base + 1  RECONCILIATION FAILED
+            base + 2  DICTIONARY / MASTER DATA GAP
+        That uniformity is deliberate - it is why one translation helper covers all nine
+        instead of nine bespoke catch blocks. If a new dimension is added, keep the scheme.  */
+    private const int LocationErrorBase    = 51030;
+    private const int EntityErrorBase      = 51050;
+    private const int RiskErrorBase        = 51060;
+    private const int NatureErrorBase      = 51070;
+    private const int DepartmentsErrorBase = 51080;
+    private const int ActErrorBase         = 51090;
+    private const int UsersErrorBase       = 51100;
+    private const int InternalErrorBase    = 51110;
+    private const int EventErrorBase       = 51120;
+
+    /*  Measured: 30s on a large tenant, and the largest tenant in the estate carries ~1.49M
+        past-due schedules and has not been timed. The default 30s command timeout would fail
+        those runs, so it is raised here rather than left to surface as a transient error the
+        caller cannot distinguish from a real fault. This contradicts the spec's "SQL -
+        negligible" estimate; treat the estimate as the thing that is wrong.                  */
+    private const int DimensionCommandTimeoutSeconds = 300;
+
+    public Task<DimensionResult<LocationControlTotals, LocationRow>> GetLocationAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<LocationControlTotals, LocationRow>(
+            "Location", "dbo.usp_Insights_Dimension_Location", LocationErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<EntityControlTotals, EntityRow>> GetEntityAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<EntityControlTotals, EntityRow>(
+            "Entity", "dbo.usp_Insights_Dimension_Entity", EntityErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf },
+            true, ReadEntityControlTotalsAsync, cancellationToken);
+
+    public Task<DimensionResult<RiskControlTotals, RiskRow>> GetRiskAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<RiskControlTotals, RiskRow>(
+            "Risk", "dbo.usp_Insights_Dimension_Risk", RiskErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<NatureControlTotals, NatureRow>> GetNatureAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<NatureControlTotals, NatureRow>(
+            "Nature", "dbo.usp_Insights_Dimension_Nature", NatureErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<DepartmentsControlTotals, DepartmentsRow>> GetDepartmentsAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<DepartmentsControlTotals, DepartmentsRow>(
+            "Departments", "dbo.usp_Insights_Dimension_Departments", DepartmentsErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<ActControlTotals, ActRow>> GetActAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<ActControlTotals, ActRow>(
+            "Act", "dbo.usp_Insights_Dimension_Act", ActErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<UsersControlTotals, UsersRow>(
+            "Users", "dbo.usp_Insights_Dimension_Users", UsersErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<InternalControlTotals, InternalRow>> GetInternalAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<InternalControlTotals, InternalRow>(
+            "Internal", "dbo.usp_Insights_Dimension_Internal", InternalErrorBase,
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+
+    public Task<DimensionResult<EventControlTotals, EventRow>> GetEventAsync(
+        int userId, int customerId, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<EventControlTotals, EventRow>(
+            "Event", "dbo.usp_Insights_Dimension_Event", EventErrorBase,
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, AsOf = asOf, DormancyMonths = dormancyMonths },
+            false, null, cancellationToken);
+
+    /// <summary>
+    /// Reads the six result sets positionally and translates the proc's THROWs into typed
+    /// exceptions. ORDER IS THE CONTRACT - the procs emit no result-set names, so reading these
+    /// out of order silently misbinds columns rather than failing.
+    ///
+    /// Every dimension THROWs BEFORE selecting anything on its failure paths, so there is never a
+    /// partial result set to lose here (unlike usp_Insights_GoldenInvariants, which selects
+    /// first and then throws - see SqlGoldenRegressionRepository).
+    /// </summary>
+    private async Task<DimensionResult<TControlTotals, TRow>> ExecuteAsync<TControlTotals, TRow>(
+        string dimension,
+        string procedureName,
+        int errorBase,
+        int userId,
+        int customerId,
+        object parameters,
+        bool emitsCoverageGrid,
+        Func<SqlMapper.GridReader, Task<TControlTotals>>? controlTotalsReader,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        try
+        {
+            using var multi = await connection.QueryMultipleAsync(
+                new CommandDefinition(
+                    procedureName,
+                    parameters,
+                    commandType: CommandType.StoredProcedure,
+                    commandTimeout: DimensionCommandTimeoutSeconds,
+                    cancellationToken: cancellationToken));
+
+            /*  [TRAP] A NESTED EXEC ADDS A RESULT SET.
+                Every dimension except Event opens with
+                    EXEC dbo.usp_Insights_AssertStatusCoverage;
+                and that proc ends in SELECT CAST(1 AS BIT) AS StatusCoverageComplete. Its row
+                arrives here as result set #1, BEFORE control_totals, shifting the whole
+                positional read by one. Skipped explicitly rather than guessed at: the flag is
+                set per dimension from the SQL, so if a proc ever gains or loses the EXEC the
+                mismatch surfaces as a loud Dapper materialisation error naming the columns it
+                could not bind - not as silently wrong numbers.                              */
+            if (emitsCoverageGrid)
+            {
+                await multi.ReadAsync();
+            }
+
+            var controlTotals = controlTotalsReader is null
+                ? await multi.ReadSingleAsync<TControlTotals>()
+                : await controlTotalsReader(multi);
+
+            var rows = (await multi.ReadAsync<TRow>()).AsList();
+            var detectors = (await multi.ReadAsync<DetectorRow>()).Select(ToDetectorPolicy).ToList();
+            var assertions = (await multi.ReadAsync<AssertionRow>()).Select(ToAssertion).ToList();
+            var findings = (await multi.ReadAsync<FindingRow>()).Select(ToFinding).ToList();
+            var dataQuality = (await multi.ReadAsync<DataQualityNote>()).AsList();
+
+            var result = new DimensionResult<TControlTotals, TRow>(
+                dimension, controlTotals, rows, detectors, assertions, findings, dataQuality);
+
+            // The two rules no SQL THROW covers. Checked here so they cannot reach a customer.
+            result.Validate();
+
+            return result;
+        }
+        catch (SqlException ex) when (ex.Number == errorBase)
+        {
+            throw new DimensionScopeDeniedException(dimension, userId, customerId, ex);
+        }
+        catch (SqlException ex) when (ex.Number == errorBase + 1)
+        {
+            throw new DimensionReconciliationException(dimension, customerId, ex);
+        }
+        catch (SqlException ex) when (ex.Number == errorBase + 2)
+        {
+            throw new DimensionDictionaryGapException(dimension, ex);
+        }
+    }
+
+    /*  Entity is the only dimension whose control_totals carry closed vocabularies that do not
+        match their C# enum names ('single_entity', 'descend_one_level'), so Dapper's built-in
+        string-to-enum mapping cannot do it. Parsed explicitly, fail-closed - the same treatment
+        SqlEntityRepository gives the same two values.                                          */
+    private static async Task<EntityControlTotals> ReadEntityControlTotalsAsync(SqlMapper.GridReader multi)
+    {
+        var r = await multi.ReadSingleAsync<EntityControlTotalsRow>();
+
+        return new EntityControlTotals(
+            r.ScopedInstances, r.SumOfRows, r.Reconciled, r.OverdueInstances, r.TenantOverduePct,
+            r.NodesReported, r.ActiveBranchesInTenant, r.ApexEntityCount,
+            ParseShape(r.TenantShape), r.LargestApexSharePct,
+            ParseGrain(r.ComparisonGrain), r.GrainReason);
+    }
+
+    private static DetectorPolicy ToDetectorPolicy(DetectorRow r) =>
+        new(r.Detector, r.Eligible, r.Flagged, r.FlaggedPct, ParseEmitMode(r.EmitMode));
+
+    private static Assertion ToAssertion(AssertionRow r) =>
+        new(r.AssertionId, r.Metric, r.ScopeLabel, r.Value, r.Rank_, r.OfN,
+            r.ComparatorValue, r.VsComparatorPP, ParseDirection(r.Direction), r.Caveat);
+
+    private static Finding ToFinding(FindingRow r) =>
+        new(r.FindingId, ParseSeverity(r.Severity), r.Headline, SplitAssertionIds(r.AssertionIds), r.NarrativeGuard);
+
+    /// <summary>
+    /// findings.AssertionIds is a comma-separated list of the assertions backing the headline.
+    /// Split, never parsed further - an id this wrapper does not recognise is still an id the
+    /// prompt layer must be able to resolve.
+    /// </summary>
+    private static IReadOnlyList<string> SplitAssertionIds(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /*  All four parsers fail closed on an unrecognised value, matching the dictionary's own
+        coverage check in sql/01. A vocabulary this wrapper does not know about must never be
+        silently treated as any particular meaning - least of all the harmless one.            */
+
+    private static DetectorEmitMode ParseEmitMode(string value) => value switch
+    {
+        "none" => DetectorEmitMode.None,
+        "individual" => DetectorEmitMode.Individual,
+        "aggregate" => DetectorEmitMode.Aggregate,
+        _ => throw new InvalidOperationException($"Unknown EmitMode '{value}' in detector_policy."),
+    };
+
+    private static AssertionDirection? ParseDirection(string? value) => value switch
+    {
+        null => null,
+        "worse" => AssertionDirection.Worse,
+        "better" => AssertionDirection.Better,
+        _ => throw new InvalidOperationException($"Unknown Direction '{value}' in assertions."),
+    };
+
+    private static FindingSeverity ParseSeverity(string value) => value switch
+    {
+        "info" => FindingSeverity.Info,
+        "medium" => FindingSeverity.Medium,
+        "high" => FindingSeverity.High,
+        _ => throw new InvalidOperationException($"Unknown Severity '{value}' in findings."),
+    };
+
+    private static EntityCountShape ParseShape(string value) => value switch
+    {
+        "single_entity" => EntityCountShape.SingleEntity,
+        "multi_entity" => EntityCountShape.MultiEntity,
+        _ => throw new InvalidOperationException($"Unknown TenantShape '{value}' from usp_Insights_Dimension_Entity."),
+    };
+
+    private static ComparisonGrain ParseGrain(string value) => value switch
+    {
+        "locations" => ComparisonGrain.Locations,
+        "descend_one_level" => ComparisonGrain.DescendOneLevel,
+        "apex" => ComparisonGrain.Apex,
+        _ => throw new InvalidOperationException($"Unknown ComparisonGrain '{value}' from usp_Insights_Dimension_Entity."),
+    };
+
+    private sealed record DetectorRow(string Detector, int Eligible, int Flagged, decimal FlaggedPct, string EmitMode);
+
+    /// <summary>Rank_ carries the trailing underscore the SQL uses - RANK is a reserved word there.</summary>
+    private sealed record AssertionRow(
+        string AssertionId, string Metric, string ScopeLabel, decimal Value,
+        int? Rank_, int? OfN, decimal? ComparatorValue, decimal? VsComparatorPP,
+        string? Direction, string? Caveat);
+
+    private sealed record FindingRow(
+        string FindingId, string Severity, string Headline, string? AssertionIds, string? NarrativeGuard);
+
+    private sealed record EntityControlTotalsRow(
+        int ScopedInstances, int SumOfRows, bool Reconciled,
+        int OverdueInstances, decimal TenantOverduePct,
+        int NodesReported, int ActiveBranchesInTenant, int ApexEntityCount,
+        string TenantShape, decimal LargestApexSharePct,
+        string ComparisonGrain, string GrainReason);
+}
+
+

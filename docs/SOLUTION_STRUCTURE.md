@@ -10,22 +10,41 @@ Proposed layout for `trpl-regtrack-microsoft-agentic-framework-core`.
 trpl-regtrack-microsoft-agentic-framework-core/
 ├── CLAUDE.md
 ├── README.md
+├── RegtrackInsights.sln
+├── Directory.Build.props / Directory.Packages.props / global.json
 ├── docs/            (spec, dimensions, API, fixtures, config, this file)
-├── prompts/         (agent prompts — deployed as content, not embedded strings)
-├── templates/       (email templates)
-├── sql/             (01–06, 99_rollback)
+├── sql/             (01—06, 99_rollback)
 ├── src/
-│   ├── Insights.Contracts/     ← published; the API references THIS
-│   ├── Insights.Domain/        ← dictionary, scope model, dimension contracts
-│   ├── Insights.Data/          ← Dapper, stored-proc wrappers
-│   ├── Insights.Agents/        ← MAF workflow, agent nodes, prompt loading
-│   ├── Insights.Presentation/  ← normalizer, sanitiser, Playwright QA
-│   └── Insights.Worker/        ← the host: BackgroundService + Durable Task
+│   └── RegtrackInsights/          ← the single project; the .csproj lives HERE
+│       ├── Program.cs
+│       ├── appsettings*.json      (local-only, gitignored)
+│       ├── Properties/            (launchSettings)
+│       ├── prompts/               (agent prompts — content, not embedded strings)
+│       ├── templates/             (email templates)
+│       ├── Insights.Contracts/    ← published; the API references THIS
+│       ├── Insights.Domain/       ← dictionary, scope model, dimension contracts
+│       ├── Insights.Data/         ← Dapper, stored-proc wrappers
+│       ├── Insights.Agents/       ← MAF workflow, agent nodes, prompt loading
+│       ├── Insights.Presentation/ ← normalizer, sanitiser, Playwright QA
+│       └── Insights.Worker/       ← host: BackgroundService + Durable Task
 └── tests/
     ├── Insights.UnitTests/
     ├── Insights.IntegrationTests/   ← runs against the fixture database
     └── Insights.GoldenTests/        ← wraps usp_Insights_GoldenInvariants
 ```
+
+**The Insights.* entries under `src/RegtrackInsights/` are FOLDERS today, not projects.**
+Phase 1a ships as a single project; they are split into real projects once they have
+content and the dependency graph below is settled.
+
+**Layout rule — this is load-bearing, not cosmetic.** The SDK's default globs are rooted
+at the *project* directory and exclude only that project's own `bin\`/`obj\`. A project
+at the repo root therefore globs `tests\**\bin`, copies it into its own output, then
+globs that copy next build — nesting until paths exceed MAX_PATH and the build dies in
+MSB3030 before the compiler runs. Keep every project a sibling under `src/` or `tests/`.
+**Never place a project directory above another project directory** — when the Insights.*
+folders become projects they move OUT to `src/Insights.X/`, as siblings of
+`src/RegtrackInsights/`, never as children of it.
 
 ## Project responsibilities
 
@@ -81,7 +100,7 @@ Optional: Azurite (blob), Key Vault emulator or dev secrets
 1. Restore a non-production vitComplianceSystem copy
 2. Run sql/01–06 against it
 3. dotnet user-secrets set "Llm:ApiKey" …
-4. dotnet run --project src/Insights.Worker
+4. dotnet run --project src/RegtrackInsights
 5. Trigger a run via the test harness in tests/Insights.IntegrationTests
 ```
 
