@@ -244,23 +244,62 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         _ => throw new InvalidOperationException($"Unknown ComparisonGrain '{value}' from usp_Insights_Dimension_Entity."),
     };
 
-    private sealed record DetectorRow(string Detector, int Eligible, int Flagged, decimal FlaggedPct, string EmitMode);
+    /*  [TRAP] init PROPERTIES, NOT POSITIONAL - every SELECT feeding these four carries a
+        leading 'xxx' AS ResultSet label column none of them declare. A positional record's
+        only constructor requires an exact column match, so Dapper fails outright the moment
+        the reader has one column the type does not. An init-property record gets an implicit
+        parameterless constructor, so Dapper falls back to set-by-name and ignores ResultSet
+        silently. Confirmed via a real run: all 47 DimensionRepositoryTests cases failed with
+        this exact cause before the fix (2026-08-20). See DimensionShapes.cs for the same
+        treatment applied to every public control_totals/rows type.                          */
+    private sealed record DetectorRow
+    {
+        public string Detector { get; init; } = string.Empty;
+        public int Eligible { get; init; }
+        public int Flagged { get; init; }
+        public decimal FlaggedPct { get; init; }
+        public string EmitMode { get; init; } = string.Empty;
+    }
 
     /// <summary>Rank_ carries the trailing underscore the SQL uses - RANK is a reserved word there.</summary>
-    private sealed record AssertionRow(
-        string AssertionId, string Metric, string ScopeLabel, decimal Value,
-        int? Rank_, int? OfN, decimal? ComparatorValue, decimal? VsComparatorPP,
-        string? Direction, string? Caveat);
+    private sealed record AssertionRow
+    {
+        public string AssertionId { get; init; } = string.Empty;
+        public string Metric { get; init; } = string.Empty;
+        public string ScopeLabel { get; init; } = string.Empty;
+        public decimal Value { get; init; }
+        public int? Rank_ { get; init; }
+        public int? OfN { get; init; }
+        public decimal? ComparatorValue { get; init; }
+        public decimal? VsComparatorPP { get; init; }
+        public string? Direction { get; init; }
+        public string? Caveat { get; init; }
+    }
 
-    private sealed record FindingRow(
-        string FindingId, string Severity, string Headline, string? AssertionIds, string? NarrativeGuard);
+    private sealed record FindingRow
+    {
+        public string FindingId { get; init; } = string.Empty;
+        public string Severity { get; init; } = string.Empty;
+        public string Headline { get; init; } = string.Empty;
+        public string? AssertionIds { get; init; }
+        public string? NarrativeGuard { get; init; }
+    }
 
-    private sealed record EntityControlTotalsRow(
-        int ScopedInstances, int SumOfRows, bool Reconciled,
-        int OverdueInstances, decimal TenantOverduePct,
-        int NodesReported, int ActiveBranchesInTenant, int ApexEntityCount,
-        string TenantShape, decimal LargestApexSharePct,
-        string ComparisonGrain, string GrainReason);
+    private sealed record EntityControlTotalsRow
+    {
+        public int ScopedInstances { get; init; }
+        public int SumOfRows { get; init; }
+        public bool Reconciled { get; init; }
+        public int OverdueInstances { get; init; }
+        public decimal TenantOverduePct { get; init; }
+        public int NodesReported { get; init; }
+        public int ActiveBranchesInTenant { get; init; }
+        public int ApexEntityCount { get; init; }
+        public string TenantShape { get; init; } = string.Empty;
+        public decimal LargestApexSharePct { get; init; }
+        public string ComparisonGrain { get; init; } = string.Empty;
+        public string GrainReason { get; init; } = string.Empty;
+    }
 }
 
 

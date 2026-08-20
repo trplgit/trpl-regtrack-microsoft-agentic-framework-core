@@ -82,8 +82,17 @@ public sealed record Finding(
 /// A declared limitation of this run. Never optional decoration: several are mandatory (the
 /// uncategorised-nature gap, the engagement/quality confound), and a report that omits them
 /// misrepresents how much of the estate the numbers actually cover.
+///
+/// init properties, not positional - the data_quality SELECT in every dimension proc also
+/// carries the leading 'data_quality' AS ResultSet label column (see DimensionShapes.cs for
+/// the full explanation). A positional record's exact-match constructor would fail on it the
+/// same way the other five result sets did.
 /// </summary>
-public sealed record DataQualityNote(string Issue, string Detail);
+public sealed record DataQualityNote
+{
+    public string Issue { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// The six-result-set contract every dimension proc emits, in order: control_totals, rows,
