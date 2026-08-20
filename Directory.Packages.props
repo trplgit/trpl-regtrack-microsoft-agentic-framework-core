@@ -40,9 +40,20 @@
   </ItemGroup>
 
   <!--
-    Phase 1d additions, not yet pinned:
+    Phase 1d - MAF (Microsoft Agent Framework), current stable per NuGet as of 2026-08-20.
+    CLAUDE.md 3.2/7 still document Claude as the real provider; Microsoft.Agents.AI.OpenAI is
+    wired for a temporary dev-time swap (GPT-5.2 via Azure AI Foundry), same pattern as the
+    free digest's Azure OpenAI swap earlier - not a permanent architecture change.
+  -->
+  <ItemGroup Label="Agents (MAF) - Phase 1d">
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.18.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.18.0" />
+  </ItemGroup>
+
+  <!--
+    Phase 1d additions, still not pinned:
       Microsoft.DurableTask.Worker / .Client + the SQL Server provider  (durable state)
-      Microsoft.Agents.AI (MAF) + the Anthropic provider                (compose / narrate)
+      The Anthropic MAF provider                                        (real compose / narrate provider)
       Microsoft.Playwright                                              (cosmetic render QA)
       OpenTelemetry.Exporter.OpenTelemetryProtocol                      (LangFuse)
   -->
