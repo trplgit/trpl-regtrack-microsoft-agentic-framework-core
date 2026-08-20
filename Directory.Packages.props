@@ -58,10 +58,19 @@
   </ItemGroup>
 
   <!--
+    Playwright drives a real headless Chromium for two distinct jobs: executing the vendored
+    DOMPurify bundle (vendor/dompurify-3.4.14.min.js - fetched and checked in, never fetched at
+    runtime) against the normalizer-approved HTML, and cosmetic QA on the result. Current stable
+    per NuGet as of 2026-08-20.
+  -->
+  <ItemGroup Label="Presentation - Playwright (DOMPurify execution + cosmetic QA)">
+    <PackageVersion Include="Microsoft.Playwright" Version="1.62.0" />
+  </ItemGroup>
+
+  <!--
     Phase 1d additions, still not pinned:
       Microsoft.DurableTask.Worker / .Client + the SQL Server provider  (durable state)
       The Anthropic MAF provider                                        (real compose / narrate provider)
-      Microsoft.Playwright                                              (cosmetic render QA)
       OpenTelemetry.Exporter.OpenTelemetryProtocol                      (LangFuse)
   -->
 
