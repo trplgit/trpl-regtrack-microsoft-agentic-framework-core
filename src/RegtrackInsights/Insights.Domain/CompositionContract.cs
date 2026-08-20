@@ -1,9 +1,20 @@
 namespace Insights.Domain;
 
 /// <summary>
-/// One block in a composition plan (prompts/01_composition.md output shape). Emphasis is the
-/// composition agent's judgement call, never derived from a computed value - only which
-/// findings back it (<see cref="FindingIds"/>) is something the gate can check.
+/// The lead block (prompts/01_composition.md output shape). Deliberately a DIFFERENT shape from
+/// <see cref="CompositionBlockPlan"/> - {block, reason} vs {block, emphasis, finding_ids} - the
+/// prompt's own worked example draws this distinction:
+///   "hero": { "block": "coverage_map", "reason": "F-GHOST-AGG is the highest-severity finding" }
+/// Confirmed against a real GPT-5.2 response (2026-08-20): using CompositionBlockPlan for both
+/// meant Hero.Emphasis/FindingIds came back empty, because the model correctly never populated
+/// fields the hero object doesn't have.
+/// </summary>
+public sealed record CompositionHero(string Block, string Reason);
+
+/// <summary>
+/// One block in a composition plan. Emphasis is the composition agent's judgement call, never
+/// derived from a computed value - only which findings back it (<see cref="FindingIds"/>) is
+/// something the gate can check.
 /// </summary>
 public sealed record CompositionBlockPlan(string Block, string Emphasis, IReadOnlyList<string> FindingIds);
 
@@ -16,7 +27,7 @@ public sealed record OmittedBlock(string Block, string Reason);
 /// this before narrative ever runs; nothing here is prose yet.
 /// </summary>
 public sealed record CompositionPlan(
-    CompositionBlockPlan Hero,
+    CompositionHero Hero,
     IReadOnlyList<CompositionBlockPlan> Blocks,
     IReadOnlyList<OmittedBlock> Omitted,
     IReadOnlyList<string> DataQualityToSurface);

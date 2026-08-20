@@ -48,6 +48,13 @@
   <ItemGroup Label="Agents (MAF) - Phase 1d">
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.18.0" />
     <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.18.0" />
+    <!-- AsIChatClient(ResponsesClient, ...) lives here - needed explicitly, not left to
+         transitive resolution, matching this file's "name the package you need" convention.
+         [TRAP] GetResponsesClient()/AsIChatClient(ResponsesClient,...) are marked
+         [Experimental("OPENAI001")] in this SDK version - real, verified working (2026-08-20
+         smoke test against GPT-5.2 via Azure AI Foundry), but not yet a stable surface. -->
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.7.0" />
+    <PackageVersion Include="OpenAI" Version="2.11.0" />
   </ItemGroup>
 
   <!--
