@@ -1,4 +1,4 @@
-<Project>
+﻿<Project>
 
   <!--
     Central package management. Versions are pinned HERE, once. A .csproj names the
@@ -29,6 +29,7 @@
 
   <ItemGroup Label="Host">
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="8.0.1" />
   </ItemGroup>
 
   <ItemGroup Label="Test">
@@ -47,3 +48,4 @@
   -->
 
 </Project>
+

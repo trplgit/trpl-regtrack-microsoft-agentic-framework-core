@@ -25,6 +25,14 @@ GO
 PRINT 'Rolling back RegTrack Insights objects...';
 GO
 
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Event',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Event;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Internal',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Internal;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Users',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Users;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Act',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Act;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Departments','P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Departments;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Nature',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Nature;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Risk',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Risk;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Entity',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Entity;
 /*── 1. Stored procedures ───────────────────────────────────────────────────*/
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Location',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Location;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestAggregates', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestAggregates;
