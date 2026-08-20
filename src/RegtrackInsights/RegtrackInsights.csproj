@@ -36,6 +36,11 @@
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Azure.Security.KeyVault.Keys" />
     <PackageReference Include="HtmlSanitizer" />
+    <PackageReference Include="Microsoft.Agents.AI" />
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <PackageReference Include="OpenAI" />
+    <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>
 
   <!-- Tests reach internals without everything having to be public. -->
@@ -67,6 +72,17 @@
   -->
   <ItemGroup>
     <None Include="..\..\sql\**\*.sql" LinkBase="sql" />
+  </ItemGroup>
+
+  <!--
+    Vendored DOMPurify (see vendor/README - fetched from unpkg, checked in, never fetched at
+    runtime). Ships as CONTENT next to the exe so DomPurifySanitizer can load it via
+    AppContext.BaseDirectory, same convention as prompts/templates.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\vendor\dompurify-3.4.14.min.js" Link="vendor\dompurify-3.4.14.min.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
