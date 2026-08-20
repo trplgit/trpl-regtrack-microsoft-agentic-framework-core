@@ -33,8 +33,14 @@ public static partial class FreeDigestValidator
         if (OverdueWord().IsMatch(body))
             failures.Add("contains the word 'overdue' - reserved for the paid tier");
 
+        // The prompt mandates a closing line naming "locations / people / laws" as the
+        // generic category words the paid tier covers (see the worked example in
+        // prompts/06_freetier_digest.md) - that is required boilerplate, not a leak of this
+        // tenant's actual data. Strip it before scanning for leak markers, or every
+        // correctly-written response fails this check.
+        var bodyWithoutMandatedClose = ClosingLine().Replace(body, string.Empty);
         foreach (var marker in LeakMarkers)
-            if (body.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            if (bodyWithoutMandatedClose.Contains(marker, StringComparison.OrdinalIgnoreCase))
                 failures.Add($"contains '{marker.Trim()}' - the digest has no location/department/Act data to draw this from");
 
         var allowedNumbers = AllowedWindowLabels
@@ -65,4 +71,7 @@ public static partial class FreeDigestValidator
 
     [GeneratedRegex(@"\d+")]
     private static partial Regex NumberToken();
+
+    [GeneratedRegex(@"RegInsights\s+Pro\s+shows\s+which\s+locations?,?\s+which\s+people,?\s+and\s+which\s+laws\s+(are|is)\s+driving\s+it", RegexOptions.IgnoreCase)]
+    private static partial Regex ClosingLine();
 }
