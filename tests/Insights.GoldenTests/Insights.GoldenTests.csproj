@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
     Wraps usp_Insights_GoldenInvariants. Wire into CI before any dimension proc is

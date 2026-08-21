@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Runs against the fixture database in docs/GOLDEN_FIXTURES.md (tenant 999001). -->
 

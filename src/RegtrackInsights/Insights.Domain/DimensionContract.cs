@@ -1,4 +1,4 @@
-namespace Insights.Domain;
+﻿namespace Insights.Domain;
 
 /// <summary>
 /// How a detector's findings are emitted, decided in SQL by the shared emission policy:
@@ -111,7 +111,7 @@ public sealed class DimensionResult<TControlTotals, TRow>(
     IReadOnlyList<DetectorPolicy> detectors,
     IReadOnlyList<Assertion> assertions,
     IReadOnlyList<Finding> findings,
-    IReadOnlyList<DataQualityNote> dataQuality)
+    IReadOnlyList<DataQualityNote> dataQuality) : IDimensionSummary
 {
     public string Dimension { get; } = dimension;
     public TControlTotals ControlTotals { get; } = controlTotals;
@@ -157,3 +157,4 @@ public sealed class DimensionResult<TControlTotals, TRow>(
         }
     }
 }
+

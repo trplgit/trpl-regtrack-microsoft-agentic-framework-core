@@ -43,6 +43,7 @@
     <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>
 
+
   <!-- Tests reach internals without everything having to be public. -->
   <ItemGroup>
     <InternalsVisibleTo Include="Insights.UnitTests" />
@@ -83,6 +84,22 @@
     <Content Include="..\..\vendor\dompurify-3.4.14.min.js" Link="vendor\dompurify-3.4.14.min.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <!--
+    Insights.Api is SOURCE FOR THE REGTRACK API, not part of this worker.
+
+    CLAUDE.md 6: this worker is private and queue-driven, with no public endpoints and no
+    ingress - Insights endpoints belong in the RegTrack API where auth already lives. So these
+    files are excluded from the build and re-added as None purely to stay visible in Solution
+    Explorer, the same treatment sql** gets.
+
+    CONSEQUENCE: not compile-checked here. If IFreeDigestRepository, UnsubscribeToken or the
+    Contracts DTOs change, nothing breaks until someone copies it across.
+  -->
+  <ItemGroup>
+    <Compile Remove="Insights.Api\**\*.cs" />
+    <None Include="Insights.Api\**\*" />
   </ItemGroup>
 
 </Project>

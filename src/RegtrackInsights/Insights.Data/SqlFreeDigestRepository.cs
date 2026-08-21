@@ -131,5 +131,112 @@ public sealed class SqlFreeDigestRepository(string connectionString) : IFreeDige
 
         return rows.AsList();
     }
+
+    /*  [TRAP] DAPPER CANNOT BIND DateOnly.
+        Dapper 2.1.66 throws "The member WeekEnding of type System.DateOnly cannot be used as a
+        parameter value" - it predates the type. So DateOnly stays in the public API, where it is
+        the correct type (it makes a time-of-day component impossible, and the whole point of the
+        claim key is that two runs on different days of the same week collide), and is converted
+        to DateTime at midnight only here, at the Dapper boundary. The column is DATE, so the
+        time component is discarded on the way in.
+
+        The alternative is a global SqlMapper.AddTypeHandler<DateOnly>, which would fix every
+        future call site too - worth doing if DateOnly spreads, but a global behaviour change for
+        three call sites is the bigger surprise.                                                */
+    public async Task<bool> TryClaimSendAsync(int customerId, long userId, DateOnly weekEnding, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        return await connection.QuerySingleAsync<bool>(
+            new CommandDefinition(
+                "dbo.usp_Insights_FreeDigestClaimSend",
+                new { CustomerID = customerId, UserID = userId, WeekEnding = weekEnding.ToDateTime(TimeOnly.MinValue) },
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken));
+    }
+
+    public async Task RecordOutcomeAsync(int customerId, long userId, DateOnly weekEnding, string outcome,
+        string? source = null, string? providerUsed = null, string? detail = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                "dbo.usp_Insights_FreeDigestRecordOutcome",
+                new
+                {
+                    CustomerID = customerId,
+                    UserID = userId,
+                    WeekEnding = weekEnding.ToDateTime(TimeOnly.MinValue),
+                    Outcome = outcome,
+                    Source = source,
+                    ProviderUsed = providerUsed,
+                    // The column is NVARCHAR(400); a long validator explanation must not blow up the write.
+                    Detail = detail is { Length: > 400 } ? detail[..400] : detail,
+                },
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken));
+    }
+
+    public async Task ReleaseClaimAsync(int customerId, long userId, DateOnly weekEnding, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                "dbo.usp_Insights_FreeDigestReleaseClaim",
+                new { CustomerID = customerId, UserID = userId, WeekEnding = weekEnding.ToDateTime(TimeOnly.MinValue) },
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken));
+    }
+
+    public async Task SuppressAsync(int customerId, long userId, DigestSuppressionReason reason,
+        string? detail = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        await connection.ExecuteAsync(
+            new CommandDefinition(
+                "dbo.usp_Insights_DigestSuppress",
+                new
+                {
+                    CustomerID = customerId,
+                    UserID = userId,
+                    Reason = reason.ToSqlValue(),
+                    Detail = detail is { Length: > 400 } ? detail[..400] : detail,
+                },
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<DigestSuppression>> GetSuppressionsAsync(
+        int? customerId = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        var rows = await connection.QueryAsync<SuppressionRow>(
+            new CommandDefinition(
+                "dbo.usp_Insights_DigestSuppressionList",
+                new { CustomerID = customerId },
+                commandType: CommandType.StoredProcedure,
+                cancellationToken: cancellationToken));
+
+        return rows.Select(r => new DigestSuppression(
+            r.CustomerID, r.UserID, r.Email, ParseReason(r.Reason), r.SuppressedAtUtc, r.Detail)).ToList();
+    }
+
+    /// <summary>Fails closed - an unknown reason must not be silently treated as a benign one.</summary>
+    private static DigestSuppressionReason ParseReason(string value) => value switch
+    {
+        "unsubscribed" => DigestSuppressionReason.Unsubscribed,
+        "hard_bounce" => DigestSuppressionReason.HardBounce,
+        "manual" => DigestSuppressionReason.Manual,
+        _ => throw new InvalidOperationException($"Unknown suppression Reason '{value}' from InsightsDigestSuppression."),
+    };
+
+    private sealed record SuppressionRow(int CustomerID, long UserID, string? Email, string Reason, DateTime SuppressedAtUtc, string? Detail);
 }
+
+
 

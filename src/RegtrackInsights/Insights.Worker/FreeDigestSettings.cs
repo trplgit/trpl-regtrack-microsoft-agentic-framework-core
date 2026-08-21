@@ -1,4 +1,6 @@
-﻿namespace Insights.Worker;
+﻿using Insights.Domain;
+
+namespace Insights.Worker;
 
 /// <summary>
 /// Everything the digest needs from configuration, resolved once at startup instead of being
@@ -23,6 +25,12 @@ public sealed class FreeDigestSettings
     public required string UnsubscribeBaseUrl { get; init; }
 
     /// <summary>
+    /// Email:UnsubscribeSigningKey. Signs the unsubscribe link so it cannot be enumerated.
+    /// The RegTrack API endpoint needs the SAME value to validate what it receives.
+    /// </summary>
+    public required string UnsubscribeSigningKey { get; init; }
+
+    /// <summary>
     /// NON-PRODUCTION SAFETY VALVE. When set, every digest is delivered to this address instead
     /// of the recipient the database resolved.
     ///
@@ -35,6 +43,18 @@ public sealed class FreeDigestSettings
     /// MUST be empty in production. FreeDigestService logs a warning on every run while it is set.
     /// </summary>
     public string? RecipientOverride { get; init; }
+
+    /// <summary>FreeDigest:Schedule:Enabled. Off by default - a worker must not mail customers merely because it booted.</summary>
+    public bool ScheduleEnabled { get; init; }
+
+    /// <summary>How often the weekly lane wakes to look for due tenants. Ticking often is safe - the per-recipient claim is the guarantee.</summary>
+    public TimeSpan ScheduleCheckInterval { get; init; } = TimeSpan.FromMinutes(60);
+
+    /// <summary>Hour (UTC) before which the lane will not send, so digests do not arrive overnight.</summary>
+    public int ScheduleSendHourUtc { get; init; } = 6;
+
+    /// <summary>Pause between tenants. The free lane is lowest priority (10.3) and must not starve a paying user's on-demand run.</summary>
+    public TimeSpan SchedulePerTenantDelay { get; init; } = TimeSpan.FromMilliseconds(250);
 
     /// <summary>The address a digest should actually be delivered to, honouring <see cref="RecipientOverride"/>.</summary>
     public string ResolveDeliveryAddress(string resolvedRecipientEmail) =>
@@ -55,7 +75,9 @@ public sealed class FreeDigestSettings
             return string.Empty;
 
         var separator = UnsubscribeBaseUrl.Contains('?') ? "&" : "?";
-        return $"{UnsubscribeBaseUrl}{separator}c={customerId}&u={userId}";
+        var token = UnsubscribeToken.Create(UnsubscribeSigningKey, customerId, userId);
+
+        return $"{UnsubscribeBaseUrl}{separator}c={customerId}&u={userId}&t={token}";
     }
 }
 

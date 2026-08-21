@@ -46,6 +46,7 @@ public static class FreeDigestRegistration
         services.AddHttpClient(EmailClientName);
 
         services.AddSingleton(settings);
+        services.AddSingleton<FreeDigestMetrics>();
         services.AddSingleton<IPromptLoader>(_ => new FilePromptLoader(promptDirectory));
         services.AddSingleton(_ => new FreeDigestEmailRenderer(templateDirectory));
 
@@ -69,6 +70,11 @@ public static class FreeDigestRegistration
 
         services.AddScoped<IFreeDigestService, FreeDigestService>();
 
+        /*  The weekly lane (10.3). Registered unconditionally but INERT unless
+            FreeDigest:Schedule:Enabled is true - a worker started for any other reason must not
+            begin mailing customers because it happened to boot.                                */
+        services.AddHostedService<FreeDigestScheduler>();
+
         return services;
     }
 
@@ -80,7 +86,12 @@ public static class FreeDigestRegistration
         FromName = configuration["Email:FromName"] ?? "RegTrack Insights",
         UpgradeUrl = Require(configuration, "Email:UpgradeUrl"),
         UnsubscribeBaseUrl = Require(configuration, "Email:UnsubscribeBaseUrl"),
+        UnsubscribeSigningKey = Require(configuration, "Email:UnsubscribeSigningKey"),
         RecipientOverride = configuration["Email:RecipientOverride"],
+        ScheduleEnabled = configuration.GetValue("FreeDigest:Schedule:Enabled", false),
+        ScheduleCheckInterval = TimeSpan.FromMinutes(configuration.GetValue("FreeDigest:Schedule:CheckIntervalMinutes", 60)),
+        ScheduleSendHourUtc = configuration.GetValue("FreeDigest:Schedule:SendHourUtc", 6),
+        SchedulePerTenantDelay = TimeSpan.FromMilliseconds(configuration.GetValue("FreeDigest:Schedule:PerTenantDelayMs", 250)),
     };
 
     /*  Both factories validate their provider name AND its keys eagerly, then return a closure
@@ -168,5 +179,8 @@ public static class FreeDigestRegistration
             : throw new InvalidOperationException(
                 $"{key} is not configured. Set it in appsettings for local work, or via user-secrets / environment configuration elsewhere.");
 }
+
+
+
 
 

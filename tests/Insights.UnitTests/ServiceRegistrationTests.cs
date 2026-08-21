@@ -30,6 +30,7 @@ public sealed class ServiceRegistrationTests
             ["Email:FromName"] = "RegTrack Insights",
             ["Email:UpgradeUrl"] = "https://example.com/upgrade",
             ["Email:UnsubscribeBaseUrl"] = "https://example.com/unsubscribe",
+            ["Email:UnsubscribeSigningKey"] = "test-signing-key",
             ["Email:ElasticEmail:ApiKey"] = "placeholder",
             ["Llm:Provider"] = "azure_openai",
             ["Llm:AzureOpenAi:Endpoint"] = "https://example.openai.azure.com/",
@@ -135,6 +136,7 @@ public sealed class ServiceRegistrationTests
     [InlineData("Email:FromAddress")]
     [InlineData("Email:UpgradeUrl")]
     [InlineData("Email:UnsubscribeBaseUrl")]
+    [InlineData("Email:UnsubscribeSigningKey")]
     [InlineData("Agents:PromptDirectory")]
     [InlineData("Email:TemplatePath")]
     [InlineData("Llm:AzureOpenAi:ApiKey")]
@@ -147,3 +149,4 @@ public sealed class ServiceRegistrationTests
         Assert.Contains(key, ex.Message, StringComparison.Ordinal);
     }
 }
+
