@@ -47,5 +47,9 @@ builder.Services.AddInsightsOrchestration(builder.Configuration);
 //   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23
 builder.Services.AddHostedService<FreeDigestRunOnceWorker>();
 
+// One-shot runner for the paid orchestrator. Does nothing unless Insights:RunOnce=true:
+//   dotnet run -- --Insights:RunOnce=true --Insights:TenantId=29 --Insights:UserId=38
+builder.Services.AddHostedService<InsightsRunOnceWorker>();
+
 var host = builder.Build();
 host.Run();
