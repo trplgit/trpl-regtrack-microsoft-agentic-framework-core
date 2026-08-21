@@ -4,13 +4,9 @@
 // the existing RegTrack API, where auth already lives (CLAUDE.md 6). Their source is in
 // Insights.Api/ for that repo to take.
 //
-// TODO (Phase 1d, build order step 11): register the Durable Task SQL Server provider here, with
-// orchestration versioning ON from day one, then the orchestrations and activities from
-// Insights.Worker. The orchestrator body must stay deterministic - LLM calls, GETDATE() and DB
-// access all belong in activities.
-
 using Insights.Data;
 using Insights.Worker;
+using Insights.Worker.Orchestration;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -38,6 +34,13 @@ builder.Services.AddInsightsFreeDigest(builder.Configuration);
 
 // The publish gate (build order step 8) - reconciliation, claim-checker, scope post-flight audit.
 builder.Services.AddInsightsWorker();
+
+// The paid-tier agents (build order step 12, already built and manually verified) and the
+// Durable Task orchestrator that runs them durably (build order step 11). Must come AFTER
+// AddInsightsData and AddInsightsWorker - the orchestration's activities depend on repositories
+// registered there and reuse the same PublishGate singleton, never a duplicate.
+builder.Services.AddInsightsPaidReportAgents(builder.Configuration);
+builder.Services.AddInsightsOrchestration(builder.Configuration);
 
 // One-shot runner for testing a single tenant from the command line. Does nothing unless
 // FreeDigest:RunOnce=true:

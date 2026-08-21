@@ -33,41 +33,41 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistStubOu
         const int maxReflectionIterations = 2; // matches Agents:MaxReflectionIterations' documented default.
 
         SetStage(InsightsRunStage.Gathering);
-        var gathered = await context.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity), new GatherScopeInput(input.UserId, input.TenantId));
+        var gathered = await context.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", new GatherScopeInput(input.UserId, input.TenantId));
 
         SetStage(InsightsRunStage.Validating);
-        var dimensions = await context.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity), new FetchDimensionsInput(input.UserId, input.TenantId));
+        var dimensions = await context.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", new FetchDimensionsInput(input.UserId, input.TenantId));
 
         SetStage(InsightsRunStage.Composing);
-        var composeResult = await context.ScheduleTask<ComposeOutput>(typeof(ComposeActivity),
+        var composeResult = await context.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0",
             new ComposeInput(dimensions.DimensionResults, gathered.TenantShape, input.ReportType, null, null));
         var plan = composeResult.Plan;
 
         for (var i = 0; i < maxReflectionIterations; i++)
         {
-            var reflection = await context.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity),
+            var reflection = await context.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity).Name, "1.0",
                 new ReflectOnCompositionInput(plan, dimensions.Assertions, dimensions.Findings, gathered.TenantShape));
             if (reflection.Result.Verdict == ReflectionVerdict.Approve)
                 break;
 
-            var revised = await context.ScheduleTask<ComposeOutput>(typeof(ComposeActivity),
+            var revised = await context.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0",
                 new ComposeInput(dimensions.DimensionResults, gathered.TenantShape, input.ReportType, plan, reflection.Result.Issues));
             plan = revised.Plan;
         }
 
         SetStage(InsightsRunStage.Narrating);
-        var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity),
+        var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
             new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null));
         var narrative = narrateResult.Narrative;
 
         for (var i = 0; i < maxReflectionIterations; i++)
         {
-            var reflection = await context.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity),
+            var reflection = await context.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0",
                 new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings));
             if (reflection.Result.Verdict == ReflectionVerdict.Approve)
                 break;
 
-            var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity),
+            var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
                 new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues));
             narrative = revised.Narrative;
         }
@@ -75,26 +75,26 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistStubOu
         SetStage(InsightsRunStage.Verifying);
         // Throws OrchestrationRefusedException on refusal - propagates out of RunTask, DTFx marks
         // the instance Failed. Nothing after this line runs on a refusal, by construction.
-        await context.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity),
+        await context.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity).Name, "1.0",
             new PublishGateInput(input.UserId, input.TenantId, narrative, dimensions.Assertions));
 
         SetStage(InsightsRunStage.Rendering);
-        var renderResult = await context.ScheduleTask<RenderHtmlOutput>(typeof(RenderHtmlActivity),
+        var renderResult = await context.ScheduleTask<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0",
             new RenderHtmlInput(plan, narrative, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime));
 
-        var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity), new NormalizeInput(renderResult.Html));
-        var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity), new SanitizeInput(normalized.Html));
+        var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(renderResult.Html));
+        var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
         // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
         // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.
-        var reNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity), new NormalizeInput(sanitized.Html));
+        var reNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(sanitized.Html));
 
         // Advisory only - result intentionally unused for any branching decision (spec/CLAUDE.md
         // [TRAP]: Playwright is cosmetic QA, never a security control). Item 17 (cost/observability,
         // not this slice) is where this result gets logged/alerted on instead of discarded.
-        _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity), new PlaywrightQaInput(reNormalized.Html));
+        _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", new PlaywrightQaInput(reNormalized.Html));
 
         SetStage(InsightsRunStage.Complete, final: true);
-        return await context.ScheduleTask<PersistStubOutput>(typeof(PersistStubActivity),
+        return await context.ScheduleTask<PersistStubOutput>(typeof(PersistStubActivity).Name, "1.0",
             new PersistStubInput(reNormalized.Html, input.TenantId, input.ReportType));
     }
 
