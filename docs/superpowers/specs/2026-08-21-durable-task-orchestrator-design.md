@@ -135,6 +135,14 @@ artifact = await CallActivityAsync(PersistStubActivity, html)
 return artifact
 ```
 
+**Correction, 2026-08-21 (see §11 below):** the `context.SetCustomStatus(...)` calls shown above
+describe the newer portable SDK's API, not classic DTFx's. DTFx exposes custom status via
+overriding `TaskOrchestration.GetStatus() : string` instead — the orchestrator tracks its own
+current stage in a private field, updated at each stage transition, and `GetStatus()` returns it
+serialized. Same observable effect (`TaskHubClient.GetOrchestrationStateAsync(...).Status` carries
+the current stage, matching §6's shape below), different mechanism. See the implementation plan's
+Task 14 for the corrected code.
+
 Every `OrchestrationRefusedException` carries a typed reason. The orchestrator lets it propagate;
 Durable Task marks the instance `failed`. Item 16 (failure/refusal UX) later maps these reasons to
 the four failure classes (§11) and user-safe messages — out of scope here, but the reason codes
@@ -204,13 +212,42 @@ Starts one orchestration instance via the Durable Task client, polls/prints stag
 console, waits for terminal status, prints the result. This is the only way to run a report until
 item 15 exists — no scheduler, no real API endpoint, by design (both are later slices).
 
-## 11. Package risk — not resolved here
+## 11. Package decision — resolved 2026-08-21
 
-`Directory.Packages.props` has the Durable Task SQL Server provider as an unpinned comment only:
-`Microsoft.DurableTask.Worker / .Client + the SQL Server provider`. Exact current package names
-and versions are **not guessed in this spec** — first implementation step is confirming what's
-actually current on NuGet and pinning it for real, rather than writing down a version number here
-that might already be stale by the time it's built.
+`Directory.Packages.props` had the Durable Task SQL Server provider as an unpinned comment:
+`Microsoft.DurableTask.Worker / .Client + the SQL Server provider`. That phrasing conflates two
+incompatible families — verified via Microsoft's own docs, not guessed:
+
+- `Microsoft.DurableTask.Worker`/`.Client` is the newer **portable SDK**. It talks to a gRPC
+  sidecar, and that sidecar is **exclusively Azure Durable Task Scheduler** — Microsoft's docs
+  state directly that these SDKs do not support alternative storage backends such as SQL Server.
+- The real, current, actively-maintained SQL Server provider is **`Microsoft.DurableTask.SqlServer`
+  1.7.0** on NuGet, and it targets the **classic `DurableTask.Core` ("DTFx") programming model** —
+  `TaskHubWorker` / `TaskHubClient` — not the portable SDK.
+
+**Decision: classic DTFx.** It is the only path that satisfies the already-[LOCKED] "SQL Server,
+not Azure DTS, not Postgres" constraint for a self-hosted plain .NET 8 worker. The alternative —
+Durable Functions with an MSSQL backend — requires adopting the Azure Functions host/runtime,
+which nothing in CLAUDE.md or this codebase asks for (`Program.cs` uses a plain
+`Host.CreateApplicationBuilder`, matching every other worker in this repo).
+
+**Consequence for orchestration versioning (§9):** DTFx's `TaskHubWorker` supports registering
+multiple `Name`+`Version` pairs for the same orchestration natively — confirmed via Microsoft's
+orchestration-versioning documentation. This satisfies the [LOCKED] "versioning on from day one"
+requirement directly, with no preview feature needed.
+
+**Consequence for hosting:** DTFx's `TaskHubWorker`/`TaskHubClient` are not natively
+`IHostedService`-shaped. The plan wraps them in a small `IHostedService` (~30 lines, own code —
+not the community `durabletask-hosting` wrapper, to avoid a third-party dependency on the
+orchestrator's core hosting path) that starts `TaskHubWorker` on `StartAsync` and stops it on
+`StopAsync`, matching how every other long-lived singleton in this codebase already starts
+(e.g. `IBrowser` in §... — see the implementation plan for the exact shape).
+
+Packages to pin in `Directory.Packages.props`:
+- `Microsoft.DurableTask.SqlServer` 1.7.0 (or whatever is current at implementation time — check
+  NuGet before pinning, this spec's version number is a snapshot from 2026-08-21, not a promise)
+- `DurableTask.Core` (transitive via the above, but pin explicitly per this repo's central package
+  management convention — every other package here is pinned directly, not left transitive)
 
 ## 12. Testing
 
