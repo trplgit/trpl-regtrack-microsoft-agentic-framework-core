@@ -41,6 +41,8 @@
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="OpenAI" />
     <PackageReference Include="Microsoft.Playwright" />
+    <PackageReference Include="Microsoft.DurableTask.SqlServer" />
+    <PackageReference Include="Microsoft.Azure.DurableTask.Core" />
   </ItemGroup>
 
 

@@ -35,4 +35,22 @@ public sealed class UatTestDataManualTests
             "DELETE FROM ProductMapping WHERE CustomerID = 1490 AND ProductID = 18;", connection);
         await command.ExecuteNonQueryAsync();
     }
+
+    /// <summary>
+    /// Build order item 11 (docs/superpowers/plans/2026-08-21-durable-task-orchestrator.md, Task 1
+    /// step 2): provisions the dedicated task-hub database, separate from vitComplianceSystem, on
+    /// the same UAT server. Idempotent (IF NOT EXISTS) so it is safe to re-run, e.g. after a dev
+    /// reset. Connects using ConnectionStrings__RegTrack's server/credentials but does not touch
+    /// vitComplianceSystem itself - CREATE DATABASE only requires the login to have the permission,
+    /// not a master-database connection.
+    /// </summary>
+    [Fact]
+    public async Task CreateInsightsTaskHubDatabase()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = 'vitInsightsTaskHub') CREATE DATABASE vitInsightsTaskHub;", connection);
+        await command.ExecuteNonQueryAsync();
+    }
 }

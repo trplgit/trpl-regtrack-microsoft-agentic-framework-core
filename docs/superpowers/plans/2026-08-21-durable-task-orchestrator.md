@@ -62,25 +62,29 @@ task proves them with running code before anything real depends on them.
 
 - [ ] **Step 1: Pin the packages**
 
-Confirm current versions on NuGet first — `Microsoft.DurableTask.SqlServer` was 1.7.0 as of
-2026-08-21, but check before pinning a stale number. Add to `Directory.Packages.props` (alongside
-the other `<PackageVersion>` entries, replacing the comment at the line currently reading
-`Microsoft.DurableTask.Worker / .Client + the SQL Server provider  (durable state)`):
+Re-verified on NuGet 2026-08-21 (during actual execution, package listings move fast): current
+version is **1.8.1** (released 2026-08-06), not 1.7.0 as spec'd earlier the same day. More
+important correction: the transitive dependency is **`Microsoft.Azure.DurableTask.Core`**, not
+plain `DurableTask.Core` — the NuGet package id carries the `Microsoft.Azure.` prefix even though
+its C# namespace (confirmed via source inspection) is still `DurableTask.Core`. Add to
+`Directory.Packages.props` (alongside the other `<PackageVersion>` entries, replacing the comment
+at the line currently reading `Microsoft.DurableTask.Worker / .Client + the SQL Server provider
+(durable state)`):
 
 ```xml
-<PackageVersion Include="Microsoft.DurableTask.SqlServer" Version="1.7.0" />
-<PackageVersion Include="DurableTask.Core" Version="2.17.0" />
+<PackageVersion Include="Microsoft.DurableTask.SqlServer" Version="1.8.1" />
+<PackageVersion Include="Microsoft.Azure.DurableTask.Core" Version="3.9.0" />
 ```
 
-(`DurableTask.Core`'s version is a transitive dependency of `Microsoft.DurableTask.SqlServer` —
-check what version that pulls in and pin to match; do not pin a different version than what the
-SQL provider was built against.)
+(3.9.0 is the minimum `Microsoft.DurableTask.SqlServer` 1.8.1 declares — pin to it exactly rather
+than floating higher, so the two packages are tested against the same baseline the provider itself
+was built against.)
 
 Add to `src/RegtrackInsights/RegtrackInsights.csproj`:
 ```xml
 <ItemGroup>
   <PackageReference Include="Microsoft.DurableTask.SqlServer" />
-  <PackageReference Include="DurableTask.Core" />
+  <PackageReference Include="Microsoft.Azure.DurableTask.Core" />
 </ItemGroup>
 ```
 

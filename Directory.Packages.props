@@ -68,8 +68,20 @@
   </ItemGroup>
 
   <!--
+    Durable execution (build order item 11) - classic DTFx (DurableTask.Core's TaskHubWorker/
+    TaskHubClient), NOT the newer Microsoft.DurableTask.Worker/.Client portable SDK - that SDK
+    only supports Azure Durable Task Scheduler as a backend, not self-hosted SQL Server (verified
+    2026-08-21, see docs/superpowers/specs/2026-08-21-durable-task-orchestrator-design.md 11).
+    Microsoft.Azure.DurableTask.Core version pinned to the exact minimum Microsoft.DurableTask.
+    SqlServer 1.8.1 declares, so both are tested against the same baseline.
+  -->
+  <ItemGroup Label="Durable Task - classic DTFx + SQL Server provider">
+    <PackageVersion Include="Microsoft.DurableTask.SqlServer" Version="1.8.1" />
+    <PackageVersion Include="Microsoft.Azure.DurableTask.Core" Version="3.9.0" />
+  </ItemGroup>
+
+  <!--
     Phase 1d additions, still not pinned:
-      Microsoft.DurableTask.Worker / .Client + the SQL Server provider  (durable state)
       The Anthropic MAF provider                                        (real compose / narrate provider)
       OpenTelemetry.Exporter.OpenTelemetryProtocol                      (LangFuse)
   -->
