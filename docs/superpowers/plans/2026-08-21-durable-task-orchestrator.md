@@ -523,6 +523,23 @@ git commit -m "Register paid-tier agents and shared Playwright browser in DI"
 
 ---
 
+## Correction found during Task 4 execution: `ExecuteAsync` is `protected`
+
+`AsyncTaskActivity<TInput,TResult>.ExecuteAsync` is `protected`, confirmed by a real compile error
+- `InternalsVisibleTo` (already configured for the test projects) only reaches `internal` members,
+not `protected` ones, so no test in this plan can call `ExecuteAsync` directly as originally
+written below. Every activity task from here on delegates the override to an `internal RunAsync`
+method instead, and every task's test calls `activity.RunAsync(input)` rather than
+`activity.ExecuteAsync(new TaskContext(...), input)`. The shape:
+
+```csharp
+protected override Task<TOutput> ExecuteAsync(TaskContext context, TInput input) => RunAsync(input);
+internal async Task<TOutput> RunAsync(TInput input) { /* real logic */ }
+```
+
+Task descriptions below were not individually rewritten to reflect this - apply the same
+delegation shape to each one; it is a mechanical, identical change every time.
+
 ## Task 4: GatherScopeActivity (nodes 1-2: entitlement gate + scope resolution)
 
 **Files:**
