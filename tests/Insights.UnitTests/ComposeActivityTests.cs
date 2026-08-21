@@ -21,7 +21,7 @@ public class ComposeActivityTests
 
         var activity = new ComposeActivity(agent.Object);
         var input = new ComposeInput(
-            new Dictionary<string, JsonElement> { ["Location"] = JsonSerializer.SerializeToElement(new { dimension = "Location" }) },
+            new Dictionary<string, string> { ["Location"] = JsonSerializer.Serialize(new { dimension = "Location" }) },
             "multi_entity", "compliance_health", null, null);
 
         var result = await activity.RunAsync(input);

@@ -6,7 +6,7 @@ using Insights.Domain;
 namespace Insights.Worker.Orchestration.Activities;
 
 public sealed record ComposeInput(
-    IReadOnlyDictionary<string, JsonElement> DimensionResults,
+    IReadOnlyDictionary<string, string> DimensionResults,
     string TenantShape,
     string ReportType,
     CompositionPlan? PreviousPlan,
@@ -25,7 +25,12 @@ public sealed class ComposeActivity(ICompositionAgent compositionAgent) : AsyncT
 
     internal async Task<ComposeOutput> RunAsync(ComposeInput input)
     {
-        var dimensionResults = input.DimensionResults.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+        // Parsed back to JsonElement here, locally - input.DimensionResults crossed the DTFx
+        // activity boundary as plain strings (see FetchDimensionsActivity's doc comment for why),
+        // never as JsonElement itself. CompositionAgent only re-serializes whatever it is handed,
+        // so a JsonElement value serializes identically to the original DimensionResult.
+        var dimensionResults = input.DimensionResults.ToDictionary(
+            kv => kv.Key, kv => (object)JsonSerializer.Deserialize<JsonElement>(kv.Value));
         (CompositionPlan, IReadOnlyList<CompositionReflectionIssue>)? revision =
             input.PreviousPlan is not null && input.Issues is not null ? (input.PreviousPlan, input.Issues) : null;
 

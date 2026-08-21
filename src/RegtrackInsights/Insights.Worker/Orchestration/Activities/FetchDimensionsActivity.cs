@@ -8,7 +8,7 @@ namespace Insights.Worker.Orchestration.Activities;
 public sealed record FetchDimensionsInput(int UserId, int CustomerId);
 
 public sealed record FetchDimensionsOutput(
-    IReadOnlyDictionary<string, JsonElement> DimensionResults,
+    IReadOnlyDictionary<string, string> DimensionResults,
     IReadOnlyList<Assertion> Assertions,
     IReadOnlyList<Finding> Findings);
 
@@ -18,13 +18,16 @@ public sealed record FetchDimensionsOutput(
 /// SqlDimensionRepository). This is "validating" in API_CONTRACTS.md's stage vocabulary because
 /// the reconciliation THROWs happen inside these calls, not as a separate step.
 ///
-/// Each DimensionResult&lt;TControlTotals,TRow&gt; is serialized to a JsonElement rather than
-/// passed through as `object` - Durable Task round-trips activity outputs through JSON, and a
-/// generic type closed differently per dimension does not survive that as `object` (there is no
-/// discriminator for the deserializer to pick the right closed type back up). CompositionAgent
-/// only ever re-serializes whatever it is handed to JSON anyway (see its doc comment - "no shared
-/// umbrella type... serialized straight to JSON"), so a JsonElement carries identical information
-/// across the wire.
+/// Each DimensionResult&lt;TControlTotals,TRow&gt; is serialized to a JSON string, not a
+/// System.Text.Json.JsonElement as first tried. A generic type closed differently per dimension
+/// does not survive Durable Task's own round-trip as `object` (no discriminator for the
+/// deserializer to pick the right closed type back up) - JsonElement was meant to fix that, but
+/// classic DTFx's default DataConverter wraps Newtonsoft.Json, which cannot reconstruct an
+/// STJ-specific JsonElement struct. Confirmed live: a real run against tenant 29 failed at the
+/// composing stage with "Operation is not valid due to the current state of the object" - exactly
+/// where DimensionResults first crosses an activity boundary. A plain string round-trips through
+/// any serializer; ComposeActivity parses it back to a JsonElement locally, after DTFx's own
+/// deserialization has already happened, never inside the cross-boundary payload itself.
 /// </summary>
 public sealed class FetchDimensionsActivity(IDimensionRepository dimensionRepository)
     : AsyncTaskActivity<FetchDimensionsInput, FetchDimensionsOutput>
@@ -43,17 +46,17 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
         var @internal = await dimensionRepository.GetInternalAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None);
         var @event = await dimensionRepository.GetEventAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None);
 
-        var dimensionResults = new Dictionary<string, JsonElement>
+        var dimensionResults = new Dictionary<string, string>
         {
-            ["Location"] = JsonSerializer.SerializeToElement(location),
-            ["Entity"] = JsonSerializer.SerializeToElement(entity),
-            ["Risk"] = JsonSerializer.SerializeToElement(risk),
-            ["Nature"] = JsonSerializer.SerializeToElement(nature),
-            ["Departments"] = JsonSerializer.SerializeToElement(departments),
-            ["Act"] = JsonSerializer.SerializeToElement(act),
-            ["Users"] = JsonSerializer.SerializeToElement(users),
-            ["Internal"] = JsonSerializer.SerializeToElement(@internal),
-            ["Event"] = JsonSerializer.SerializeToElement(@event),
+            ["Location"] = JsonSerializer.Serialize(location),
+            ["Entity"] = JsonSerializer.Serialize(entity),
+            ["Risk"] = JsonSerializer.Serialize(risk),
+            ["Nature"] = JsonSerializer.Serialize(nature),
+            ["Departments"] = JsonSerializer.Serialize(departments),
+            ["Act"] = JsonSerializer.Serialize(act),
+            ["Users"] = JsonSerializer.Serialize(users),
+            ["Internal"] = JsonSerializer.Serialize(@internal),
+            ["Event"] = JsonSerializer.Serialize(@event),
         };
 
         var assertions = location.Assertions.Concat(entity.Assertions).Concat(risk.Assertions)

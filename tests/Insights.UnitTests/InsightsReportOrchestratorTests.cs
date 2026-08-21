@@ -22,7 +22,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, JsonElement>(), [], []));
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ComposeOutput(plan));
         context.Setup(c => c.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -70,7 +70,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, JsonElement>(), [], []));
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ComposeOutput(plan));
         context.SetupSequence(c => c.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -114,7 +114,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, JsonElement>(), [], []));
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ComposeOutput(plan));
         context.Setup(c => c.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity).Name, "1.0", It.IsAny<object[]>()))
