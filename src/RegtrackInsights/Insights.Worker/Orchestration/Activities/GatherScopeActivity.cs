@@ -5,22 +5,20 @@ using Insights.Domain;
 namespace Insights.Worker.Orchestration.Activities;
 
 public sealed record GatherScopeInput(int UserId, int CustomerId);
-public sealed record GatherScopeOutput(IReadOnlyList<ScopePair> ScopePairs);
+public sealed record GatherScopeOutput(IReadOnlyList<ScopePair> ScopePairs, string TenantShape);
 
 /// <summary>
-/// Nodes 1-2 of the workflow graph: entitlement gate, then scope resolution. Cheapest-first,
-/// matching every other entry point in this codebase - an unentitled tenant costs nothing.
+/// Nodes 1-2 of the workflow graph: entitlement gate, scope resolution, and the tenant-shape
+/// lookup composition/reflection need (a third cheap deterministic read, folded in here rather
+/// than a separate activity - all three are node-1/2-class reads with no LLM involved).
 /// DTFx activities do not receive a caller CancellationToken (confirmed via OrchestrationContext/
 /// TaskContext inspection, Task 1) - CancellationToken.None is passed to the wrapped repository
 /// calls deliberately, not an oversight.
 /// </summary>
-public sealed class GatherScopeActivity(IEntitlementRepository entitlementRepository, IScopeRepository scopeRepository)
+public sealed class GatherScopeActivity(
+    IEntitlementRepository entitlementRepository, IScopeRepository scopeRepository, IEntityRepository entityRepository)
     : AsyncTaskActivity<GatherScopeInput, GatherScopeOutput>
 {
-    // ExecuteAsync is `protected` on AsyncTaskActivity - InternalsVisibleTo does not reach
-    // protected members, so tests cannot call it directly. Delegating to an `internal` method
-    // keeps DTFx's required override shape while giving tests a real, directly-callable entry
-    // point - same pattern applied to every activity in this plan from here on.
     protected override Task<GatherScopeOutput> ExecuteAsync(TaskContext context, GatherScopeInput input) => RunAsync(input);
 
     internal async Task<GatherScopeOutput> RunAsync(GatherScopeInput input)
@@ -33,6 +31,14 @@ public sealed class GatherScopeActivity(IEntitlementRepository entitlementReposi
         if (pairs.Count == 0)
             throw new OrchestrationRefusedException("SCOPE_DENIED", "No entities are currently in your Insights scope.");
 
-        return new GatherScopeOutput(pairs);
+        var shape = await entityRepository.GetTenantShapeAsync(input.CustomerId, cancellationToken: CancellationToken.None);
+        var tenantShape = shape.Shape switch
+        {
+            EntityCountShape.SingleEntity => "single_entity",
+            EntityCountShape.MultiEntity => "multi_entity",
+            _ => throw new ArgumentOutOfRangeException(nameof(shape.Shape), shape.Shape, "Unknown EntityCountShape - dictionary/enum drift, fail closed rather than guess a prompt-facing string."),
+        };
+
+        return new GatherScopeOutput(pairs, tenantShape);
     }
 }
