@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Repo-wide build settings. Every project inherits these - do not repeat them in a
+    .csproj. Values match the existing RegTrack .NET repos (RegtrackCompliance,
+    LicenseAPI): net8.0, nullable on, implicit usings on, nothing else imposed.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>RegTrack Insights</Product>
+    <Company>TeamLease Regtech</Company>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+</Project>

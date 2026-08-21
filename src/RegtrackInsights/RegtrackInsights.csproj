@@ -1,0 +1,107 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <!--
+    The single project for this repo: Program.cs, appsettings, launch profiles, and all
+    the code under Insights.*.
+
+    It lives in src\RegtrackInsights\ rather than at the repo root ON PURPOSE, and that
+    is load-bearing. The SDK's default globs are rooted at the PROJECT directory and
+    exclude only that project's own bin\ and obj\. A project at the repo root therefore
+    globs tests\**\bin, copies it into its own output, then globs THAT copy on the next
+    build - nesting until paths blow past MAX_PATH and the build dies in MSB3030 before
+    the compiler ever runs. Keeping every project a sibling under src\ or tests\ makes
+    that impossible by construction, which is why no EnableDefault*Items overrides are
+    needed here.
+
+    RULE: never place a project directory above another project directory. If Insights.*
+    below are ever promoted to real projects, move them OUT to src\Insights.X\ as
+    siblings of this folder - do not leave a csproj nested underneath this one.
+
+    PRIVATE: no public endpoints, no ingress. The Insights API endpoints live in the
+    existing RegTrack API, where auth already lives (CLAUDE.md 6).
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>RegtrackInsights</AssemblyName>
+    <RootNamespace>RegtrackInsights</RootNamespace>
+    <UserSecretsId>regtrack-insights-worker</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="Azure.Security.KeyVault.Keys" />
+    <PackageReference Include="HtmlSanitizer" />
+    <PackageReference Include="Microsoft.Agents.AI" />
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <PackageReference Include="OpenAI" />
+    <PackageReference Include="Microsoft.Playwright" />
+    <PackageReference Include="Microsoft.DurableTask.SqlServer" />
+    <PackageReference Include="Microsoft.Azure.DurableTask.Core" />
+  </ItemGroup>
+
+
+  <!-- Tests reach internals without everything having to be public. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Insights.UnitTests" />
+    <InternalsVisibleTo Include="Insights.IntegrationTests" />
+    <InternalsVisibleTo Include="Insights.GoldenTests" />
+  </ItemGroup>
+
+  <!--
+    Prompts and email templates ship as CONTENT, not embedded strings.
+    Agents:PromptDirectory defaults to ./prompts, Email:TemplatePath to ./templates.
+    The None Remove stops the SDK's default None glob claiming them first.
+  -->
+  <ItemGroup>
+    <None Remove="prompts\**\*.md" />
+    <None Remove="templates\**\*.*" />
+    <Content Include="prompts\**\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="templates\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    SQL is installed with sqlcmd, never compiled or deployed with the host. Linked in
+    from the repo root purely so it is visible in Solution Explorer.
+  -->
+  <ItemGroup>
+    <None Include="..\..\sql\**\*.sql" LinkBase="sql" />
+  </ItemGroup>
+
+  <!--
+    Vendored DOMPurify (see vendor/README - fetched from unpkg, checked in, never fetched at
+    runtime). Ships as CONTENT next to the exe so DomPurifySanitizer can load it via
+    AppContext.BaseDirectory, same convention as prompts/templates.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\vendor\dompurify-3.4.14.min.js" Link="vendor\dompurify-3.4.14.min.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    Insights.Api is SOURCE FOR THE REGTRACK API, not part of this worker.
+
+    CLAUDE.md 6: this worker is private and queue-driven, with no public endpoints and no
+    ingress - Insights endpoints belong in the RegTrack API where auth already lives. So these
+    files are excluded from the build and re-added as None purely to stay visible in Solution
+    Explorer, the same treatment sql** gets.
+
+    CONSEQUENCE: not compile-checked here. If IFreeDigestRepository, UnsubscribeToken or the
+    Contracts DTOs change, nothing breaks until someone copies it across.
+  -->
+  <ItemGroup>
+    <Compile Remove="Insights.Api\**\*.cs" />
+    <None Include="Insights.Api\**\*" />
+  </ItemGroup>
+
+</Project>

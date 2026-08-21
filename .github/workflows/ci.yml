@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore RegtrackInsights.sln
+
+      - name: Build
+        run: dotnet build RegtrackInsights.sln -c Release --no-restore
+
+      - name: Unit tests
+        run: dotnet test tests/Insights.UnitTests -c Release --no-build
+
+  # The golden regression is the tripwire that stops a dictionary or procedure edit from
+  # silently moving a number. It must block the build - never allow a "known failing"
+  # state, that is how regression suites die (docs/GOLDEN_FIXTURES.md).
+  #
+  # TODO: enable once the fixture database snapshot exists. It needs to:
+  #   1. restore the fixture snapshot (small, fast)
+  #   2. run sql/01 .. sql/06
+  #   3. EXEC usp_Insights_AssertStatusCoverage    -> expect the F-7 THROW, drop that row,
+  #                                                   then re-run clean
+  #   4. EXEC usp_Insights_GoldenInvariants @CustomerID = 999001  -> all PASS
+  #   5. assert the aggregate expectations (on-time % must be 50.0, rollup 25)
+  #   6. EXEC usp_Insights_Dimension_Location ...  -> assert F-12 / F-13 / F-14 flags
+  golden:
+    runs-on: ubuntu-latest
+    if: false   # flip on when the fixture snapshot lands
+
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: ${{ secrets.FIXTURE_SA_PASSWORD }}
+        ports:
+          - 1433:1433
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Golden regression
+        run: dotnet test tests/Insights.GoldenTests -c Release

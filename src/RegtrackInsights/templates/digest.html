@@ -1,0 +1,38 @@
+﻿<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RegTrack Insights - week ending {{WeekEnding}}</title></head>
+<body style="margin:0;padding:0;background:#f4f5f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;">
+ <tr><td align="center">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+         style="background:#ffffff;border:1px solid #e1e4e8;border-radius:4px;
+                font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+                color:#24292f;font-size:15px;line-height:1.55;">
+
+   <tr><td style="padding:20px 28px;border-bottom:1px solid #e1e4e8;">
+     <div style="font-size:13px;color:#57606a;letter-spacing:.04em;text-transform:uppercase;">
+       RegTrack Insights</div>
+     <div style="font-size:18px;font-weight:600;margin-top:2px;">{{TenantName}}</div>
+     <div style="font-size:13px;color:#57606a;">Week ending {{WeekEnding}}</div>
+   </td></tr>
+
+   <tr><td style="padding:24px 28px;white-space:pre-line;">{{Body}}</td></tr>
+
+   <tr><td style="padding:0 28px 24px;">
+     <a href="{{UpgradeUrl}}"
+        style="display:inline-block;padding:10px 18px;background:#0969da;color:#ffffff;
+               text-decoration:none;border-radius:4px;font-size:14px;font-weight:500;">
+       See what's driving it</a>
+   </td></tr>
+
+   <tr><td style="padding:16px 28px;border-top:1px solid #e1e4e8;
+                  font-size:12px;color:#57606a;">
+     Figures reflect your authorised scope as at {{WeekEnding}}.<br>
+     <a href="{{UnsubscribeUrl}}" style="color:#57606a;">Unsubscribe from this digest</a>
+   </td></tr>
+
+  </table>
+ </td></tr>
+</table>
+</body></html>
