@@ -12,6 +12,8 @@ namespace Insights.IntegrationTests;
 ///   dotnet test tests/Insights.IntegrationTests --filter FullyQualifiedName~ReportHtmlAgentManualRunTests
 /// Requires: ConnectionStrings__RegTrack, MAF_ENDPOINT, MAF_MODEL, MAF_API_KEY
 /// Optional: REPORT_HTML_OUTPUT_PATH (defaults to a scratch file under the test output directory)
+/// Optional: INSIGHTS_USER_ID, INSIGHTS_CUSTOMER_ID (default 36, 23 - validated (userId, customerId)
+/// pairs for other tenants are listed in DimensionRepositoryTests.ValidatedTenants)
 /// </summary>
 public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
 {
@@ -28,7 +30,8 @@ public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
         var model = RequireEnv("MAF_MODEL");
         var apiKey = RequireEnv("MAF_API_KEY");
         var promptsDir = Path.Combine(AppContext.BaseDirectory, "prompts");
-        const int userId = 36, customerId = 23;
+        var userId = int.Parse(Environment.GetEnvironmentVariable("INSIGHTS_USER_ID") ?? "36");
+        var customerId = int.Parse(Environment.GetEnvironmentVariable("INSIGHTS_CUSTOMER_ID") ?? "23");
 
         var dimensionRepository = new SqlDimensionRepository(ConnectionString);
         var location = await dimensionRepository.GetLocationAsync(userId, customerId);
@@ -51,7 +54,7 @@ public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
 
         var htmlAgent = new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
             endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.", await LoadPromptAsync("05_report_html.md")));
-        var html = await htmlAgent.RenderAsync(plan, narrative, tenantName: "Tenant 23 (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow);
+        var html = await htmlAgent.RenderAsync(plan, narrative, tenantName: $"Tenant {customerId} (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow);
 
         var outputPath = Environment.GetEnvironmentVariable("REPORT_HTML_OUTPUT_PATH")
             ?? Path.Combine(AppContext.BaseDirectory, "rendered-report.html");
