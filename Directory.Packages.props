@@ -38,6 +38,10 @@
     <PackageVersion Include="xunit" Version="2.5.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.5.3" />
     <PackageVersion Include="Moq" Version="4.20.72" />
+    <!-- In-memory HTTP host for the Insights.Api endpoint tests. The IDOR guard is the highest-
+         risk logic in this feature, and testing it through real routing and real status codes is
+         worth far more than testing the helper it calls. -->
+    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="8.0.11" />
   </ItemGroup>
 
   <!--

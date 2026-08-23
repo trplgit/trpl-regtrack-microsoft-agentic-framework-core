@@ -27,6 +27,11 @@ Two products, already present in `Product` table of `vitComplianceSystem`:
 | `docs/DIMENSION_SPECS.md` | Contracts for all 9 dimensions |
 | `docs/RegTrack_Classification_Dictionary_v1.xlsx` | BA-signed status/enum semantics |
 | `PHASE_1A_BUILD_BRIEF.md` | Phase 1a tasks, acceptance criteria, validation findings |
+| `docs/API_CONTRACTS.md` | The five API endpoints; the IDOR rule |
+| `docs/GOLDEN_FIXTURES.md` | CI fixture database — the ONLY place absolute values can be asserted |
+| `docs/CONFIGURATION.md` | Every tunable, with the section that justifies it |
+| `docs/SOLUTION_STRUCTURE.md` | Project layout; Durable Task shape |
+| `prompts/` | Agent prompts — the D7 contract is enforced there |
 | `sql/01`–`sql/06` | Working, production-validated SQL |
 
 ---
@@ -76,6 +81,22 @@ Violating any of these is a build-breaking error, not a style preference.
 - Let an LLM author SQL, resolve scope, or validate its own output.
 - Use `SELECT ... INTO #t` then `ALTER TABLE #t ADD col` then reference `col` in the
   same procedure body — T-SQL name resolution fails. Declare the table explicitly.
+- Let a helper procedure return a result set if another procedure calls it. A
+  pre-flight `EXEC` that emits a grid makes that grid result set **#1 of the
+  caller**, silently shifting the documented contract. Success is silence;
+  failure is a `THROW`.
+- Put **non-ASCII characters in SQL source** — not in comments, not in string
+  literals. No box-drawing, em-dashes, arrows, stars, `§`, `≠`, `×`. Use `=`,
+  `-`, `->`, `*`, `Sec.`, `!=`, `x`. (See §5a.)
+- Assert a property of the **data** inside a suite that `THROW`s. If an assertion
+  can fail on legitimate data, it belongs in a warning path. (See §11.)
+- Detect characters with plain `LIKE`. The default collation is accent- and
+  width-insensitive, so `LIKE '%'+NCHAR(8377)+'%'` matches things that are not
+  that character. Always `COLLATE Latin1_General_BIN2`, or enumerate code points
+  with `UNICODE()`.
+- Name a field `SumOfRows` when the rows do not sum to the total. (See §4a.)
+- Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
+  over a subquery. Use a `LEFT JOIN` and test for `NULL`.
 
 ### Always
 - Filter `IsDeleted = 0` at **every** hop (User, Customer, CustomerBranch).
@@ -83,6 +104,15 @@ Violating any of these is a build-breaking error, not a style preference.
 - Count instances at **every** node of the entity tree — leaf *and* intermediate.
 - Anchor entity recursion on **apex OR orphan** (see §5 traps).
 - Validate against **several tenants with different profiles**. Never one.
+- Use the **same estate definition everywhere**. Every query counting "the
+  tenant's obligations" applies the same filters — including
+  `Compliance.IsDeleted = 0`. Two components can each reconcile internally and
+  still disagree with each other.
+- Keep the **rollback script in step** with the install scripts. Verify
+  programmatically: every `CREATE` in `01`–`16` has a matching `DROP` in `99`.
+- Select objects to change **by the condition, not by a list of names** written
+  from memory. `WHERE definition LIKE ...` is self-completing; a hand-written
+  list silently misses things.
 
 ---
 
@@ -110,6 +140,35 @@ Also handle these boundaries — all found in production:
 
 ---
 
+## 4a. The residual rule for dimension contracts
+
+Some dimensions have members that not every instance belongs to (an instance may
+have no `NatureOfCompliance`, no `DepartmentID`, no assignee). Rows then cover
+only part of the estate, which is **correct** — but it must be legible:
+
+```
+rows sum to the total        ->  name the field  SumOfRows
+rows cover only part of it   ->  name it for what it covers, and pair it
+                                 with the named residual
+```
+
+| Dimension | Field | Residual |
+|---|---|---|
+| Nature | `CategorisedInstances` | `UntaggedInstances` |
+| Departments | `AssignedInstances` | `UnassignedInstances` |
+| Users | `AssignedInstancesDistinct` | `UnassignedInstances` |
+| Location, Entity, Risk, Act, Internal, Event | `SumOfRows` | none — rows sum exactly |
+
+A field called `SumOfRows` that does not equal `ScopedInstances` reads as a bug.
+On one tenant that was a phantom 3,946-instance gap.
+
+> Users shows the other half of this: `SumOfPerUserInstances` (8,651) is
+> deliberately larger than the estate (4,814) because an instance has both a
+> performer and a reviewer. Keep distinct and non-distinct counts as **separate,
+> differently-named** fields — conflating them produced the impossible 155%
+> concentration figure during design.
+
+
 ## 5. Schema traps — every one found empirically, several got the wrong answer first
 
 | Area | Trap |
@@ -129,8 +188,40 @@ Also handle these boundaries — all found in production:
 | `ComplianceTransaction.Penalty` | Essentially empty (~₹300 total). Report **exposure**, never *incurred* |
 | `NatureOfCompliance` | ~49% "Others" on the reference tenant — declare the gap |
 | `Compliance.Frequency` | ~28.5% NULL |
+| Pre-flight procs | A helper that `SELECT`s shifts the caller's result-set contract by one — and only for callers that invoke it, so offsets differ per procedure |
+| `Compliance.IsDeleted` | Instances can reference a **soft-deleted** Compliance master (70 on one tenant). Omitting the filter makes the control total disagree with every dimension |
+| SQL file encoding | The deployment path is **not** UTF-8 aware. It corrupted a pre-existing RegTrack proc (`USP_GetEscalationCounts_Mobile_Statutory`) as well as ours |
+| Character detection | Default collation is accent-insensitive; `LIKE` gives false positives when detecting non-ASCII |
 
 ---
+
+## 5a. SQL source must be pure ASCII
+
+The deployment path reads `.sql` files as ANSI/Windows-1252, so every multi-byte
+UTF-8 character is decoded as several Latin-1 characters: `═` becomes
+`â•<0x90>`, `—` becomes `â€"`. ~2,000 characters were corrupted across three
+procedures and stored in the database, visible in comments **and inside message
+strings that surface in output**. A source file was also corrupted at rest after
+being opened and re-saved by a non-UTF-8 editor.
+
+The scripts already written in pure ASCII were **completely immune**. That is the
+fix: keep SQL source ASCII-only and the entire bug class disappears regardless of
+deployment tooling.
+
+Substitutions in use: `=` box-double, `-` box-light/dashes, `->` arrow, `=>`
+double arrow, `*` star, `Sec.` section sign, `!=`, `<=`, `>=`, `x` multiply.
+
+**Add to CI — fail the build on any result:**
+
+```sql
+SELECT o.name FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id
+WHERE o.name LIKE '%Insights%'
+  AND m.definition COLLATE Latin1_General_BIN2
+      LIKE N'%[^ -~' + NCHAR(9) + NCHAR(10) + NCHAR(13) + N']%';
+```
+
+`COLLATE Latin1_General_BIN2` is required — without it the check silently passes.
+
 
 ## 6. Architecture
 
@@ -241,19 +332,54 @@ Way-2 trusted renderer; custom agentic-SQL dimensions; entity-count pricing tier
 - [ ] No status literal, no name-based bucketing anywhere
 - [ ] Scope constrained on both axes, with post-flight audit
 - [ ] Boundary cases covered: single member, zero obligations, empty peer sample
+- [ ] Helper procedures return **no** result set (`EXEC dbo.usp_Insights_AssertStatusCoverage`
+      must produce no grid, so every dimension's grid #1 is `control_totals`)
+- [ ] Encoding check returns zero rows (§5a)
+- [ ] Rollback script drops every object the install scripts create
+- [ ] Residual fields named per §4a
 
 ---
 
 ## 11. Testing discipline — read this twice
 
-**Eight defects were found during design. Every single one passed on the first
-tenant checked.** Single-tenant validation in this codebase is not weak evidence —
-it is actively misleading.
+### Two tiers of test, and why the distinction matters
 
-The strategy had to evolve twice:
+**Structural invariants** (`usp_Insights_GoldenInvariants`) assert relationships
+that hold *regardless of what the data contains* — algebra and graph traversal.
+These **`THROW`**. A failure means the **code** is wrong.
+
+**Data-sanity checks** (`usp_Insights_StatusDataQuality`) are observations about a
+particular dataset. These **warn**. A failure usually means the **data** is
+unusual.
+
+This is not pedantry. An invariant once asserted that imprisonment-bearing items
+concentrate on `RiskType 3` — true of production (98.7% across 528 tenants) but
+inverted in a test environment (96.8% on `RiskType 0`). As a `THROW`ing
+invariant it turned the entire suite red permanently, and **a permanently-red
+suite gets switched off**, which costs far more than the check was ever worth.
+
+> **Test-environment data is arbitrary.** Absolute values can only be asserted
+> against the golden fixture database (`docs/GOLDEN_FIXTURES.md`). Against any
+> other environment, assert **relationships**, not **values**.
+
+### Never validate on one tenant
+
+**Fourteen defects were found building this. Every single one passed on the first
+tenant checked** — eight during design, six more when the SQL was first executed
+against a real database. Single-tenant validation in this codebase is not weak
+evidence — it is actively misleading.
+
+The strategy had to evolve three times:
 1. Single tenant → **multi-tenant with different profiles** (caught 5 defects)
 2. Multi-tenant → **targeted boundary search** once a failure mode was closed
    structurally (caught 2 more: empty peer sample, single-member comparative)
+3. Static review → **actually executing the code** (caught 6 more that no amount
+   of reading found: the result-set contract, a mis-classified invariant, two
+   components disagreeing on the estate definition, encoding corruption, a
+   misleading field name, and a stale rollback script)
+
+**Static review cannot find contract, encoding, or cross-component defects. Run
+the code.**
 
 **Rule:** when a failure mode is closed by construction, stop sampling and start
 hunting boundaries — empty samples, single members, zero denominators. Random

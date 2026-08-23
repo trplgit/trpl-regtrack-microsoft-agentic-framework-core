@@ -1,3 +1,7 @@
+using Insights.Domain;
+using DurableTask.Core;
+using DurableTask.Core.Exceptions;
+using Insights.Worker.Orchestration;
 ﻿using Insights.Data;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,7 +68,7 @@ public sealed class FreeDigestScheduler(
 
         using var scope = services.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IFreeDigestRepository>();
-        var digest = scope.ServiceProvider.GetRequiredService<IFreeDigestService>();
+        var taskHubClient = scope.ServiceProvider.GetRequiredService<TaskHubClient>();
 
         var tenants = await repository.GetEntitledTenantsAsync(cancellationToken);
         var due = tenants.Where(t => AnchorDayFor(t.CustomerId) == now.DayOfWeek).ToList();
@@ -81,23 +85,38 @@ public sealed class FreeDigestScheduler(
 
             try
             {
-                var result = await digest.RunForTenantAsync(tenant.CustomerId, cancellationToken: cancellationToken);
+                /*  ENQUEUE, DO NOT RUN INLINE (design doc 10.2, 4.4).
+                    The scheduler's job is to decide WHICH tenants are due today; the durable
+                    queue decides when they actually execute. Work beyond capacity waits there
+                    rather than running here - "nothing is dropped" (4.4) - and a crash mid-send
+                    resumes from the last completed activity instead of restarting the tenant.
 
-                if (result.SentCount > 0 || result.SkippedCount > 0)
-                {
-                    logger.LogInformation("Tenant {CustomerId}: sent {Sent}, skipped {Skipped}.",
-                        tenant.CustomerId, result.SentCount, result.SkippedCount);
-                }
+                    The instance id is keyed on (tenant, week). DTFx rejects a duplicate id for a
+                    running instance, so a second tick on the same day attaches to the existing run
+                    rather than starting a parallel one - the same "one active run per key" rule
+                    4.5 states for paid.                                                          */
+                var weekEnding = DigestWeek.EndingFor(now).ToString("yyyy-MM-dd");
+                var instanceId = $"freedigest-{tenant.CustomerId}-{weekEnding}";
+
+                await taskHubClient.CreateOrchestrationInstanceAsync(
+                    FreeDigestOrchestrator.Name, FreeDigestOrchestrator.Version, instanceId,
+                    new FreeDigestOrchestrationInput(tenant.CustomerId, null));
+
+                logger.LogInformation("Tenant {CustomerId}: digest enqueued as {InstanceId}.", tenant.CustomerId, instanceId);
+            }
+            catch (OrchestrationAlreadyExistsException)
+            {
+                // Already running or already run for this week - exactly what the keyed id is for.
+                logger.LogInformation("Tenant {CustomerId}: digest already enqueued for this week; skipping.", tenant.CustomerId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Free digest failed for tenant {CustomerId}; continuing.", tenant.CustomerId);
+                logger.LogError(ex, "Free digest could not be enqueued for tenant {CustomerId}; continuing.", tenant.CustomerId);
             }
 
-            /*  LOWEST-PRIORITY LANE (10.3). A deliberate pause between tenants so a 600-tenant
-                batch does not saturate the database, the LLM quota or the mail provider while a
-                paying user is waiting on an on-demand report. Correctness does not depend on it;
-                being a good neighbour does.                                                     */
+            /*  LOWEST-PRIORITY LANE (10.3). A deliberate pause between enqueues so a 600-tenant
+                batch does not arrive as one burst. The durable queue is what actually bounds
+                execution; this just spreads the arrival.                                        */
             await Task.Delay(settings.SchedulePerTenantDelay, cancellationToken);
         }
     }

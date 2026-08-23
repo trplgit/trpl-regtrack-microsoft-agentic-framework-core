@@ -1,4 +1,4 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1b, Step 4
   NATURE DIMENSION
 
@@ -221,7 +221,10 @@ BEGIN
     SELECT
         'control_totals'             AS ResultSet,
         @scopedTotal                 AS ScopedInstances,
-        @rowSum                      AS SumOfRows,
+        @rowSum                      AS CategorisedInstances   /* + UntaggedInstances = ScopedInstances.
+                             Renamed from SumOfRows: rows cover only instances WITH a
+                             nature, so a field called SumOfRows compared against
+                             ScopedInstances reads as a gap when it is a declared residual. */,
         CAST(1 AS BIT)               AS Reconciled,
         (SELECT COUNT(*) FROM #ovd)  AS OverdueInstances,
         @tenantOverduePct            AS TenantOverduePct,

@@ -58,6 +58,10 @@ public static class ServiceCollectionExtensions
         // sql/05, sql/07 - sql/14 - the nine dimensions, one repository for all of them.
         services.AddScoped<IDimensionRepository>(_ => new SqlDimensionRepository(connectionString));
 
+        // sql/17 - eligible tenants. THE IDOR GUARD: every endpoint taking a client-supplied
+        // tenantId re-checks it here, on every request. Never cached across requests.
+        services.AddScoped<ITenantDirectoryRepository>(_ => new SqlTenantDirectoryRepository(connectionString));
+
         // sql/06 - free weekly digest. Call EvaluateGateAsync BEFORE GetAggregatesAsync.
         services.AddScoped<IFreeDigestRepository>(_ => new SqlFreeDigestRepository(connectionString));
 

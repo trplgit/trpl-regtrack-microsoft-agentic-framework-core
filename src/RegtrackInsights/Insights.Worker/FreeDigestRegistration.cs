@@ -58,18 +58,6 @@ public static class FreeDigestRegistration
 
         services.AddSingleton<FreeDigestWriter>();
 
-        services.AddScoped(sp => new FreeDigestPipeline(
-            sp.GetRequiredService<Insights.Data.IFreeDigestRepository>(),
-            sp.GetRequiredService<FreeDigestWriter>(),
-            sp.GetRequiredService<FreeDigestEmailRenderer>(),
-            sp.GetRequiredService<IEmailSender>(),
-            settings.TokenCap,
-            settings.FromAddress,
-            settings.FromName,
-            settings.UpgradeUrl));
-
-        services.AddScoped<IFreeDigestService, FreeDigestService>();
-
         /*  The weekly lane (10.3). Registered unconditionally but INERT unless
             FreeDigest:Schedule:Enabled is true - a worker started for any other reason must not
             begin mailing customers because it happened to boot.                                */

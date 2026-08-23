@@ -43,9 +43,12 @@ Angular → RegTrack API (auth, endpoints, enqueue)
 | `docs/API_CONTRACTS.md` | The 5 API endpoints |
 | `docs/GOLDEN_FIXTURES.md` | CI fixture database spec |
 | `docs/RegTrack_Classification_Dictionary_v1.xlsx` | BA-signed status/enum semantics |
-| `src/RegtrackInsights/prompts/` | Agent prompts — composition, narrative, reflection, HTML, digest |
-| `sql/01`–`sql/06` | Foundation + Location dimension + free-tier aggregates |
-| `sql/99_rollback.sql` | Clean teardown |
+| `prompts/` | Agent prompts — composition, narrative, reflection, HTML, digest |
+| `sql/01`–`sql/04` | Foundation: dictionary, golden regression, scope, entity + entitlement |
+| `sql/05`, `sql/07`–`sql/14` | All 9 dimensions (05 = Location, the reference implementation) |
+| `sql/06`, `sql/15`, `sql/16` | Free tier: aggregates, send log, suppression |
+| `sql/99_rollback.sql` | Clean teardown — covers all 36 objects |
+| `templates/` | Free-digest email shell + deterministic fallback |
 | `PHASE_1A_BUILD_BRIEF.md` | Phase 1a tasks, acceptance criteria, validation findings |
 
 ## Getting started
@@ -53,13 +56,15 @@ Angular → RegTrack API (auth, endpoints, enqueue)
 ```bash
 # 1. Restore a NON-PRODUCTION copy of vitComplianceSystem
 # 2. Install, in order:
-sqlcmd -d <db> -i sql/01_classification_dictionary.sql
-sqlcmd -d <db> -i sql/02_golden_regression.sql
-sqlcmd -d <db> -i sql/03_scope_resolution.sql
-sqlcmd -d <db> -i sql/04_entity_and_entitlement.sql
-sqlcmd -d <db> -i sql/05_dimension_location.sql
-sqlcmd -d <db> -i sql/06_freetier_aggregates.sql
+for f in sql/0*.sql sql/1*.sql; do
+  sqlcmd -d <db> -f 65001 -i "$f"      # -f 65001 = UTF-8; see docs/DEV_TEAM_NOTE_encoding.md
+done
 ```
+
+> `-f 65001` matters. The deployment path here is not UTF-8 aware by default and
+> has silently corrupted stored procedure text before — including a pre-existing
+> RegTrack procedure. The scripts are pure ASCII so they are immune, but keep the
+> flag for anything else.
 
 Smoke test:
 ```sql
@@ -94,5 +99,11 @@ the tenant list.
 
 ## Status
 
-Phase 1a SQL complete and validated. Phase 1b begun (Location dimension). .NET
-implementation not started.
+**SQL layer complete** — foundation, all 9 dimensions, free tier, rollback.
+Installed and verified against a real database: golden invariants 8/8 PASS, all 9
+dimensions run and reconcile.
+
+**.NET implementation not started.** That is the next work, per §9 of `CLAUDE.md`.
+
+Fourteen defects were found and fixed while building this — eight during design,
+six more on first execution. See §11 of `CLAUDE.md` before writing tests.

@@ -64,6 +64,11 @@ public static class WorkerRegistration
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<PersistStubActivity>();
 
+        // Free digest lane (design doc 10.2) - resolve -> compose per scope group -> send per recipient.
+        services.AddTransient<ResolveDigestRecipientsActivity>();
+        services.AddTransient<ComposeDigestActivity>();
+        services.AddTransient<SendDigestActivity>();
+
         services.AddSingleton(_ =>
         {
             var settings = new SqlOrchestrationServiceSettings(taskHubConnectionString);
@@ -87,18 +92,31 @@ public static class WorkerRegistration
             worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
                 InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)));
 
+            // Same explicit Name/Version treatment - FreeDigestOrchestrator likewise has no constructor
+            // dependencies, and these strings must match what the scheduler passes to
+            // CreateOrchestrationInstanceAsync.
+            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
+                FreeDigestOrchestrator.Name, FreeDigestOrchestrator.Version, typeof(FreeDigestOrchestrator)));
+
             worker.AddTaskActivities(
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
                 ActivityCreator<ComposeActivity>(sp), ActivityCreator<ReflectOnCompositionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
-                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistStubActivity>(sp));
+                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistStubActivity>(sp),
+                ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
+                ActivityCreator<SendDigestActivity>(sp));
 
             return worker;
         });
 
         services.AddSingleton(sp => new TaskHubClient((IOrchestrationServiceClient)sp.GetRequiredService<SqlOrchestrationService>()));
+
+        // Reads run progress out of the instance store for API_CONTRACTS.md 4. Registered here
+        // because it needs TaskHubClient; the RegTrack API takes this file and IRunStatusReader
+        // when it hosts the endpoint, and injects only the interface.
+        services.AddSingleton<Insights.Data.IRunStatusReader, DurableTaskRunStatusReader>();
         services.AddHostedService<DurableTaskHostedService>();
 
         return services;

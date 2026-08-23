@@ -1,4 +1,7 @@
-﻿using Microsoft.Extensions.Configuration;
+using DurableTask.Core;
+using Insights.Domain;
+using Insights.Worker.Orchestration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -6,18 +9,14 @@ using Microsoft.Extensions.Logging;
 namespace Insights.Worker;
 
 /// <summary>
-/// Runs the free digest ONCE from the host and then stops it, so the real DI-composed code path
-/// can be exercised without an xUnit runner.
+/// On-demand runner for one tenant's digest, mirroring InsightsRunOnceWorker's shape.
 ///
-/// This is NOT the weekly scheduler (Phase 1c step 9, still to build). It is an on-demand runner:
-/// nothing happens unless FreeDigest:RunOnce is true, so an ordinary `dotnet run` still starts an
-/// idle host rather than mailing anybody.
+/// Enqueues the SAME orchestration the scheduler enqueues on a tenant's anchor day - there is no
+/// second code path. This exists only because the scheduler fires on the tenant's own day, and
+/// waiting until Tuesday to test tenant 23 is not a workflow.
 ///
-///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=1403   one tenant
-///   dotnet run -- --FreeDigest:RunOnce=true                                every entitled tenant
-///
-/// Command-line switches are read by the host's own configuration provider, so they override
-/// appsettings without editing it.
+/// Does nothing unless FreeDigest:RunOnce=true, so a bare `dotnet run` starts an idle host:
+///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23
 /// </summary>
 public sealed class FreeDigestRunOnceWorker(
     IServiceProvider services,
@@ -30,63 +29,60 @@ public sealed class FreeDigestRunOnceWorker(
         if (!configuration.GetValue("FreeDigest:RunOnce", false))
         {
             logger.LogInformation(
-                "FreeDigest:RunOnce is not set - host is idle. Pass --FreeDigest:RunOnce=true to run the digest once.");
+                "FreeDigest:RunOnce is not set - host is idle. Pass --FreeDigest:RunOnce=true --FreeDigest:CustomerId=<id> to run one tenant's digest.");
             return;
         }
 
-        /*  IFreeDigestService is SCOPED (its repositories are), and a BackgroundService is a
-            singleton - resolving it straight from the root provider would throw under
-            ValidateScopes, and silently pin one scope's state without it. Create a scope.      */
         using var scope = services.CreateScope();
-        var digest = scope.ServiceProvider.GetRequiredService<IFreeDigestService>();
 
         try
         {
             var customerId = configuration.GetValue<int?>("FreeDigest:CustomerId");
-
-            if (customerId is { } id)
+            if (customerId is not { } tenantId)
             {
-                logger.LogInformation("Running the free digest once for tenant {CustomerId}.", id);
-                var result = await digest.RunForTenantAsync(id, cancellationToken: stoppingToken);
-                LogTenant(result);
+                logger.LogError("FreeDigest:CustomerId is required - the digest orchestration runs one tenant at a time.");
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            var client = scope.ServiceProvider.GetRequiredService<TaskHubClient>();
+
+            /*  Keyed on (tenant, week), exactly as the scheduler keys it. Running this twice in one
+                week attaches to - or is refused by - the existing instance rather than starting a
+                parallel one, which is the same one-active-run-per-key rule 4.5 states for paid.  */
+            var weekEnding = DigestWeek.EndingFor(DateTime.UtcNow).ToString("yyyy-MM-dd");
+            var instanceId = $"freedigest-{tenantId}-{weekEnding}";
+
+            logger.LogInformation("Enqueuing FreeDigestOrchestrator for tenant {TenantId} as {InstanceId}.", tenantId, instanceId);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(
+                FreeDigestOrchestrator.Name, FreeDigestOrchestrator.Version, instanceId,
+                new FreeDigestOrchestrationInput(tenantId, null));
+
+            var state = await client.WaitForOrchestrationAsync(instance, TimeSpan.FromMinutes(30), stoppingToken);
+
+            logger.LogInformation("Status: {Status}", state.OrchestrationStatus);
+
+            if (state.OrchestrationStatus == OrchestrationStatus.Completed)
+            {
+                logger.LogInformation("Output: {Output}", state.Output);
             }
             else
             {
-                logger.LogInformation("Running the free digest once for EVERY entitled tenant.");
-                var batch = await digest.RunWeeklyAsync(cancellationToken: stoppingToken);
-
-                foreach (var tenant in batch.Tenants)
-                    LogTenant(tenant);
-
-                logger.LogInformation(
-                    "Batch complete. Tenants {Processed}, skipped {Skipped}, emails sent {Sent}, recipients skipped {RecipientsSkipped}.",
-                    batch.TenantsProcessed, batch.TenantsSkipped, batch.EmailsSent, batch.RecipientsSkipped);
+                logger.LogError("Run did not complete. Detail: {Output}", state.Output);
+                Environment.ExitCode = 1;
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             /*  A refusal - dictionary gap, missing scope, bad connection - must exit LOUD and
-                non-zero, not scroll past in a log nobody reads.                                */
+                non-zero, not scroll past in a log nobody reads.                                 */
             logger.LogError(ex, "Free digest run failed.");
             Environment.ExitCode = 1;
         }
         finally
         {
             lifetime.StopApplication();
-        }
-    }
-
-    private void LogTenant(Insights.Domain.FreeDigestTenantResult result)
-    {
-        logger.LogInformation(
-            "Tenant {CustomerId} ({TenantName}): {Decision} - {Reason}. Sent {Sent}, skipped {Skipped}.",
-            result.CustomerId, result.TenantName, result.Decision, result.Reason, result.SentCount, result.SkippedCount);
-
-        foreach (var r in result.Recipients)
-        {
-            logger.LogInformation(
-                "  user {UserId} -> {Email}: sent={Sent} source={Source} provider={Provider} reason={Reason}",
-                r.UserId, r.Email, r.Sent, r.Source, r.ProviderUsed, r.Reason ?? "-");
         }
     }
 }

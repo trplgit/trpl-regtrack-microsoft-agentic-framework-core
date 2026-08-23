@@ -1,3 +1,4 @@
+using Insights.Domain;
 ﻿using Insights.Worker;
 
 namespace Insights.UnitTests;
@@ -42,7 +43,7 @@ public sealed class FreeDigestScheduleTests
         foreach (var offset in Enumerable.Range(0, 7))
         {
             var day = monday.AddDays(offset);
-            Assert.Equal(expected, FreeDigestService.WeekEndingFor(day));
+            Assert.Equal(expected, DigestWeek.EndingFor(day));
         }
     }
 
@@ -52,14 +53,14 @@ public sealed class FreeDigestScheduleTests
     {
         var sunday = new DateTime(2026, 8, 23);
 
-        Assert.Equal(new DateOnly(2026, 8, 23), FreeDigestService.WeekEndingFor(sunday));
+        Assert.Equal(new DateOnly(2026, 8, 23), DigestWeek.EndingFor(sunday));
     }
 
     /// <summary>The next week resolves to a different key, or nothing would ever send again.</summary>
     [Fact]
     public void WeekEnding_RollsForwardTheFollowingMonday()
     {
-        Assert.Equal(new DateOnly(2026, 8, 30), FreeDigestService.WeekEndingFor(new DateTime(2026, 8, 24)));
+        Assert.Equal(new DateOnly(2026, 8, 30), DigestWeek.EndingFor(new DateTime(2026, 8, 24)));
     }
 
     /// <summary>Time of day must not affect the key - a 06:00 tick and a 23:00 tick are the same week.</summary>
@@ -69,6 +70,6 @@ public sealed class FreeDigestScheduleTests
         var morning = new DateTime(2026, 8, 19, 6, 0, 0);
         var night = new DateTime(2026, 8, 19, 23, 59, 59);
 
-        Assert.Equal(FreeDigestService.WeekEndingFor(morning), FreeDigestService.WeekEndingFor(night));
+        Assert.Equal(DigestWeek.EndingFor(morning), DigestWeek.EndingFor(night));
     }
 }

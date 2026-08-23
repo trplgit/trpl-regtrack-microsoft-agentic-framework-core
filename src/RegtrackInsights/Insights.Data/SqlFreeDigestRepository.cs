@@ -123,6 +123,16 @@ public sealed class SqlFreeDigestRepository(string connectionString) : IFreeDige
               AND ucm.IsActive = 0
               AND u.IsDeleted = 0
               AND NULLIF(LTRIM(RTRIM(u.Email)), N'') IS NOT NULL
+              -- [TRAP] DURABLE OPT-OUTS, and the reason this clause has to be HERE and not
+              -- only in the gate. usp_Insights_FreeDigestGate subtracts suppressed users from
+              -- its COUNT, so it exits EXIT_NO_RECIPIENTS when EVERY recipient has opted out.
+              -- But when only SOME have, the gate proceeds - and without this clause the list
+              -- below still contained them, so an unsubscribed user on a multi-recipient tenant
+              -- kept receiving the digest. Keyed (CustomerID, UserID), so opting out of one
+              -- tenant leaves a conglomerate user subscribed to the others.
+              AND NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression s
+                              WHERE s.CustomerID = ucm.CustomerID
+                                AND s.UserID     = ucm.UserID)
             ORDER BY u.ID;
             """;
 

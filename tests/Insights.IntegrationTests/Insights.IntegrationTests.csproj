@@ -22,4 +22,15 @@
     <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
   </ItemGroup>
 
+  <!--
+    Insights.Api is excluded from the worker build on purpose (the worker is private, no ingress).
+    Compiling it here lets a manual run host the endpoints on an in-memory server and hit them
+    against real UAT data - without giving the worker a port, and without a second host project.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <Compile Include="../../src/RegtrackInsights/Insights.Api/**/*.cs" LinkBase="Insights.Api" />
+  </ItemGroup>
+
 </Project>

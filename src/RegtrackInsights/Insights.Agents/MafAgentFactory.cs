@@ -18,20 +18,25 @@ namespace Insights.Agents;
 public static class MafAgentFactory
 {
     /// <summary>For agents whose contract is a JSON object (composition, reflection, narrative).</summary>
-    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json);
+    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// </summary>
-    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text);
+    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat)
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall)
     {
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint) });
         IChatClient chatClient = client.GetResponsesClient().AsIChatClient(model);
+
+        /*  Metering wraps the CHAT CLIENT, so every agent this factory builds is instrumented at
+            one point - including any added later, without anyone remembering to do it. The stage
+            tag is the agent name, which is already a closed set of five values.                 */
+        chatClient = new MeteredChatClient(chatClient, name, model, usage ?? ILlmUsageRecorder.Null, maxTokensPerCall);
 
         var options = new ChatClientAgentOptions
         {

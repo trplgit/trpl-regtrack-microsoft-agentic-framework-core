@@ -1,46 +1,46 @@
-/*═══════════════════════════════════════════════════════════════════════════
-  RegTrack Insights — Phase 1a, Step 3
+/*===========================================================================
+  RegTrack Insights - Phase 1a, Step 3
   SCOPE RESOLUTION  (the security boundary)
 
-  Spec reference : RegTrack_Insights_System_Design_v1.md §5.5
+  Spec reference : RegTrack_Insights_System_Design_v1.md Sec.5.5
   Purpose        : Resolve a management user's authorised scope and constrain
                    every query to it. Deterministic. No LLM anywhere near this.
 
-  ── THE CENTRAL TRAP ───────────────────────────────────────────────────────
-  SCOPE IS TWO-DIMENSIONAL: (BranchID × ComplianceCatagoryID).
+  -- THE CENTRAL TRAP -------------------------------------------------------
+  SCOPE IS TWO-DIMENSIONAL: (BranchID x ComplianceCatagoryID).
 
   Measured on a reference tenant: 1,060 EntitiesAssignment rows across 11 users
   (~96 each) because each row is a (branch, category) PAIR. All 11 users were
   category-specific; none had a null or zero category.
 
   A service that filters on BRANCH ONLY shows an EHS manager the Labour and
-  Secretarial data they are not authorised for — a scope leak INSIDE a single
+  Secretarial data they are not authorised for - a scope leak INSIDE a single
   tenant. Subtler than a cross-entity leak and far easier to miss, because both
   parties belong to the same customer.
 
-  ── OTHER TRAPS ────────────────────────────────────────────────────────────
-  • Column is MISSPELLED: EntitiesAssignment.ComplianceCatagoryID ("Catagory")
-  • Category resolves ONLY via ComplianceInstance → Compliance → Act.ComplianceCategoryId
+  -- OTHER TRAPS ------------------------------------------------------------
+  - Column is MISSPELLED: EntitiesAssignment.ComplianceCatagoryID ("Catagory")
+  - Category resolves ONLY via ComplianceInstance -> Compliance -> Act.ComplianceCategoryId
     (Compliance, ComplianceInstance and ComplianceSubType have NO category column)
-  • EMPTY SCOPE ⇒ DENY. Never "no restriction" — that inverts the security model.
-  • tenant_wide requires BOTH axes. On a reference tenant, 3 users had all 16
+  - EMPTY SCOPE => DENY. Never "no restriction" - that inverts the security model.
+  - tenant_wide requires BOTH axes. On a reference tenant, 3 users had all 16
     branches but only 1 had all 9 categories. The other 2 are FUNCTIONAL heads
     (all locations, one function) and must not be classified as tenant-wide CCOs.
-  • Source is EntitiesAssignment, NOT ComplianceCategoryMgmtUser (see §5.5.4:
+  - Source is EntitiesAssignment, NOT ComplianceCategoryMgmtUser (see Sec.5.5.4:
     CM is a strict subset that excludes configured-but-dormant sites, which are
     themselves a key finding the engine exists to surface).
 
   IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
-═══════════════════════════════════════════════════════════════════════════*/
+===========================================================================*/
 
 SET NOCOUNT ON;
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
-  1. SCOPE PAIRS — the unit of authorisation
+/*---------------------------------------------------------------------------
+  1. SCOPE PAIRS - the unit of authorisation
      Returns the (BranchID, CategoryId) tuples a user is authorised for.
      Active branches only. An empty result means DENY (enforced by callers).
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.tvfInsightsScopePairs', 'IF') IS NOT NULL
     DROP FUNCTION dbo.tvfInsightsScopePairs;
 GO
@@ -62,11 +62,11 @@ RETURN
 );
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
-  2. SCOPE CLASSIFICATION — must read BOTH axes
-     tenant_wide ⟺ ALL active branches AND ALL tenant categories.
+/*---------------------------------------------------------------------------
+  2. SCOPE CLASSIFICATION - must read BOTH axes
+     tenant_wide <=> ALL active branches AND ALL tenant categories.
      Anything less is entity_scoped or functional.
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_ClassifyScope', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_ClassifyScope;
 GO
@@ -112,13 +112,13 @@ BEGIN
 END
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
-  3. SCOPE-CONSTRAINED INSTANCES — the pre-flight predicate
+/*---------------------------------------------------------------------------
+  3. SCOPE-CONSTRAINED INSTANCES - the pre-flight predicate
 
-     [SPEC §14 / D3] Scope is enforced PRE-FLIGHT in the query predicate, so
+     [SPEC Sec.14 / D3] Scope is enforced PRE-FLIGHT in the query predicate, so
      aggregates are computed only over in-scope rows and cannot leak in summary
-     form. The post-flight audit (§4) is a second net, not the primary control.
-───────────────────────────────────────────────────────────────────────────*/
+     form. The post-flight audit (Sec.4) is a second net, not the primary control.
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.tvfInsightsScopedInstances', 'IF') IS NOT NULL
     DROP FUNCTION dbo.tvfInsightsScopedInstances;
 GO
@@ -152,11 +152,11 @@ RETURN
 );
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
-  4. POST-FLIGHT AUDIT — two-dimensional
+/*---------------------------------------------------------------------------
+  4. POST-FLIGHT AUDIT - two-dimensional
      Re-verify EVERY returned row against the scope pair set, on BOTH axes.
      Any violation THROWs; the caller must never publish.
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_AuditScope', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_AuditScope;
 GO
@@ -199,7 +199,7 @@ BEGIN
     SET @pairViolations     = ISNULL(@pairViolations, 0);
 
     IF (@branchViolations + @categoryViolations + @pairViolations) > 0
-        THROW 51010, N'SCOPE AUDIT FAILED — out-of-scope rows detected. Refusing to publish.', 1;
+        THROW 51010, N'SCOPE AUDIT FAILED - out-of-scope rows detected. Refusing to publish.', 1;
 
     SELECT @branchViolations   AS BranchViolations,
            @categoryViolations AS CategoryViolations,
@@ -208,14 +208,14 @@ BEGIN
 END
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
-  5. PROVISIONING CHECK  (spec §5.5.5)
+/*---------------------------------------------------------------------------
+  5. PROVISIONING CHECK  (spec Sec.5.5.5)
      A user mapped to RegInsights (18/19) but WITHOUT scope rows is "entitled
      but scopeless": fail-closed correctly returns an empty report, which is
-     safe but looks broken — and generates support pressure to widen scopes,
+     safe but looks broken - and generates support pressure to widen scopes,
      which is how security boundaries erode socially (pre-mortem D5).
      Run this in the provisioning runbook and as an ops alert.
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_FindScopelessUsers', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_FindScopelessUsers;
 GO
@@ -231,7 +231,7 @@ BEGIN
         CASE ucm.ProductID WHEN 18 THEN 'RegInsights Basic'
                            WHEN 19 THEN 'RegInsights Pro' END AS ProductName,
         u.IsActive  AS UserIsActive,
-        N'Mapped to RegInsights but has no EntitiesAssignment scope rows — '
+        N'Mapped to RegInsights but has no EntitiesAssignment scope rows - '
       + N'will receive an empty report. Configure scope before go-live.' AS Issue
     FROM UserCustomerMapping ucm
     JOIN [User]   u  ON u.ID  = ucm.UserID

@@ -76,8 +76,6 @@ public sealed class ServiceRegistrationTests
         Assert.NotNull(sp.GetRequiredService<IGoldenRegressionRepository>());
         Assert.NotNull(sp.GetRequiredService<IDimensionRepository>());
         Assert.NotNull(sp.GetRequiredService<IFreeDigestRepository>());
-        Assert.NotNull(sp.GetRequiredService<FreeDigestPipeline>());
-        Assert.NotNull(sp.GetRequiredService<IFreeDigestService>());
     }
 
     [Theory]

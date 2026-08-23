@@ -1,18 +1,18 @@
-/*═══════════════════════════════════════════════════════════════════════════
-  RegTrack Insights — Phase 1a, Steps 4 & 5
+/*===========================================================================
+  RegTrack Insights - Phase 1a, Steps 4 & 5
   ENTITY HIERARCHY  +  ENTITLEMENT GATE
 
-  Spec reference : RegTrack_Insights_System_Design_v1.md §6.7 (hierarchy), §5.3 (gate)
+  Spec reference : RegTrack_Insights_System_Design_v1.md Sec.6.7 (hierarchy), Sec.5.3 (gate)
   IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
-═══════════════════════════════════════════════════════════════════════════*/
+===========================================================================*/
 
 SET NOCOUNT ON;
 GO
 
-/*═══════════════════════════════════════════════════════════════════════════
-  PART 1 — ENTITY HIERARCHY  (§6.7)
+/*===========================================================================
+  PART 1 - ENTITY HIERARCHY  (Sec.6.7)
 
-  ── THE CENTRAL TRAP ───────────────────────────────────────────────────────
+  -- THE CENTRAL TRAP -------------------------------------------------------
   INSTANCES DO NOT LIVE ONLY ON LEAVES.
 
   Measured: 211 instances (20 of them ownerless) sat on ONE tenant's non-leaf
@@ -23,12 +23,12 @@ GO
   The defence is structural: aggregate at EVERY node, then reconcile the
   subtree sums to an independently-queried tenant control total. A gap of even
   one instance means a node was dropped.
-═══════════════════════════════════════════════════════════════════════════*/
+===========================================================================*/
 
-/*───────────────────────────────────────────────────────────────────────────
+/*---------------------------------------------------------------------------
   1.1 Full entity tree, every node tagged with its root
 
-  ── CRITICAL FIX: ANCHOR ON APEX **OR ORPHAN** ─────────────────────────────
+  -- CRITICAL FIX: ANCHOR ON APEX **OR ORPHAN** -----------------------------
   The obvious implementation anchors only on `ParentID IS NULL`. That is WRONG
   and loses data, because the recursion filters IsDeleted = 0 at every hop and
   therefore CANNOT TRAVERSE THROUGH a soft-deleted intermediate node. Every
@@ -36,17 +36,17 @@ GO
   vanishes from the rollup.
 
   Measured on production with the apex-only version:
-     tenant 29  : control 1,140  rollup   130  →  1,010 instances LOST (89%!)
-     tenant 5   : control 12,905 rollup 12,021 →    884 instances LOST
-     tenant 1818: control 1,637  rollup 1,635  →      2 instances LOST
+     tenant 29  : control 1,140  rollup   130  ->  1,010 instances LOST (89%!)
+     tenant 5   : control 12,905 rollup 12,021 ->    884 instances LOST
+     tenant 1818: control 1,637  rollup 1,635  ->      2 instances LOST
   Tenant 29's case: ~22 active "SNG Golds" branches (46 instances each) whose
   parent grouping node 52141 had been soft-deleted.
 
   The reference tenant used during design had ZERO orphans, so apex-only
-  reconciled perfectly there — the FOURTH instance in this project of logic
+  reconciled perfectly there - the FOURTH instance in this project of logic
   being "correct by luck" on a single tenant.
 
-  FIX: treat as a root any ACTIVE branch that has no ACTIVE parent — i.e.
+  FIX: treat as a root any ACTIVE branch that has no ACTIVE parent - i.e.
   ParentID IS NULL, or the parent is missing / soft-deleted / in another
   tenant. This guarantees every active branch is reachable, so the rollup
   always ties to the control total. Verified: 12/12 tenants gap = 0.
@@ -54,7 +54,7 @@ GO
   Orphan roots are FLAGGED (RootKind = 'orphan') so the report can declare
   "this group's parent entity was deleted; it is shown as a top-level group"
   rather than silently re-parenting it.
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.tvfInsightsEntityTree', 'IF') IS NOT NULL
     DROP FUNCTION dbo.tvfInsightsEntityTree;
 GO
@@ -105,10 +105,10 @@ RETURN
 );
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
+/*---------------------------------------------------------------------------
   1.2 Rollup with mandatory reconciliation
       THROWs if the subtree sums do not tie to the tenant control total.
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_EntityRollup', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_EntityRollup;
 GO
@@ -142,14 +142,14 @@ BEGIN
     SELECT @rollup = SUM(DirectInstances) FROM #nodes;
 
     IF ISNULL(@rollup,0) <> @control
-        THROW 51020, N'ENTITY ROLLUP RECONCILIATION FAILED — subtree sums do not tie to the tenant control total. A node was dropped (most likely an instance-bearing INTERMEDIATE node). Refusing to publish.', 1;
+        THROW 51020, N'ENTITY ROLLUP RECONCILIATION FAILED - subtree sums do not tie to the tenant control total. A node was dropped (most likely an instance-bearing INTERMEDIATE node). Refusing to publish.', 1;
 
     -- ORPHAN DECLARATION: subtrees whose parent entity was soft-deleted.
     -- These must be surfaced as a data_quality entry, never silently re-parented.
     SELECT
         ApexId, ApexName,
         SUM(DirectInstances) AS SubtreeInstances,
-        N'Parent entity was deleted — this group is reported as top-level. '
+        N'Parent entity was deleted - this group is reported as top-level. '
       + N'Verify the hierarchy with the tenant.' AS DataQualityNote
     FROM #nodes
     WHERE RootKind = 'orphan'
@@ -175,15 +175,15 @@ BEGIN
 END
 GO
 
-/*───────────────────────────────────────────────────────────────────────────
-  1.3 tenant_shape + comparison-grain auto-selection  (§6.7.2)
+/*---------------------------------------------------------------------------
+  1.3 tenant_shape + comparison-grain auto-selection  (Sec.6.7.2)
 
       Dominance rule: if an apex holds > ~70% of volume, OR is a childless
       holding shell, descend one level to find a meaningful comparison grain.
       Observed: a tenant whose holding apex carried 96% of the estate had to be
       compared one level down (division split); a balanced 6-legal-entity group
       was correctly compared at apex level.
-───────────────────────────────────────────────────────────────────────────*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_TenantShape', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_TenantShape;
 GO
@@ -198,13 +198,7 @@ BEGIN
     SELECT
         t.ApexId, t.ApexName,
         SUM(CASE WHEN i.ID IS NOT NULL THEN 1 ELSE 0 END) AS SubtreeInstances,
-        /*  [TRAP] COUNT DISTINCT NODES, NEVER SUM OVER THE JOINED ROWSET.
-            This SELECT LEFT JOINs ComplianceInstance, so one node produces one row
-            PER INSTANCE. A SUM(CASE ...) here counts instance rows, not nodes: an
-            8-descendant subtree holding 209 instances reported 213 descendants.
-            Same defect class as the per-user concentration sum that produced an
-            impossible 155% (spec 6.8). Count the entity, not the fact rows.        */
-        COUNT(DISTINCT CASE WHEN t.BranchID <> t.ApexId THEN t.BranchID END) AS DescendantNodes
+        SUM(CASE WHEN t.BranchID <> t.ApexId THEN 1 ELSE 0 END) AS DescendantNodes
     INTO #apex
     FROM dbo.tvfInsightsEntityTree(@CustomerID) t
     LEFT JOIN ComplianceInstance i
@@ -231,10 +225,10 @@ BEGIN
             ELSE 'apex'
         END AS ComparisonGrain,
         CASE
-            WHEN @apexCount = 1                   THEN N'Single apex — skip entity comparison, lead with locations.'
-            WHEN @maxShare >= @DominanceThreshold THEN CONCAT(N'Largest apex holds ', @maxShare, N'% — descend one level for a meaningful comparison.')
-            WHEN @childlessShell = 1              THEN N'A childless holding shell is present — descend one level.'
-            ELSE N'Apex entities are balanced — compare at apex level.'
+            WHEN @apexCount = 1                   THEN N'Single apex - skip entity comparison, lead with locations.'
+            WHEN @maxShare >= @DominanceThreshold THEN CONCAT(N'Largest apex holds ', @maxShare, N'% - descend one level for a meaningful comparison.')
+            WHEN @childlessShell = 1              THEN N'A childless holding shell is present - descend one level.'
+            ELSE N'Apex entities are balanced - compare at apex level.'
         END AS GrainReason;
 
     SELECT * FROM #apex ORDER BY SubtreeInstances DESC;
@@ -243,20 +237,20 @@ END
 GO
 
 
-/*═══════════════════════════════════════════════════════════════════════════
-  PART 2 — ENTITLEMENT GATE  (§5.3)
+/*===========================================================================
+  PART 2 - ENTITLEMENT GATE  (Sec.5.3)
 
-  ── THE CENTRAL TRAP ───────────────────────────────────────────────────────
+  -- THE CENTRAL TRAP -------------------------------------------------------
   ProductMapping.IsActive IS INVERTED:  0 = ENABLED,  1 = DISABLED.
 
   Confirmed from the catalog: the core Compliance product has ~1,865 customers
-  mapped with only 7 at IsActive = 1 — i.e. 7 customers DISABLED, not 7 enabled.
+  mapped with only 7 at IsActive = 1 - i.e. 7 customers DISABLED, not 7 enabled.
   A developer who "fixes" `IsActive = 0` to `= 1` silently disables the entire
   product for every customer.
 
   Gate order is CHEAPEST-FIRST so an unentitled tenant costs literally nothing:
   no aggregation, no LLM call, no email.
-═══════════════════════════════════════════════════════════════════════════*/
+===========================================================================*/
 
 IF OBJECT_ID('dbo.usp_Insights_EvaluateGate', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_EvaluateGate;
@@ -294,13 +288,13 @@ BEGIN
                         N' is not mapped-and-enabled for this customer.');
     END
 
-    ---- Step 2: supersession — paid suppresses free ----------------------
+    ---- Step 2: supersession - paid suppresses free ----------------------
     IF @decision = 'PROCEED' AND @Tier = 'free'
        AND EXISTS (SELECT 1 FROM ProductMapping
                    WHERE CustomerID = @CustomerID AND ProductID = 19 AND IsActive = 0)
     BEGIN
         SET @decision = 'EXIT_SUPERSEDED';
-        SET @reason   = N'Paid tier (product 19) is active — the free digest self-skips. '
+        SET @reason   = N'Paid tier (product 19) is active - the free digest self-skips. '
                       + N'This also covers the non-atomic transition window when both are briefly mapped.';
     END
 
@@ -315,12 +309,12 @@ BEGIN
           AND ucm.IsActive   = 0        -- INVERTED
           AND u.IsDeleted    = 0;
         -- NOTE: subtract durable per-recipient opt-outs here once that store exists
-        --       (spec §5.4 — opt-out must SURVIVE tier changes)
+        --       (spec Sec.5.4 - opt-out must SURVIVE tier changes)
 
         IF @recipients = 0
         BEGIN
             SET @decision = 'EXIT_NO_RECIPIENTS';
-            SET @reason   = N'No enabled recipients — exit before any aggregation or LLM spend.';
+            SET @reason   = N'No enabled recipients - exit before any aggregation or LLM spend.';
         END
     END
 
@@ -329,7 +323,7 @@ BEGIN
         @Tier        AS Tier,
         @decision    AS Decision,
         @recipients  AS RecipientCount,
-        ISNULL(@reason, N'Entitled, not superseded, recipients present — proceed to aggregation.') AS Reason,
+        ISNULL(@reason, N'Entitled, not superseded, recipients present - proceed to aggregation.') AS Reason,
         CASE WHEN @decision = 'PROCEED' THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END AS ShouldProceed;
 END
 GO

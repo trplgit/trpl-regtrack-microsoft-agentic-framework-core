@@ -11,6 +11,7 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Moq" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,6 +20,21 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
+  </ItemGroup>
+
+  <!--
+    Insights.Api is excluded from the worker build on purpose (see RegtrackInsights.csproj):
+    those endpoints belong to the RegTrack API, where auth lives, not to this private worker.
+
+    The stated CONSEQUENCE was that they are not compile-checked anywhere - so a rename in
+    IFreeDigestRepository or ITenantDirectoryRepository breaks nothing until someone copies the
+    files into the other repo and finds out there. Compiling them HERE closes that hole without
+    giving the worker an ingress: the test assembly type-checks the endpoints and can exercise
+    them, while Program.cs still maps nothing and opens no port.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="../../src/RegtrackInsights/Insights.Api/**/*.cs" LinkBase="Insights.Api" />
   </ItemGroup>
 
 </Project>
