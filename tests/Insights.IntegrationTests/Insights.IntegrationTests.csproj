@@ -22,6 +22,16 @@
     <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
   </ItemGroup>
 
+  <!-- Trplclientsecret.dll is a raw file Reference, not a PackageReference, in RegtrackInsights.csproj -
+       those do not flow transitively through a ProjectReference, so a manual test that needs it here
+       (proving item 14's decrypt path) needs its own reference to the same vendored file. -->
+  <ItemGroup>
+    <Reference Include="Trplclientsecret">
+      <HintPath>../../libs/Trplclientsecret.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
   <!--
     Insights.Api is excluded from the worker build on purpose (the worker is private, no ingress).
     Compiling it here lets a manual run host the endpoints on an in-memory server and hit them

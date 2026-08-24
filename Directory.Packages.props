@@ -42,6 +42,9 @@
          risk logic in this feature, and testing it through real routing and real status codes is
          worth far more than testing the helper it calls. -->
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="8.0.11" />
+    <!-- In-memory EF Core provider for PersistActivityTests - the GeneratedReport row shape
+         without a real UAT connection. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.23" />
   </ItemGroup>
 
   <!--
@@ -83,6 +86,17 @@
   <ItemGroup Label="Durable Task - classic DTFx + SQL Server provider">
     <PackageVersion Include="Microsoft.DurableTask.SqlServer" Version="1.8.1" />
     <PackageVersion Include="Microsoft.Azure.DurableTask.Core" Version="3.9.0" />
+  </ItemGroup>
+
+  <!--
+    Envelope encryption (build order item 14) - the real DocAI pattern, reused verbatim (design
+    doc Sec.9.2). Both deprecated by Microsoft in favour of Azure.Identity/Microsoft.Identity.Client,
+    but confirmed working live under .NET 8 (2026-08-24) before being pinned here - not a guess.
+    Migrating off ADAL is a natural follow-up, not done here without the team's sign-off first.
+  -->
+  <ItemGroup Label="Persistence - envelope encryption (build order item 14)">
+    <PackageVersion Include="Microsoft.Azure.KeyVault" Version="3.0.5" />
+    <PackageVersion Include="Microsoft.IdentityModel.Clients.ActiveDirectory" Version="5.3.0" />
   </ItemGroup>
 
   <!--

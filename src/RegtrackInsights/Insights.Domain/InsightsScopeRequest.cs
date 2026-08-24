@@ -8,4 +8,12 @@ namespace Insights.Domain;
 /// for the entity-scoped case implied by the report-history endpoint's scopeDescriptor field, and
 /// is null for a tenant-wide request.
 /// </summary>
-public sealed record InsightsScopeRequest(string Type, int? EntityId);
+public sealed record InsightsScopeRequest(string Type, int? EntityId)
+{
+    /// <summary>
+    /// The canonical scope descriptor, matching the API contract spelling ("tenant" or
+    /// "entity:{id}"). One place, because it is half of the run id / cooldown key - two
+    /// spellings of the same scope would become two separate 30-day buckets.
+    /// </summary>
+    public string ToDescriptor() => EntityId is int entityId ? $"entity:{entityId}" : "tenant";
+}

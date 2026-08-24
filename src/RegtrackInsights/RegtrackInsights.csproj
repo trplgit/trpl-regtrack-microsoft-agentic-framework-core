@@ -43,6 +43,21 @@
     <PackageReference Include="Microsoft.Playwright" />
     <PackageReference Include="Microsoft.DurableTask.SqlServer" />
     <PackageReference Include="Microsoft.Azure.DurableTask.Core" />
+    <PackageReference Include="Microsoft.Azure.KeyVault" />
+    <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory" />
+  </ItemGroup>
+
+  <!--
+    Trplclientsecret.dll - vendored from the real RegTrack API repo (libs\Trplclientsecret.dll
+    there too), same treatment as vendor/dompurify-3.4.14.min.js below: checked in, never fetched
+    at runtime. Old .NET Framework 4.0 assembly, but only references mscorlib - confirmed loading
+    and calling cleanly under .NET 8 live (2026-08-24) before being wired in here.
+  -->
+  <ItemGroup>
+    <Reference Include="Trplclientsecret">
+      <HintPath>..\..\libs\Trplclientsecret.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
 

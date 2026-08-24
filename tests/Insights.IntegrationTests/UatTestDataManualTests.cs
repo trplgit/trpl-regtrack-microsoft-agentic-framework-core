@@ -1,4 +1,9 @@
+using Azure.Storage.Blobs;
+using Microsoft.Azure.KeyVault;
+using Microsoft.Azure.KeyVault.WebKey;
 using Microsoft.Data.SqlClient;
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using Trplclientsecret;
 using Xunit.Abstractions;
 
 namespace Insights.IntegrationTests;
@@ -122,6 +127,89 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
             output.WriteLine($"{reader.GetString(0)}.{reader.GetString(1)}");
+    }
+
+    /// <summary>Real GeneratedReport rows - independent verification that item 14's write path actually persisted something, not just that a test asserted it did.</summary>
+    [Fact]
+    public async Task InspectMostRecentGeneratedReport()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT TOP 3 Id, CustomerId, ScopeDescriptor, ReportType, Period, GeneratedAtUtc, GeneratedByUserId, BlobContainer, BlobPath, Status, DATALENGTH(EncryptedAesKey) AS KeyBytes, KeyVaultObjectName, KeyVaultObjectSalt FROM dbo.GeneratedReport ORDER BY GeneratedAtUtc DESC;",
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        var columnNames = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+        output.WriteLine(string.Join(" | ", columnNames));
+        while (await reader.ReadAsync())
+        {
+            var values = Enumerable.Range(0, reader.FieldCount).Select(i => reader.IsDBNull(i) ? "-" : reader.GetValue(i)?.ToString() ?? "-");
+            output.WriteLine(string.Join(" | ", values));
+        }
+    }
+
+    /// <summary>
+    /// Proves the decrypt side of item 14's envelope encryption actually works, not just encrypt.
+    /// Reads the real GeneratedReport row + real blob, unwraps the DEK via Key Vault, decrypts, and
+    /// saves readable HTML locally - the read path (API_CONTRACTS.md 5) is not built yet, this is a
+    /// manual stand-in until it is. Requires AZURE_BLOB_CONNECTION_STRING.
+    /// </summary>
+    [Fact]
+    public async Task DecryptMostRecentReportToLocalFile()
+    {
+        await using var sqlConnection = new SqlConnection(ConnectionString);
+        await sqlConnection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT TOP 1 BlobContainer, BlobPath, EncryptedAesKey, KeyVaultObjectVersion FROM dbo.GeneratedReport ORDER BY GeneratedAtUtc DESC;",
+            sqlConnection);
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            throw new InvalidOperationException("No GeneratedReport rows found.");
+
+        var blobContainer = reader.GetString(0);
+        var blobPath = reader.GetString(1);
+        var wrappedKey = (byte[])reader[2];
+        var keyId = reader.GetString(3);
+
+        var blobConnectionString = Environment.GetEnvironmentVariable("AZURE_BLOB_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("Set AZURE_BLOB_CONNECTION_STRING.");
+
+        var blobService = new Azure.Storage.Blobs.BlobServiceClient(blobConnectionString);
+        var blob = blobService.GetBlobContainerClient(blobContainer).GetBlobClient(blobPath);
+        var downloaded = (await blob.DownloadContentAsync()).Value.Content.ToArray();
+
+        var iv = downloaded[..16];
+        var ciphertext = downloaded[16..];
+
+        var clientSecret = new Trplclientsecret.BU().GetClientSecret();
+        var kvClient = new Microsoft.Azure.KeyVault.KeyVaultClient(async (authority, resource, _) =>
+        {
+            var authContext = new Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext(authority);
+            var clientCred = new Microsoft.IdentityModel.Clients.ActiveDirectory.ClientCredential("449821d0-9ff9-4f87-a535-bda5cb484287", clientSecret);
+#pragma warning disable CS0618
+            var result = await authContext.AcquireTokenAsync(resource, clientCred);
+#pragma warning restore CS0618
+            return result.AccessToken;
+        });
+
+        var unwrapped = await kvClient.DecryptAsync(keyId, Microsoft.Azure.KeyVault.WebKey.JsonWebKeyEncryptionAlgorithm.RSAOAEP, wrappedKey);
+        var aesKey = unwrapped.Result;
+
+        using var aes = System.Security.Cryptography.Aes.Create();
+        aes.Key = aesKey;
+        aes.IV = iv;
+        aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+        aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+
+        using var decryptor = aes.CreateDecryptor();
+        using var plaintextStream = new MemoryStream();
+        await using (var cryptoStream = new System.Security.Cryptography.CryptoStream(plaintextStream, decryptor, System.Security.Cryptography.CryptoStreamMode.Write, leaveOpen: true))
+            await cryptoStream.WriteAsync(ciphertext);
+
+        var html = System.Text.Encoding.UTF8.GetString(plaintextStream.ToArray());
+        const string outPath = @"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\decrypted-report-tenant29.html";
+        await File.WriteAllTextAsync(outPath, html);
+        output.WriteLine($"Decrypted {html.Length} chars -> {outPath}");
     }
 
     /// <summary>Follows InspectTaskHubTables - dt.vInstances is Microsoft.DurableTask.SqlServer's own friendly view.</summary>

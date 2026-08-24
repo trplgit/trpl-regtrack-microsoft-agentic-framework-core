@@ -35,50 +35,50 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<LocationControlTotals, LocationRow>(
             "Location", "dbo.usp_Insights_Dimension_Location", LocationErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<EntityControlTotals, EntityRow>> GetEntityAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<EntityControlTotals, EntityRow>(
             "Entity", "dbo.usp_Insights_Dimension_Entity", EntityErrorBase,
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf },
-            true, ReadEntityControlTotalsAsync, cancellationToken);
+            ReadEntityControlTotalsAsync, cancellationToken);
 
     public Task<DimensionResult<RiskControlTotals, RiskRow>> GetRiskAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<RiskControlTotals, RiskRow>(
             "Risk", "dbo.usp_Insights_Dimension_Risk", RiskErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<NatureControlTotals, NatureRow>> GetNatureAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<NatureControlTotals, NatureRow>(
             "Nature", "dbo.usp_Insights_Dimension_Nature", NatureErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<DepartmentsControlTotals, DepartmentsRow>> GetDepartmentsAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<DepartmentsControlTotals, DepartmentsRow>(
             "Departments", "dbo.usp_Insights_Dimension_Departments", DepartmentsErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<ActControlTotals, ActRow>> GetActAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<ActControlTotals, ActRow>(
             "Act", "dbo.usp_Insights_Dimension_Act", ActErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<UsersControlTotals, UsersRow>(
             "Users", "dbo.usp_Insights_Dimension_Users", UsersErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<InternalControlTotals, InternalRow>> GetInternalAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<InternalControlTotals, InternalRow>(
             "Internal", "dbo.usp_Insights_Dimension_Internal", InternalErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, true, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<EventControlTotals, EventRow>> GetEventAsync(
         int userId, int customerId, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default) =>
@@ -86,10 +86,10 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             "Event", "dbo.usp_Insights_Dimension_Event", EventErrorBase,
             userId, customerId,
             new { UserID = userId, CustomerID = customerId, AsOf = asOf, DormancyMonths = dormancyMonths },
-            false, null, cancellationToken);
+            null, cancellationToken);
 
     /// <summary>
-    /// Reads the six result sets positionally and translates the proc's THROWs into typed
+    /// Reads the five result sets positionally and translates the proc's THROWs into typed
     /// exceptions. ORDER IS THE CONTRACT - the procs emit no result-set names, so reading these
     /// out of order silently misbinds columns rather than failing.
     ///
@@ -104,7 +104,6 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         int userId,
         int customerId,
         object parameters,
-        bool emitsCoverageGrid,
         Func<SqlMapper.GridReader, Task<TControlTotals>>? controlTotalsReader,
         CancellationToken cancellationToken)
     {
@@ -120,19 +119,17 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
                     commandTimeout: DimensionCommandTimeoutSeconds,
                     cancellationToken: cancellationToken));
 
-            /*  [TRAP] A NESTED EXEC ADDS A RESULT SET.
-                Every dimension except Event opens with
+            /*  [FIX - found live 2026-08-24] Every dimension except Event opens with
                     EXEC dbo.usp_Insights_AssertStatusCoverage;
-                and that proc ends in SELECT CAST(1 AS BIT) AS StatusCoverageComplete. Its row
-                arrives here as result set #1, BEFORE control_totals, shifting the whole
-                positional read by one. Skipped explicitly rather than guessed at: the flag is
-                set per dimension from the SQL, so if a proc ever gains or loses the EXEC the
-                mismatch surfaces as a loud Dapper materialisation error naming the columns it
-                could not bind - not as silently wrong numbers.                              */
-            if (emitsCoverageGrid)
-            {
-                await multi.ReadAsync();
-            }
+                which used to end in a SELECT, adding an extra result set ahead of control_totals
+                that this method skipped explicitly. sql/01's own fix (same pull, "success is
+                silence") made that proc emit NO result set on success - but this skip was not
+                updated to match, so the skip call started consuming control_totals itself, and
+                ReadSingleAsync below ended up reading the ROWS grid instead: "Sequence contains
+                more than one element" for every tenant on every dimension except Event. Confirmed
+                by calling FetchDimensionsActivity directly against real UAT (tenant 23 AND 29 both
+                failed identically) - not tenant-specific, not a Durable Task or SDK issue.
+                The coverage proc emits nothing to skip any more; nothing here should skip it.   */
 
             var controlTotals = controlTotalsReader is null
                 ? await multi.ReadSingleAsync<TControlTotals>()

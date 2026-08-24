@@ -23,7 +23,9 @@ internal static class InsightsApiTestHost
     public static async Task<HttpClient> StartAsync(
         int callerUserId,
         ITenantDirectoryRepository tenants,
-        IRunStatusReader? runs = null)
+        IRunStatusReader? runs = null,
+        IScopeRepository? scope = null,
+        IInsightsRunEnqueuer? enqueuer = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -35,6 +37,10 @@ internal static class InsightsApiTestHost
                 services.AddSingleton(tenants);
                 if (runs is not null)
                     services.AddSingleton(runs);
+                if (scope is not null)
+                    services.AddSingleton(scope);
+                if (enqueuer is not null)
+                    services.AddSingleton(enqueuer);
             });
             web.Configure(app =>
             {
@@ -87,5 +93,43 @@ internal sealed class FakeRunStatusReader(InsightsRunStatus? status) : IRunStatu
     {
         CallCount++;
         return Task.FromResult(status);
+    }
+}
+
+/// <summary>Answers with a fixed scope-pair count, and RECORDS what it was asked - same reasoning as FakeTenantDirectory.</summary>
+internal sealed class FakeScopeRepository(int scopePairCount) : IScopeRepository
+{
+    public List<(int UserId, int CustomerId)> Calls { get; } = [];
+
+    public Task<IReadOnlyList<ScopePair>> GetScopePairsAsync(int userId, int customerId, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((userId, customerId));
+        IReadOnlyList<ScopePair> pairs = Enumerable.Range(0, scopePairCount)
+            .Select(i => new ScopePair(i, i))
+            .ToList();
+        return Task.FromResult(pairs);
+    }
+
+    public Task<ScopeClassification> ClassifyScopeAsync(int userId, int customerId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Not needed by the endpoints under test.");
+
+    public Task<ScopeAuditResult> AuditScopeAsync(int userId, int customerId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Not needed by the endpoints under test.");
+
+    public Task<IReadOnlyList<ScopelessUser>> FindScopelessUsersAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Not needed by the endpoints under test.");
+}
+
+/// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
+internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
+{
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId)> Calls { get; } = [];
+
+    public Task<string> EnqueueAsync(
+        int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
+        CancellationToken cancellationToken = default)
+    {
+        Calls.Add((tenantId, reportType, scope, period, userId));
+        return Task.FromResult(runIdToReturn);
     }
 }

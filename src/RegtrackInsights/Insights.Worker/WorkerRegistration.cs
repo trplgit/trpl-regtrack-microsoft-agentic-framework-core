@@ -1,10 +1,14 @@
 ﻿using DurableTask.Core;
 using DurableTask.SqlServer;
 using Insights.Agents;
+using Insights.Data;
+using Insights.Persistence;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Insights.Worker;
 
@@ -49,7 +53,49 @@ public static class WorkerRegistration
     /// </summary>
     public static IServiceCollection AddInsightsOrchestration(this IServiceCollection services, IConfiguration configuration)
     {
-        var taskHubConnectionString = Require(configuration, "ConnectionStrings:DurableTaskHub");
+        services.AddInsightsOrchestrationClient(configuration);
+        services.AddInsightsOrchestrationWorker(configuration);
+        return services;
+    }
+
+    /// <summary>
+    /// The half of AddInsightsOrchestration an API host needs: TaskHubClient (enqueue + read
+    /// status), IRunStatusReader and IInsightsRunEnqueuer for API_CONTRACTS.md §3/§4. Deliberately
+    /// does NOT register TaskHubWorker, any activity, or DurableTaskHostedService.
+    ///
+    /// [TRAP - found live 2026-08-24] The original single AddInsightsOrchestration bundled the
+    /// worker's dequeue loop in with the client-only pieces an API host needs. A throwaway local
+    /// listener built to test the two Insights.Api endpoints called it for TaskHubClient alone and
+    /// - without meaning to - started a second real TaskHubWorker competing on the SHARED UAT task
+    /// hub queue the instant the host started. This split makes that impossible to repeat: nothing
+    /// reachable from this method can ever dequeue or execute a task.
+    /// </summary>
+    public static IServiceCollection AddInsightsOrchestrationClient(this IServiceCollection services, IConfiguration configuration)
+    {
+        RegisterSqlOrchestrationService(services, configuration);
+
+        services.AddSingleton(sp => new TaskHubClient((IOrchestrationServiceClient)sp.GetRequiredService<SqlOrchestrationService>()));
+
+        // Reads run progress out of the instance store for API_CONTRACTS.md 4. Registered here
+        // because it needs TaskHubClient; the RegTrack API takes this file and IRunStatusReader
+        // when it hosts the endpoint, and injects only the interface.
+        services.AddSingleton<Insights.Data.IRunStatusReader, DurableTaskRunStatusReader>();
+
+        // Enqueues a run for API_CONTRACTS.md 3, same reasoning as IRunStatusReader above.
+        services.AddSingleton<Insights.Data.IInsightsRunEnqueuer, DurableTaskRunEnqueuer>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// The half of AddInsightsOrchestration only the actual worker process should call: every
+    /// activity, TaskHubWorker, and the hosted service that starts its dequeue loop
+    /// (DurableTaskHostedService). Requires AddInsightsData and AddInsightsPaidReportAgents first -
+    /// every activity below depends on repositories or agents registered there.
+    /// </summary>
+    public static IServiceCollection AddInsightsOrchestrationWorker(this IServiceCollection services, IConfiguration configuration)
+    {
+        RegisterSqlOrchestrationService(services, configuration);
 
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
@@ -62,20 +108,15 @@ public static class WorkerRegistration
         services.AddTransient<NormalizeActivity>();
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<PlaywrightQaActivity>();
-        services.AddTransient<PersistStubActivity>();
+        services.AddTransient<PersistActivity>();
+
+        // Build order item 14's write path: encrypt -> blob -> SQL index row.
+        RegisterPersistence(services, configuration);
 
         // Free digest lane (design doc 10.2) - resolve -> compose per scope group -> send per recipient.
         services.AddTransient<ResolveDigestRecipientsActivity>();
         services.AddTransient<ComposeDigestActivity>();
         services.AddTransient<SendDigestActivity>();
-
-        services.AddSingleton(_ =>
-        {
-            var settings = new SqlOrchestrationServiceSettings(taskHubConnectionString);
-            var service = new SqlOrchestrationService(settings);
-            service.CreateIfNotExistsAsync().GetAwaiter().GetResult();
-            return service;
-        });
 
         services.AddSingleton(sp =>
         {
@@ -104,22 +145,54 @@ public static class WorkerRegistration
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
-                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistStubActivity>(sp),
+                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<SendDigestActivity>(sp));
 
             return worker;
         });
 
-        services.AddSingleton(sp => new TaskHubClient((IOrchestrationServiceClient)sp.GetRequiredService<SqlOrchestrationService>()));
-
-        // Reads run progress out of the instance store for API_CONTRACTS.md 4. Registered here
-        // because it needs TaskHubClient; the RegTrack API takes this file and IRunStatusReader
-        // when it hosts the endpoint, and injects only the interface.
-        services.AddSingleton<Insights.Data.IRunStatusReader, DurableTaskRunStatusReader>();
         services.AddHostedService<DurableTaskHostedService>();
 
         return services;
+    }
+
+    /// <summary>
+    /// TryAdd - both AddInsightsOrchestrationClient and AddInsightsOrchestrationWorker depend on
+    /// this, and AddInsightsOrchestration calls both. A plain AddSingleton would register the
+    /// factory twice; harmless at resolve time (last registration wins) but untidy, and TryAdd
+    /// costs nothing to get right instead.
+    /// </summary>
+    private static void RegisterSqlOrchestrationService(IServiceCollection services, IConfiguration configuration)
+    {
+        var taskHubConnectionString = Require(configuration, "ConnectionStrings:DurableTaskHub");
+
+        services.TryAddSingleton(_ =>
+        {
+            var settings = new SqlOrchestrationServiceSettings(taskHubConnectionString);
+            var service = new SqlOrchestrationService(settings);
+            service.CreateIfNotExistsAsync().GetAwaiter().GetResult();
+            return service;
+        });
+    }
+
+    /// <summary>
+    /// Build order item 14 write path. IReportEncryptor and InsightsReportsDbContext both need
+    /// ConnectionStrings:RegTrack - the encryptor to look up the Key Vault key config
+    /// (tbl_SecretKeyCredentialsCustomerwise), the DbContext for the GeneratedReport table. Both
+    /// live in the same database (vitComplianceSystem).
+    /// </summary>
+    private static void RegisterPersistence(IServiceCollection services, IConfiguration configuration)
+    {
+        var regTrackConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
+        var blobConnectionString = Require(configuration, "Azure:BlobConnectionString");
+        var blobContainer = Require(configuration, "Azure:BlobContainer");
+
+        services.AddSingleton<IReportEncryptor>(_ => new AdalKeyVaultReportEncryptor(regTrackConnectionString));
+        services.AddSingleton<IReportBlobWriter>(_ => new AzureReportBlobWriter(blobConnectionString, blobContainer));
+
+        services.AddDbContext<InsightsReportsDbContext>(options =>
+            options.UseSqlServer(regTrackConnectionString));
     }
 
     private static DelegateActivityCreator<TActivity> ActivityCreator<TActivity>(IServiceProvider sp)

@@ -16,11 +16,11 @@ namespace Insights.IntegrationTests;
 /// to the dedicated task-hub DB. Spends real tokens - run explicitly:
 ///   dotnet test tests/Insights.IntegrationTests --filter FullyQualifiedName~InsightsReportOrchestratorManualRunTests
 /// Requires: ConnectionStrings__RegTrack, ConnectionStrings__DurableTaskHub, MAF_ENDPOINT,
-/// MAF_MODEL, MAF_API_KEY (same env vars every other manual test in this repo already needs), AND
+/// MAF_MODEL, MAF_API_KEY (same env vars every other manual test in this repo already needs),
 /// PLAYWRIGHT_BROWSERS_PATH (missing it does not fail fast - the rendering stage just sits there
 /// indefinitely waiting on a browser launch that has nowhere to find Chromium; confirmed live
 /// 2026-08-21 - a run stalled at stage 6/7 for 12+ minutes with this unset, then completed in
-/// under 90 seconds once it was).
+/// under 90 seconds once it was), AND (build order item 14) AZURE_BLOB_CONNECTION_STRING.
 ///
 /// CONFIRMED COMPLETE 2026-08-21: tenant 29, full 12-activity/7-stage chain, real GPT-5.2 calls,
 /// real DOMPurify+Playwright, RuntimeStatus=Completed, real ~37,000-char HTML artifact produced.
@@ -46,6 +46,9 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             ["Llm:Maf:Model"] = RequireEnv("MAF_MODEL"),
             ["Llm:Maf:ApiKey"] = RequireEnv("MAF_API_KEY"),
             ["Agents:PromptDirectory"] = "./prompts",
+            // Build order item 14's write path.
+            ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
+            ["Azure:BlobContainer"] = "insights-reports-temp",
         })
         .Build();
 
@@ -87,6 +90,46 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
                 output.WriteLine($"Output/failure detail: {state.Output}");
 
             Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY - a real worker process that only DEQUEUES: picks up whatever is already queued
+    /// (e.g. a run enqueued via POST /api/insights/reports through the Postman host, which is
+    /// deliberately worker-less - see InsightsApiManualRunTests.HostForPostmanAsync) and lets it
+    /// run to completion, rather than enqueueing anything itself. Same 29/tenant/FY2025-26 key as
+    /// the Postman guide, so the run id is computed the same deterministic way, not pasted in.
+    /// Spends real LLM tokens. Requires the same env vars as the Theory above.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ProcessesWhateverIsAlreadyQueued()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var runId = InsightsRunId.For(29, "tenant", "compliance_health", "FY2025-26");
+
+            output.WriteLine($"Watching {runId} - worker is now live and dequeuing.");
+            var state = await PollUntilTerminalAsync(client, runId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"Final: {state.OrchestrationStatus}, custom status {state.Status}");
         }
         finally
         {

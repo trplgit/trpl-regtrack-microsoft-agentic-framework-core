@@ -11,7 +11,7 @@ namespace Insights.UnitTests;
 public class InsightsReportOrchestratorTests
 {
     [Fact]
-    public async Task RunTask_HappyPath_ReachesPersistStubOutput_ReflectionApprovesFirstTry()
+    public async Task RunTask_HappyPath_ReachesPersistOutput_ReflectionApprovesFirstTry()
     {
         var context = new Mock<OrchestrationContext>();
         context.SetupGet(c => c.CurrentUtcDateTime).Returns(new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc));
@@ -41,15 +41,15 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
-        context.Setup(c => c.ScheduleTask<PersistStubOutput>(typeof(PersistStubActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new PersistStubOutput("stub-29-compliance_health-abc"));
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PersistOutput("11111111-1111-1111-1111-111111111111"));
 
         var orchestrator = new InsightsReportOrchestrator();
         var input = new InsightsReportOrchestrationInput(29, "compliance_health", new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
 
         var result = await orchestrator.RunTask(context.Object, input);
 
-        Assert.Equal("stub-29-compliance_health-abc", result.ArtifactId);
+        Assert.Equal("11111111-1111-1111-1111-111111111111", result.ReportId);
         context.Verify(c => c.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
         context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
 
@@ -90,8 +90,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
-        context.Setup(c => c.ScheduleTask<PersistStubOutput>(typeof(PersistStubActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new PersistStubOutput("stub-29-compliance_health-abc"));
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PersistOutput("11111111-1111-1111-1111-111111111111"));
 
         var orchestrator = new InsightsReportOrchestrator();
         var input = new InsightsReportOrchestrationInput(29, "compliance_health", new InsightsScopeRequest("tenant", null), "FY2025-26", 38);

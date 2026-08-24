@@ -1,10 +1,13 @@
 using Insights.Api;
 using Insights.Data;
 using Insights.Domain;
+using Insights.Worker;
+using Insights.Worker.Orchestration;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit.Abstractions;
@@ -89,6 +92,69 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
 
         output.WriteLine($"GET stream -> {(int)response.StatusCode}  {response.Content.Headers.ContentType}");
         output.WriteLine(await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
+    /// THROWAWAY - a real (not in-memory) Kestrel listener on localhost, so all three endpoints
+    /// (tenants, generate, stream) can be poked from Postman.
+    ///
+    /// [TRAP - found live 2026-08-24] The first version of this called AddInsightsOrchestration,
+    /// which bundles in AddHostedService&lt;DurableTaskHostedService&gt; - that starts a REAL
+    /// TaskHubWorker dequeue loop against the SHARED UAT task hub the moment builder.StartAsync()
+    /// runs. A "just let me read run status" listener was, without meaning to, a second live
+    /// worker competing on the same queue as whatever else is running against it. Fixed at the
+    /// source: AddInsightsOrchestration is now split into AddInsightsOrchestrationClient (used
+    /// here - TaskHubClient, IRunStatusReader, IInsightsRunEnqueuer, no dequeue loop) and
+    /// AddInsightsOrchestrationWorker (TaskHubWorker + activities + DurableTaskHostedService,
+    /// worker-process only). This listener is now structurally incapable of dequeuing a task.
+    ///
+    /// Listens until the process is killed - run this alone, not as part of a normal test pass.
+    /// Requires ConnectionStrings__RegTrack, ConnectionStrings__DurableTaskHub, INSIGHTS_USER_ID.
+    /// </summary>
+    [Fact]
+    public async Task HostForPostmanAsync()
+    {
+        var userId = int.Parse(RequireEnv("INSIGHTS_USER_ID"));
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
+                ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+            })
+            .Build();
+
+        var builder = new HostBuilder().ConfigureWebHost(web =>
+        {
+            web.UseKestrel();
+            web.UseUrls("http://localhost:5080");
+            web.ConfigureServices(services =>
+            {
+                services.AddRouting();
+                services.AddLogging();
+
+                // IScopeRepository, ITenantDirectoryRepository, and friends - all scoped SQL
+                // wrappers, no hosted services, safe for an API host.
+                services.AddInsightsData(configuration);
+
+                // Client-only orchestration pieces - see the TRAP note above.
+                services.AddInsightsOrchestrationClient(configuration);
+
+                services.AddSingleton<IInsightsCaller>(new FixedCaller(userId));
+            });
+            web.Configure(app =>
+            {
+                app.UseRouting();
+                app.UseEndpoints(endpoints =>
+                {
+                    endpoints.MapInsightsTenantEndpoints();
+                    endpoints.MapInsightsRunEndpoints();
+                });
+            });
+        });
+
+        using var host = await builder.StartAsync();
+        output.WriteLine("Listening on http://localhost:5080 - hit it from Postman now.");
+        await host.WaitForShutdownAsync();
     }
 
     private static async Task<IHost> StartAsync(int callerUserId)

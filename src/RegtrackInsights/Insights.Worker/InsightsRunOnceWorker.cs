@@ -51,7 +51,7 @@ public sealed class InsightsRunOnceWorker(
                   - it carries the tenant, which is the only way
                     GET /api/insights/runs/{runId}/stream can re-derive eligibility, since that
                     URL has no tenantId. With a random GUID the endpoint refuses its own runs.  */
-            var instanceId = InsightsRunId.For(tenantId, ScopeDescriptorFor(input.Scope), reportType, period);
+            var instanceId = InsightsRunId.For(tenantId, input.Scope.ToDescriptor(), reportType, period);
 
             var instance = await client.CreateOrchestrationInstanceAsync(
                 InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, instanceId, input);
@@ -81,12 +81,4 @@ public sealed class InsightsRunOnceWorker(
             lifetime.StopApplication();
         }
     }
-
-    /// <summary>
-    /// The canonical scope descriptor for a request, matching the API contract spelling
-    /// ("tenant" or "entity:{id}"). Kept in one place because it is half of the cooldown key -
-    /// two spellings of the same scope would become two separate 30-day buckets.
-    /// </summary>
-    private static string ScopeDescriptorFor(InsightsScopeRequest scope) =>
-        scope.EntityId is int entityId ? $"entity:{entityId}" : "tenant";
 }

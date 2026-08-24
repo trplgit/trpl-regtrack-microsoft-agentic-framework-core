@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+  
+  
+  <title>Compliance Health Report — Tenant 29</title>
+  <style>
+    :root{
+      --bg:#ffffff;
+      --fg:#111827;
+      --muted:#4b5563;
+      --border:#e5e7eb;
+      --subtle:#f9fafb;
+
+      --good:#166534;
+      --good-bg:#dcfce7;
+
+      --warn:#92400e;
+      --warn-bg:#ffedd5;
+
+      --bad:#991b1b;
+      --bad-bg:#fee2e2;
+
+      --info:#1f2937;
+      --info-bg:#eef2ff;
+
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    html, body{
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      margin:0;
+      padding:0;
+      line-height:1.35;
+    }
+
+    .page{
+      max-width: 980px;
+      margin: 24px auto 40px;
+      padding: 0 18px;
+    }
+
+    header{
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+    }
+
+    .kicker{
+      display:flex;
+      gap:12px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .kicker h1{
+      font-size: 18px;
+      margin:0;
+      letter-spacing: .2px;
+      font-weight: 700;
+    }
+    .kicker .meta{
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .kicker .pill{
+      display:inline-block;
+      border:1px solid var(--border);
+      background: var(--subtle);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--info);
+      white-space: nowrap;
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1.25fr .75fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .card{
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background:#fff;
+      padding: 14px 14px 12px;
+      break-inside: avoid;
+    }
+
+    .card h2{
+      font-size: 14.5px;
+      margin:0 0 8px;
+      font-weight: 750;
+    }
+    .card h3{
+      font-size: 13px;
+      margin: 12px 0 6px;
+      font-weight: 720;
+      color: var(--info);
+    }
+    .card p{
+      margin: 0 0 8px;
+      color: var(--info);
+      font-size: 13px;
+    }
+
+    .hero{
+      border: 1px solid #f3f4f6;
+      background: linear-gradient(180deg, #ffffff 0%, #fbfbfb 100%);
+      border-radius: 14px;
+      padding: 16px;
+    }
+
+    .hero-top{
+      display:flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .hero-title{
+      margin:0;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: .2px;
+    }
+    .hero-sub{
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
+    .metric-row{
+      display:flex;
+      gap:10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .metric{
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 10px 9px;
+      min-width: 210px;
+      background: #fff;
+    }
+    .metric .label{
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .metric .value{
+      font-size: 22px;
+      font-weight: 850;
+      letter-spacing: .2px;
+      margin:0;
+    }
+    .metric .note{
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .severity-badge{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: #fff;
+      font-size: 12px;
+      color: var(--info);
+      white-space: nowrap;
+    }
+    .dot{
+      width: 10px; height: 10px; border-radius: 999px;
+      border: 1px solid rgba(0,0,0,.15);
+      background: #d1d5db;
+      flex: 0 0 auto;
+    }
+    .dot.bad{ background: #ef4444; }
+    .dot.warn{ background: #f59e0b; }
+    .dot.good{ background: #22c55e; }
+
+    .callout{
+      border-left: 4px solid var(--border);
+      background: var(--subtle);
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-top: 10px;
+    }
+    .callout.bad{
+      border-left-color: var(--bad);
+      background: var(--bad-bg);
+    }
+    .callout.warn{
+      border-left-color: var(--warn);
+      background: var(--warn-bg);
+    }
+    .callout.info{
+      border-left-color: #4f46e5;
+      background: var(--info-bg);
+    }
+    .callout h3{
+      margin:0 0 6px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .callout p{
+      margin:0;
+      font-size: 12.75px;
+      color: #111827;
+    }
+
+    .dq{
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+    }
+    .dq h3{
+      margin:0 0 6px;
+      font-size: 12.5px;
+      font-weight: 800;
+      color: var(--muted);
+      letter-spacing: .2px;
+      text-transform: uppercase;
+    }
+    ul.clean{
+      margin: 0;
+      padding-left: 16px;
+      color: var(--info);
+      font-size: 12.75px;
+    }
+    ul.clean li{ margin: 4px 0; }
+
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 12.75px;
+    }
+    caption{
+      text-align:left;
+      padding-bottom: 8px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    th, td{
+      padding: 8px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      text-align: left;
+    }
+    th{
+      font-weight: 750;
+      color: #111827;
+      background: #fafafa;
+    }
+    td.num, th.num{ text-align:right; font-variant-numeric: tabular-nums; }
+    .small{
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .mono{
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #111827;
+    }
+
+    .two-col{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .svg-wrap{
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: #fff;
+    }
+    .legend{
+      display:flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .legend .item{
+      display:flex;
+      align-items:center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+    .swatch{
+      width: 10px; height: 10px; border-radius: 2px;
+      border: 1px solid rgba(0,0,0,.12);
+      background: #d1d5db;
+    }
+    .swatch.bad{ background:#ef4444; }
+    .swatch.warn{ background:#f59e0b; }
+    .swatch.good{ background:#22c55e; }
+    .swatch.neutral{ background:#94a3b8; }
+
+    footer{
+      margin-top: 18px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    @media print{
+      .page{ margin: 0; padding: 0 14px; }
+      header{ margin-bottom: 10px; }
+      .card{ break-inside: avoid; }
+      .page-break{ break-before: page; }
+      a{ color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="kicker">
+        <h1>Compliance Health Report</h1>
+        <span class="pill">Tenant: Tenant 29</span>
+        <span class="pill">Generated <span class="mono">2026-08-24T11:08:05.4024739Z</span> — reflects live data</span>
+      </div>
+    </header>
+
+    
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-top">
+        <div>
+          <h2 id="hero-title" class="hero-title">Top finding: Overdue concentration in Critical tier, with ownership gaps present below the top tier</h2>
+          <p class="hero-sub">This report prioritizes statutory overdue risk and the operational drivers that most strongly explain it (risk tier, ownership, and concentration).</p>
+        </div>
+        <div class="severity-badge" aria-label="Overall risk badge">
+          <span class="dot bad" aria-hidden="true"></span>
+          <span><strong>Elevated overdue risk</strong> (tenant overdue 55.8%)</span>
+        </div>
+      </div>
+
+      <div class="metric-row" role="group" aria-label="Key metrics">
+        <div class="metric">
+          <div class="label">Tenant overdue rate</div>
+          <p class="value">55.8%</p>
+          <div class="note">Top-line compliance health indicator</div>
+        </div>
+        <div class="metric">
+          <div class="label">Critical overdue rate</div>
+          <p class="value">84.7%</p>
+          <div class="note">+28.9 points vs tenant average</div>
+        </div>
+        <div class="metric">
+          <div class="label">Imprisonment flag on Critical</div>
+          <p class="value">3.6%</p>
+          <div class="note">Of 740 Critical obligations (overlap caveat applies)</div>
+        </div>
+      </div>
+
+      <div class="two-col" style="margin-top:12px;">
+        <div class="card" style="padding:12px;">
+          <h2 style="margin:0 0 6px;">Narrative</h2>
+          <p>Tenant overdue rate is 55.8%. Within that, Critical obligations run at 84.7% overdue, 28.9 points above the tenant average. Ownership gaps sit below the top tier: High has 465 ownerless obligations, Medium has 92, and Low has 99 (each with the “ownership_gap_below_critical: attention follows severity, ownership does not” caveat). Do not raise imprisonment exposure as a separate issue here: imprisonment on Critical is 3.6% (of 740), and the caveat notes these are largely the same obligations rather than two independent exposures.</p>
+
+          <div class="callout bad" role="note" aria-label="Actionable interpretation">
+            <h3>Interpretation guard</h3>
+            <p><strong>Do not double-count exposures:</strong> the imprisonment-flag subset is largely overlapping with the Critical set, so treat it as an attribute of the same obligations, not an additional independent risk pool.</p>
+          </div>
+        </div>
+
+        <div class="svg-wrap" aria-label="Risk tier and ownership gap distribution">
+          <svg width="100%" viewBox="0 0 460 250" role="img" aria-labelledby="svg1-title svg1-desc">
+            <title id="svg1-title">Risk-tier overdue and ownerless distribution</title>
+            <desc id="svg1-desc">Bar chart showing tenant overdue baseline and critical overdue. A second set of bars shows ownerless obligation counts for High, Medium, and Low tiers.</desc>
+
+            
+            <rect x="0" y="0" width="460" height="250" fill="#ffffff"></rect>
+            <line x1="44" y1="210" x2="440" y2="210" stroke="#e5e7eb" stroke-width="1"></line>
+
+            
+            <text x="10" y="210" font-size="11" fill="#6b7280">0%</text>
+            <text x="6" y="160" font-size="11" fill="#6b7280">25%</text>
+            <text x="6" y="110" font-size="11" fill="#6b7280">50%</text>
+            <text x="6" y="60" font-size="11" fill="#6b7280">75%</text>
+            <text x="2" y="22" font-size="11" fill="#6b7280">100%</text>
+
+            
+            <line x1="44" y1="160" x2="440" y2="160" stroke="#f3f4f6" stroke-width="1"></line>
+            <line x1="44" y1="110" x2="440" y2="110" stroke="#f3f4f6" stroke-width="1"></line>
+            <line x1="44" y1="60" x2="440" y2="60" stroke="#f3f4f6" stroke-width="1"></line>
+            <line x1="44" y1="10" x2="440" y2="10" stroke="#f3f4f6" stroke-width="1"></line>
+
+            
+            
+            
+            
+            <text x="44" y="18" font-size="12.5" fill="#111827" font-weight="700">Overdue rate</text>
+
+            <rect x="60" y="98.4" width="70" height="111.6" fill="#f59e0b" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="95" y="92" text-anchor="middle" font-size="11" fill="#111827">55.8%</text>
+            <text x="95" y="228" text-anchor="middle" font-size="11" fill="#374151">Tenant</text>
+
+            <rect x="150" y="40.6" width="70" height="169.4" fill="#ef4444" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="185" y="34" text-anchor="middle" font-size="11" fill="#111827">84.7%</text>
+            <text x="185" y="228" text-anchor="middle" font-size="11" fill="#374151">Critical</text>
+
+            
+            <text x="252" y="18" font-size="12.5" fill="#111827" font-weight="700">Ownerless obligations (count)</text>
+            
+            
+            <rect x="270" y="10" width="70" height="200" fill="#94a3b8" opacity="0.12" stroke="#e5e7eb"></rect>
+            <rect x="270" y="10" width="70" height="200" fill="#94a3b8" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="305" y="228" text-anchor="middle" font-size="11" fill="#374151">High</text>
+            <text x="305" y="26" text-anchor="middle" font-size="11" fill="#111827">465</text>
+
+            <rect x="360" y="170.4" width="70" height="39.6" fill="#94a3b8" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="395" y="164" text-anchor="middle" font-size="11" fill="#111827">92</text>
+            <text x="395" y="228" text-anchor="middle" font-size="11" fill="#374151">Medium</text>
+
+            <rect x="450" y="167.4" width="0" height="0" fill="#000000"></rect>
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+            
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+            
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+
+            
+            
+            <rect x="0" y="0" width="0" height="0" fill="#000000"></rect>
+
+            
+            <rect x="248" y="0" width="212" height="250" fill="transparent"></rect>
+
+            
+            
+            <rect x="260" y="10" width="55" height="200" fill="#94a3b8" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="287.5" y="26" text-anchor="middle" font-size="11" fill="#111827">465</text>
+            <text x="287.5" y="228" text-anchor="middle" font-size="11" fill="#374151">High</text>
+
+            <rect x="330" y="170.4" width="55" height="39.6" fill="#94a3b8" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="357.5" y="164" text-anchor="middle" font-size="11" fill="#111827">92</text>
+            <text x="357.5" y="228" text-anchor="middle" font-size="11" fill="#374151">Medium</text>
+
+            <rect x="400" y="167.4" width="55" height="42.6" fill="#94a3b8" stroke="rgba(0,0,0,.10)"></rect>
+            <text x="427.5" y="161" text-anchor="middle" font-size="11" fill="#111827">99</text>
+            <text x="427.5" y="228" text-anchor="middle" font-size="11" fill="#374151">Low</text>
+
+            
+            <text x="252" y="238" font-size="10.5" fill="#6b7280">Counts are not directly comparable to % bars</text>
+          </svg>
+
+          <div class="legend" aria-label="Chart legend">
+            <div class="item"><span class="swatch bad" aria-hidden="true"></span><span>Critical overdue rate</span></div>
+            <div class="item"><span class="swatch warn" aria-hidden="true"></span><span>Tenant overdue rate</span></div>
+            <div class="item"><span class="swatch neutral" aria-hidden="true"></span><span>Ownerless obligations (count)</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dq">
+        <h3>Data-quality caveats surfaced here</h3>
+        <ul class="clean">
+          <li><span class="mono">critical_imprisonment_overlap</span>: imprisonment flags on Critical are largely overlapping with the same obligations; do not treat as an additional independent exposure pool.</li>
+          <li><span class="mono">flow_metric_drift</span>: metric definitions may drift over time; interpret deltas cautiously when comparing across report runs.</li>
+          <li><span class="mono">tenant_recently_onboarded</span>: onboarding recency can temporarily inflate gaps (e.g., ownership assignment lag).</li>
+        </ul>
+      </div>
+    </section>
+
+    
+    <main>
+      
+      <section class="card" aria-labelledby="loc-title" style="margin-top:14px;">
+        <h2 id="loc-title">Locations: worst-overdue site, ownership gaps, and empty locations</h2>
+        <p>Steel Pune has the highest overdue rate at 100.0% (rank 1 of 99), 44.2 points above the tenant overdue rate of 55.8%. Across the estate, 34 of 99 locations (34.3%) have 10%+ of obligations with no assigned owner; per the aggregate caveat, unassigned ownership is a tenant-wide pattern. 77 of 200 locations (38.5%) have no compliance obligations configured; per the aggregate caveat, empty locations are a structural pattern for this tenant, not per-site exceptions. This may reflect a location master of which only a subset is compliance-relevant; confirm with the tenant before treating it as a coverage gap.</p>
+
+        <table aria-label="Location summary">
+          <caption>Key location signals (selected from narrative assertions)</caption>
+          <thead>
+            <tr>
+              <th scope="col">Signal</th>
+              <th scope="col">Value</th>
+              <th scope="col">Why it matters</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Worst overdue location</th>
+              <td class="mono">Steel Pune</td>
+              <td>Prioritization target for immediate triage.</td>
+            </tr>
+            <tr>
+              <th scope="row">Worst overdue rate</th>
+              <td class="num">100.0% <span class="small">(rank 1 of 99)</span></td>
+              <td>Indicates a site-level breakdown rather than normal variance.</td>
+            </tr>
+            <tr>
+              <th scope="row">Locations with 10%+ ownerless obligations</th>
+              <td class="num">34 / 99 <span class="small">(34.3%)</span></td>
+              <td>Ownership gaps are widespread; do not treat as isolated exceptions.</td>
+            </tr>
+            <tr>
+              <th scope="row">Locations with zero obligations configured</th>
+              <td class="num">77 / 200 <span class="small">(38.5%)</span></td>
+              <td>May be scope/coverage issue or non-compliance-relevant locations; confirm intent.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="dq">
+          <h3>Data-quality caveats surfaced here</h3>
+          <ul class="clean">
+            <li><span class="mono">share_is_scope_relative</span>: rates and shares reflect in-scope records; validate scope boundaries for location master.</li>
+          </ul>
+        </div>
+      </section>
+
+      
+      <section class="card" aria-labelledby="users-title" style="margin-top:14px;">
+        <h2 id="users-title">People &amp; continuity: concentration, dependency, and inactive assignees</h2>
+        <p>Assignment is highly concentrated: the ten busiest users hold 88.8% of all assigned obligations, measured as a distinct-instance union (do not add per-user counts together — that double-counts paired performer/reviewer work and can exceed 100%). 11 user(s) hold work that is current but are not logging in; MUST NOT be presented as good performance — this is a continuity risk: live obligations are assigned to people who are not present. Review dependency is universal at the instance level: 3064 of 3064 assigned obligations depend on a single reviewer.</p>
+
+        <div class="two-col" style="margin-top:10px;">
+          <div class="callout warn" role="note" aria-label="Concentration risk">
+            <h3>Concentration risk</h3>
+            <p><strong>Top 10 users hold 88.8%</strong> of assigned work (distinct-instance union). This increases key-person risk and makes load balancing harder.</p>
+          </div>
+          <div class="callout bad" role="note" aria-label="Continuity and control risk">
+            <h3>Continuity &amp; control risk</h3>
+            <p><strong>11 users have current work but are not logging in</strong>, and <strong>3064 / 3064</strong> assigned obligations depend on a single reviewer. Treat as operational fragility, not performance.</p>
+          </div>
+        </div>
+
+        <div class="dq">
+          <h3>Data-quality caveats surfaced here</h3>
+          <ul class="clean">
+            <li><span class="mono">share_is_scope_relative</span>: concentration share is computed on in-scope assigned obligations.</li>
+          </ul>
+        </div>
+      </section>
+
+      
+      <section class="card" aria-labelledby="entity-title" style="margin-top:14px;">
+        <h2 id="entity-title">Entity rollup: apex overdue outlier and interpretability caveat</h2>
+        <p>At the apex-entity level, ABCD Aurangabad Pvt. Ltd. has the highest subtree overdue rate at 94.8% (rank 1 of 10), 39.0 points above the tenant overdue rate of 55.8%. A Pvt ltd represents 50.0% of the apex share of the estate (of 109). Interpretability caveat: ABCD Aurangabad Pvt. Ltd. has 128 instances held directly on a non-leaf node (held directly on a non-leaf node).</p>
+
+        <table aria-label="Apex entity summary">
+          <caption>Apex signals used for prioritization (with interpretability constraints)</caption>
+          <thead>
+            <tr>
+              <th scope="col">Apex entity</th>
+              <th scope="col" class="num">Subtree overdue rate</th>
+              <th scope="col">Relative to tenant</th>
+              <th scope="col">Interpretability caveat</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">ABCD Aurangabad Pvt. Ltd.</th>
+              <td class="num">94.8% <span class="small">(rank 1 of 10)</span></td>
+              <td class="num">+39.0 points <span class="small">(tenant 55.8%)</span></td>
+              <td>128 instances are held directly on a non-leaf node; subtree attribution may be less precise.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="dq">
+          <h3>Data-quality caveats surfaced here</h3>
+          <ul class="clean">
+            <li><span class="mono">instances_on_intermediate_nodes</span>: some instances are attached to non-leaf nodes, affecting roll-up interpretability.</li>
+            <li><span class="mono">dominant_apex_comparison_grain</span>: apex comparisons depend on consistent grouping granularity; confirm entity hierarchy quality before acting solely on ranks.</li>
+            <li><span class="mono">orphaned_entities</span>: entity records without correct parentage can distort rollups.</li>
+          </ul>
+        </div>
+      </section>
+
+      
+      <section class="card" aria-labelledby="gov-title" style="margin-top:14px;">
+        <h2 id="gov-title">Internal governance coverage vs statutory footprint</h2>
+        <p>Internal governance runs at 59 of 99 locations that carry statutory obligations; per the guard, the point is structural — which parts of the estate have internal governance and which do not — not a volume comparison. In parallel, 44 of 99 locations (44.4%) run statutory compliance with no internal governance.</p>
+
+        <div class="svg-wrap" style="margin-top:10px;" aria-label="Internal governance coverage chart">
+          <svg width="100%" viewBox="0 0 640 150" role="img" aria-labelledby="svg2-title svg2-desc">
+            <title id="svg2-title">Internal governance coverage across locations with statutory obligations</title>
+            <desc id="svg2-desc">A horizontal bar split into 59 locations with internal governance and 44 locations without, out of 99 locations with statutory obligations.</desc>
+
+            <rect x="0" y="0" width="640" height="150" fill="#ffffff"></rect>
+            <text x="10" y="20" font-size="13" fill="#111827" font-weight="700">Locations with statutory obligations (n=99)</text>
+
+            
+            <rect x="10" y="46" width="620" height="30" fill="#f3f4f6" stroke="#e5e7eb"></rect>
+            
+            <rect x="10" y="46" width="369.5" height="30" fill="#22c55e" stroke="rgba(0,0,0,.10)"></rect>
+            <rect x="379.5" y="46" width="275.5" height="30" fill="#ef4444" stroke="rgba(0,0,0,.10)"></rect>
+
+            <text x="10" y="100" font-size="12" fill="#374151">With internal governance</text>
+            <text x="10" y="118" font-size="12" fill="#111827">59 / 99 (59.6%)</text>
+
+            <text x="379.5" y="100" font-size="12" fill="#374151">No internal governance</text>
+            <text x="379.5" y="118" font-size="12" fill="#111827">44 / 99 (44.4%)</text>
+
+            
+            <text x="10" y="138" font-size="11" fill="#6b7280">Guard: interpret structurally (coverage), not as a volume comparison.</text>
+          </svg>
+
+          <div class="legend" aria-label="Legend for internal governance coverage">
+            <div class="item"><span class="swatch good" aria-hidden="true"></span><span>Internal governance present</span></div>
+            <div class="item"><span class="swatch bad" aria-hidden="true"></span><span>Internal governance absent</span></div>
+          </div>
+        </div>
+
+        <div class="dq">
+          <h3>Data-quality caveats surfaced here</h3>
+          <ul class="clean">
+            <li><span class="mono">internal_scope_is_branch_only</span>: internal governance coverage is assessed structurally by location set, not by obligation volume.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="card page-break" aria-labelledby="dq-title" style="margin-top:14px;">
+        <h2 id="dq-title">Report-wide data-quality &amp; interpretability notes</h2>
+        <p>This report surfaces the following caveats prominently because they change how results should be interpreted and acted upon.</p>
+        <table aria-label="Data quality dictionary">
+          <caption>Data-quality flags referenced in this report</caption>
+          <thead>
+            <tr>
+              <th scope="col">Flag</th>
+              <th scope="col">What it can affect</th>
+              <th scope="col">Practical guardrail</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row" class="mono">flow_metric_drift</th>
+              <td>Comparability across time if upstream definitions or pipelines changed.</td>
+              <td>Use point-in-time decisions; validate trends with consistent definitions.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">tenant_recently_onboarded</th>
+              <td>Temporary gaps (ownership assignment, configuration completeness).</td>
+              <td>Separate onboarding backlog from steady-state control performance.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">critical_imprisonment_overlap</th>
+              <td>Risk inflation if treated as an independent issue alongside Critical.</td>
+              <td>Attribute-based lens; do not add to Critical counts/rates.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">instances_on_intermediate_nodes</th>
+              <td>Entity rollups and subtree attribution accuracy.</td>
+              <td>Prefer leaf placement; treat apex rankings as directional when present.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">orphaned_entities</th>
+              <td>Entity hierarchy completeness; rollups and shares.</td>
+              <td>Fix parentage before using entity rollups for accountability.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">dominant_apex_comparison_grain</th>
+              <td>Apex-level comparisons if grain differs across entities.</td>
+              <td>Confirm consistent grouping rules for cross-apex ranking.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">share_is_scope_relative</th>
+              <td>Any rate/share computed on in-scope populations.</td>
+              <td>Confirm scope definitions (estate, locations, obligations) before escalation.</td>
+            </tr>
+            <tr>
+              <th scope="row" class="mono">internal_scope_is_branch_only</th>
+              <td>Internal governance coverage interpretation.</td>
+              <td>Interpret as structural coverage by location, not workload volume.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer>
+      <div>
+        <div><strong>Dictionary version:</strong> <span class="mono">N/A (MVP)</span></div>
+        <div><strong>Provenance:</strong> <span class="mono">Live tenant compliance dataset snapshot at generation time</span></div>
+      </div>
+      <div>
+        <div><strong>Report type:</strong> <span class="mono">compliance_health</span></div>
+        <div><strong>Tenant:</strong> <span class="mono">Tenant 29</span></div>
+      </div>
+    </footer>
+  </div>
+
+</body></html>

@@ -79,6 +79,11 @@ GO
 IF OBJECT_ID('dbo.InsightsFreeDigestLog',     'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestLog;
 IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.InsightsDigestSuppression;
 
+/*   GeneratedReport (sql/18). No FKs, so order is irrelevant.
+     NOTE: dropping this orphans every already-persisted encrypted blob - the blob has no
+     other index pointing at it once this row is gone.                                    */
+IF OBJECT_ID('dbo.GeneratedReport', 'U') IS NOT NULL DROP TABLE dbo.GeneratedReport;
+
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;
 IF OBJECT_ID('dbo.InsightsDictionaryVersion',    'U') IS NOT NULL DROP TABLE dbo.InsightsDictionaryVersion;

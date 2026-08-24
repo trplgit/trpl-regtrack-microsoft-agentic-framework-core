@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Routing;
 namespace Insights.Api;
 
 /// <summary>
-/// Run progress for a paid report (API_CONTRACTS.md §4). Mapped with one line:
+/// Generate (API_CONTRACTS.md §3) and run progress (§4) for a paid report. Mapped with one line:
 ///
 ///     app.MapInsightsRunEndpoints();
 ///
@@ -38,6 +38,47 @@ public static class RunEndpoints
 
     public static IEndpointRouteBuilder MapInsightsRunEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost("/api/insights/reports", async (
+            [FromBody] GenerateReportRequest request,
+            [FromServices] IInsightsCaller caller,
+            [FromServices] ITenantDirectoryRepository tenants,
+            [FromServices] IScopeRepository scope,
+            [FromServices] IInsightsRunEnqueuer enqueuer,
+            CancellationToken cancellationToken) =>
+        {
+            // Same ordering as the stream endpoint: authorise against the AUTHENTICATED caller
+            // before touching anything scope- or run-related, never trust the client-supplied
+            // tenantId on its own (API_CONTRACTS.md cross-cutting rule 1, the IDOR guard).
+            var tenant = await tenants.IsEligibleAsync(caller.UserId, request.TenantId, cancellationToken);
+            if (tenant is null)
+                return InsightsResults.TenantNotEligible();
+
+            var scopePairs = await scope.GetScopePairsAsync(caller.UserId, request.TenantId, cancellationToken);
+            if (scopePairs.Count == 0)
+            {
+                // Entitled to the tenant, but nothing in scope - a distinct refusal from
+                // TENANT_NOT_ELIGIBLE. Never silently generate an empty report for this case
+                // (spec §11.2 - an empty report reads as "healthy", not "no data").
+                return InsightsResults.Error(InsightsErrorCode.ScopeDenied, "No entities are currently in your Insights scope.");
+            }
+
+            /*  [KNOWN LIMITATION] API_CONTRACTS.md §3 step 3 - check cooldown for
+                (scope, reportType, period); closed => 409 COOLDOWN_ACTIVE - is not implemented.
+                It is spec'd against GeneratedReport (build order item 14: blob + SQL index), which
+                does not exist yet - item 14 is paused pending the DocAI envelope-encryption pattern.
+                There is no persisted report history to check a cooldown against, so this step is
+                skipped rather than faked. Revisit once item 14 lands.                             */
+
+            // Step 4 (the one-active-run-per-key lock) is free: EnqueueAsync derives the run id
+            // from (tenant, scope, reportType, period), so a second call for the same key attaches
+            // to the already-running instance instead of starting a duplicate.
+            var runId = await enqueuer.EnqueueAsync(
+                request.TenantId, request.ReportType, request.Scope, request.Period, caller.UserId, cancellationToken);
+
+            var streamUrl = $"/api/insights/runs/{runId}/stream";
+            return Results.Accepted(streamUrl, new { runId, status = "queued", streamUrl });
+        });
+
         app.MapGet("/api/insights/runs/{runId}/stream", async (
             string runId,
             // [FromServices] on every injected dependency, explicitly. Minimal APIs otherwise INFER
@@ -197,3 +238,6 @@ public static class RunEndpoints
         await http.Response.Body.FlushAsync(cancellationToken);
     }
 }
+
+/// <summary>The wire shape of API_CONTRACTS.md §3's POST body.</summary>
+public sealed record GenerateReportRequest(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period);

@@ -10,15 +10,22 @@ namespace Insights.Worker.Orchestration;
 /// (CLAUDE.md build order item 11). Deterministic body only - every LLM call, every DB read,
 /// every DateTime read lives in an activity (CLAUDE.md 6, spec 5).
 /// </summary>
-public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistStubOutput, InsightsReportOrchestrationInput>
+public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput, InsightsReportOrchestrationInput>
 {
     public const string Name = "InsightsReportOrchestrator";
-    public const string Version = "1.0";
+
+    /*  Bumped 1.0 -> 1.1 for build order item 14 (real persistence replacing PersistStubActivity) -
+        RunTask's return type and its final ScheduleTask call both changed shape, which is exactly
+        what CLAUDE.md 6's "orchestration versioning ON from day one" exists to protect: an in-flight
+        1.0 instance replayed against this code would hit a non-determinism error otherwise. Safe to
+        bump now - every 1.0 instance created so far is already terminal.                          */
+    public const string Version = "1.1";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
-    // are accepted for contract-shape parity with API_CONTRACTS.md 3, but not threaded through
-    // below. IDimensionRepository's nine GetXAsync methods take the caller's FULL tenant scope
-    // (userId, customerId) with no entity-narrowing parameter, and an optional `asOf` for
+    // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
+    // dimension queries themselves. IDimensionRepository's nine GetXAsync methods take the
+    // caller's FULL tenant scope (userId, customerId) with no entity-narrowing parameter, and an
+    // optional `asOf` for
     // period-scoping that FetchDimensionsActivity does not currently pass through either - this
     // matches every existing manual test and ReportCompositionPipeline itself, neither of which
     // support sub-scoping today. Wiring real entity-level scope filtering and period selection is
@@ -28,7 +35,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistStubOu
     private int _stagesComplete;
     private const int StagesTotal = 7;
 
-    public override async Task<PersistStubOutput> RunTask(OrchestrationContext context, InsightsReportOrchestrationInput input)
+    public override async Task<PersistOutput> RunTask(OrchestrationContext context, InsightsReportOrchestrationInput input)
     {
         const int maxReflectionIterations = 2; // matches Agents:MaxReflectionIterations' documented default.
 
@@ -94,8 +101,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistStubOu
         _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", new PlaywrightQaInput(reNormalized.Html));
 
         SetStage(InsightsRunStage.Complete, final: true);
-        return await context.ScheduleTask<PersistStubOutput>(typeof(PersistStubActivity).Name, "1.0",
-            new PersistStubInput(reNormalized.Html, input.TenantId, input.ReportType));
+        return await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
+            new PersistInput(reNormalized.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId));
     }
 
     public override string GetStatus() =>

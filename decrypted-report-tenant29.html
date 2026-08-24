@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+  
+  
+  <title>Compliance Health Report — Tenant 29</title>
+  <style>
+    :root{
+      --bg:#ffffff;
+      --ink:#0f172a;
+      --muted:#475569;
+      --line:#e2e8f0;
+      --panel:#f8fafc;
+      --panel2:#ffffff;
+
+      --crit:#b91c1c;
+      --high:#b45309;
+      --med:#1d4ed8;
+      --low:#047857;
+
+      --badge:#e2e8f0;
+
+      --shadow: 0 1px 0 rgba(15,23,42,.06);
+      --radius: 10px;
+    }
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--ink);
+      font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height:1.35;
+    }
+    .page{
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 28px 22px 38px;
+    }
+
+    header{
+      border-bottom: 2px solid var(--line);
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+    }
+    .h-top{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:18px;
+      flex-wrap:wrap;
+    }
+    .title{
+      margin:0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: .2px;
+    }
+    .meta{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:flex-end;
+      color:var(--muted);
+      font-size: 12.5px;
+    }
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      border:1px solid var(--line);
+      background:var(--panel);
+      padding:6px 10px;
+      border-radius:999px;
+      box-shadow: var(--shadow);
+      white-space:nowrap;
+    }
+    .chip b{ color:var(--ink); font-weight:600; }
+    .subnote{
+      margin-top:10px;
+      color:var(--muted);
+      font-size: 12.5px;
+    }
+
+    .hero{
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-left: 6px solid var(--crit);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, #fff, #fff);
+      box-shadow: var(--shadow);
+      padding: 16px 16px 14px;
+    }
+    .hero h2{
+      margin:0 0 8px 0;
+      font-size: 16px;
+      font-weight: 750;
+      letter-spacing:.2px;
+    }
+    .hero .callout-row{
+      display:grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap:16px;
+      align-items: start;
+    }
+    .callout{
+      margin:0;
+      color:var(--ink);
+      font-size: 14px;
+    }
+    .kv{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:10px;
+      align-content:start;
+    }
+    .kpi{
+      border:1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 10px 10px 9px;
+    }
+    .kpi .label{
+      color:var(--muted);
+      font-size: 12px;
+      margin-bottom:4px;
+    }
+    .kpi .value{
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing:.2px;
+    }
+    .kpi .value.crit{ color: var(--crit); }
+    .kpi .value.muted{ color: var(--ink); }
+    .kpi .delta{
+      margin-top:4px;
+      color:var(--muted);
+      font-size: 12px;
+    }
+
+    main{ margin-top: 16px; }
+
+    section{
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel2);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+    .sec-head{
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      display:flex;
+      gap:12px;
+      align-items:flex-start;
+      justify-content:space-between;
+      flex-wrap:wrap;
+    }
+    .sec-head h3{
+      margin:0;
+      font-size: 14.5px;
+      font-weight: 750;
+      letter-spacing: .15px;
+    }
+    .sec-head .small{
+      color:var(--muted);
+      font-size: 12.5px;
+      margin-top:2px;
+      max-width: 72ch;
+    }
+    .badges{
+      display:flex;
+      gap:6px;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:flex-end;
+    }
+    .badge{
+      font-size: 11.5px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--badge);
+      color: var(--ink);
+      white-space:nowrap;
+    }
+    .badge.sev-crit{ border-color: rgba(185,28,28,.35); background: rgba(185,28,28,.08); color: var(--crit); font-weight:600; }
+    .badge.sev-high{ border-color: rgba(180,83,9,.35); background: rgba(180,83,9,.08); color: var(--high); font-weight:600; }
+    .badge.sev-note{ background:#eef2ff; border-color:#c7d2fe; color:#3730a3; font-weight:600; }
+    .sec-body{
+      padding: 12px 14px 14px;
+    }
+    .prose{
+      margin: 0;
+      font-size: 13.75px;
+      color: var(--ink);
+    }
+
+    .grid-2{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 12px;
+    }
+    @media (max-width: 880px){
+      .hero .callout-row{ grid-template-columns: 1fr; }
+      .grid-2{ grid-template-columns: 1fr; }
+      .kv{ grid-template-columns: 1fr 1fr; }
+    }
+
+    .chart-card{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 10px;
+    }
+    .chart-title{
+      margin:0 0 6px 0;
+      font-size: 12.5px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .legend{
+      margin-top:8px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px 14px;
+      color:var(--muted);
+      font-size: 12px;
+      align-items:center;
+    }
+    .leg-item{ display:inline-flex; align-items:center; gap:7px; }
+    .swatch{
+      width:12px; height:12px; border-radius:3px;
+      border: 1px solid rgba(15,23,42,.14);
+      display:inline-block;
+    }
+
+    table{
+      width:100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    caption{
+      text-align:left;
+      color:var(--muted);
+      font-size: 12.5px;
+      padding-bottom: 6px;
+      font-weight: 600;
+    }
+    th, td{
+      border-top: 1px solid var(--line);
+      padding: 8px 8px;
+      vertical-align: top;
+    }
+    th{
+      text-align:left;
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: .2px;
+      background: #fbfdff;
+    }
+    tbody tr:nth-child(even) td{ background: #fcfdff; }
+    .num{ text-align:right; font-variant-numeric: tabular-nums; }
+    .nowrap{ white-space:nowrap; }
+
+    .dq{
+      margin-top: 12px;
+      border: 1px solid #fde68a;
+      background: #fffbeb;
+      border-radius: 10px;
+      padding: 10px 10px 9px;
+      color:#7c2d12;
+    }
+    .dq h4{
+      margin:0 0 6px 0;
+      font-size: 12.5px;
+      font-weight: 800;
+      letter-spacing:.15px;
+      color:#7c2d12;
+    }
+    .dq ul{
+      margin: 0;
+      padding-left: 18px;
+      font-size: 12.75px;
+      color:#7c2d12;
+    }
+    .dq li{ margin: 3px 0; }
+
+    footer{
+      margin-top: 18px;
+      padding-top: 12px;
+      border-top: 2px solid var(--line);
+      color: var(--muted);
+      font-size: 12.5px;
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:space-between;
+    }
+
+    /* Print */
+    @media print{
+      .page{ padding: 14mm 12mm; }
+      section{ break-inside: avoid; }
+      .hero{ break-inside: avoid; }
+      table{ break-inside: auto; }
+      tr{ break-inside: avoid; break-after: auto; }
+      thead{ display: table-header-group; }
+      tfoot{ display: table-footer-group; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="h-top">
+        <h1 class="title">Compliance Health Report</h1>
+        <div class="meta" aria-label="Report metadata">
+          <span class="chip"><b>Tenant</b> Tenant 29</span>
+          <span class="chip"><b>Type</b> compliance_health</span>
+          <span class="chip"><b>Generated</b> 2026-08-24 12:43:35Z — reflects live data</span>
+        </div>
+      </div>
+      <p class="subnote">
+        Scope: This report summarizes compliance-health signals and structural risk patterns. Treat tenant-entered names and hierarchies as untrusted inputs requiring verification where flagged.
+      </p>
+    </header>
+
+    <section class="hero" aria-labelledby="hero-title">
+      <h2 id="hero-title">Hero finding — Critical overdue is materially worse than tenant baseline</h2>
+      <div class="callout-row">
+        <p class="callout">
+          Critical obligations run at <b>84.7% overdue</b>, <b>28.9 points</b> above the tenant average of <b>55.8%</b>.
+          Ownerless obligations also sit outside the Critical tier: High has <b>465</b> ownerless obligations, Low has <b>99</b>, and Medium has <b>92</b>.
+          <span class="nowrap">(caveat: ownership_gap_below_critical: attention follows severity, ownership does not.)</span>
+        </p>
+
+        <div class="kv" aria-label="Key metrics">
+          <div class="kpi">
+            <div class="label">Critical overdue rate</div>
+            <div class="value crit">84.7%</div>
+            <div class="delta">Above tenant average (55.8%) by 28.9 points</div>
+          </div>
+          <div class="kpi">
+            <div class="label">Tenant average overdue rate</div>
+            <div class="value muted">55.8%</div>
+            <div class="delta">Baseline used for comparisons in this report</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" role="group" aria-label="Supporting visual summaries for hero finding">
+        <div class="chart-card">
+          <p class="chart-title">Overdue rate comparison (Critical vs tenant average)</p>
+          <svg viewBox="0 0 560 160" width="100%" height="160" role="img" aria-label="Bar chart comparing Critical overdue rate and tenant average overdue rate">
+            <title>Critical overdue rate vs tenant average overdue rate</title>
+            
+            <rect x="0" y="0" width="560" height="160" fill="transparent"></rect>
+
+            
+            <line x1="70" y1="18" x2="70" y2="132" stroke="#cbd5e1" stroke-width="1"></line>
+            <line x1="70" y1="132" x2="540" y2="132" stroke="#cbd5e1" stroke-width="1"></line>
+
+            
+            <text x="62" y="136" text-anchor="end" font-size="11" fill="#475569">0%</text>
+            <text x="62" y="80" text-anchor="end" font-size="11" fill="#475569">50%</text>
+            <text x="62" y="24" text-anchor="end" font-size="11" fill="#475569">100%</text>
+            <line x1="70" y1="76" x2="540" y2="76" stroke="#e2e8f0" stroke-width="1"></line>
+            <line x1="70" y1="20" x2="540" y2="20" stroke="#e2e8f0" stroke-width="1"></line>
+
+            
+            
+            <rect x="130" y="37.136" width="150" height="94.864" rx="6" fill="rgba(185,28,28,.85)" stroke="rgba(185,28,28,.95)"></rect>
+            <text x="205" y="32" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">84.7%</text>
+            <text x="205" y="150" text-anchor="middle" font-size="12" fill="#334155">Critical</text>
+
+            
+            <rect x="335" y="69.504" width="150" height="62.496" rx="6" fill="rgba(71,85,105,.22)" stroke="rgba(71,85,105,.45)"></rect>
+            <text x="410" y="64" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">55.8%</text>
+            <text x="410" y="150" text-anchor="middle" font-size="12" fill="#334155">Tenant avg</text>
+          </svg>
+
+          <div class="legend" aria-label="Legend">
+            <span class="leg-item"><span class="swatch" style="background: rgba(185,28,28,.85)"></span>Critical</span>
+            <span class="leg-item"><span class="swatch" style="background: rgba(71,85,105,.22)"></span>Tenant average</span>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <p class="chart-title">Ownerless obligations outside Critical (counts)</p>
+          <svg viewBox="0 0 560 160" width="100%" height="160" role="img" aria-label="Bar chart of ownerless obligations for High, Medium, and Low tiers">
+            <title>Ownerless obligations by tier (non-Critical)</title>
+
+            
+            <line x1="70" y1="18" x2="70" y2="132" stroke="#cbd5e1" stroke-width="1"></line>
+            <line x1="70" y1="132" x2="540" y2="132" stroke="#cbd5e1" stroke-width="1"></line>
+
+            
+            
+            <rect x="120" y="20" width="120" height="112" rx="6" fill="rgba(180,83,9,.80)" stroke="rgba(180,83,9,.95)"></rect>
+            <text x="180" y="16" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">465</text>
+            <text x="180" y="150" text-anchor="middle" font-size="12" fill="#334155">High</text>
+
+            
+            <rect x="270" y="109.817" width="120" height="22.183" rx="6" fill="rgba(29,78,216,.22)" stroke="rgba(29,78,216,.40)"></rect>
+            <text x="330" y="105" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">92</text>
+            <text x="330" y="150" text-anchor="middle" font-size="12" fill="#334155">Medium</text>
+
+            
+            <rect x="420" y="108.155" width="120" height="23.845" rx="6" fill="rgba(4,120,87,.22)" stroke="rgba(4,120,87,.40)"></rect>
+            <text x="480" y="104" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">99</text>
+            <text x="480" y="150" text-anchor="middle" font-size="12" fill="#334155">Low</text>
+          </svg>
+
+          <div class="legend" aria-label="Legend">
+            <span class="leg-item"><span class="swatch" style="background: rgba(180,83,9,.80)"></span>High</span>
+            <span class="leg-item"><span class="swatch" style="background: rgba(29,78,216,.22)"></span>Medium</span>
+            <span class="leg-item"><span class="swatch" style="background: rgba(4,120,87,.22)"></span>Low</span>
+          </div>
+          <p class="prose" style="margin-top:8px;color:var(--muted);font-size:12.5px;">
+            Caveat shown in-figure: ownership gaps can be material below the highest-severity tier; do not assume attention and ownership move together.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <main>
+      <section aria-labelledby="sec-riskmix">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-riskmix">Risk mix (overdue &amp; ownership)</h3>
+            <div class="small">High emphasis. Highlights the most severe compliance-health signals while preventing misinterpretation of ownership vs severity.</div>
+          </div>
+          <div class="badges" aria-label="Findings referenced in this section">
+            <span class="badge sev-crit">F-CRIT-WORSE</span>
+            <span class="badge sev-high">F-OWNGAP</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <p class="prose">
+            Critical obligations run at 84.7% overdue, 28.9 points above the tenant average of 55.8%.
+            Ownerless obligations also sit outside the Critical tier: High has 465 ownerless obligations, Low has 99, and Medium has 92.
+            (caveat: ownership_gap_below_critical: attention follows severity, ownership does not.)
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-entity">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-entity">Entity roll-up (hierarchy &amp; structural patterns)</h3>
+            <div class="small">High emphasis. Identifies the worst-performing subtree and flags hierarchy conditions that require tenant verification.</div>
+          </div>
+          <div class="badges" aria-label="Findings referenced in this section">
+            <span class="badge sev-crit">F-APEX-WORST</span>
+            <span class="badge sev-high">F-ORPH</span>
+            <span class="badge sev-note">F-INT-AGG</span>
+            <span class="badge sev-note">F-SHELL-AGG</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <p class="prose">
+            ABCD Aurangabad Pvt. Ltd. has the highest subtree overdue rate at 94.8% (rank 1 of 10), versus a tenant overdue rate of 55.8%.
+            Pune Branch reports 0.0 subtree instances and is flagged as orphaned_parent_deleted: parent entity was deleted, reported as top-level—do not silently re-parent; verify the hierarchy with the tenant.
+            22 of 99 nodes (22.2%) hold obligations directly on a non-leaf node—this is a tenant-wide configuration pattern (aggregate - holding obligations on grouping nodes is how this tenant is configured).
+            35 of 109 apex entities (32.1%) have no children and no obligations—again a structural pattern for this tenant (aggregate - empty top-level entities are a structural pattern for this tenant).
+          </p>
+
+          <div class="grid-2" aria-label="Entity roll-up summary tables">
+            <div>
+              <table aria-label="Entity roll-up key comparisons">
+                <caption>Key signals (entity roll-up)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Signal</th>
+                    <th scope="col" class="num">Value</th>
+                    <th scope="col">Interpretation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Worst subtree overdue rate</td>
+                    <td class="num">94.8%</td>
+                    <td>ABCD Aurangabad Pvt. Ltd. (rank 1 of 10)</td>
+                  </tr>
+                  <tr>
+                    <td>Tenant overdue rate (baseline)</td>
+                    <td class="num">55.8%</td>
+                    <td>Used for comparative statements</td>
+                  </tr>
+                  <tr>
+                    <td>Non-leaf nodes holding obligations</td>
+                    <td class="num">22 / 99 (22.2%)</td>
+                    <td>Tenant-wide configuration pattern (aggregate)</td>
+                  </tr>
+                  <tr>
+                    <td>Empty apex entities</td>
+                    <td class="num">35 / 109 (32.1%)</td>
+                    <td>Structural pattern for this tenant (aggregate)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <table aria-label="Hierarchy verification flags">
+                <caption>Hierarchy verification flags (action required)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Entity</th>
+                    <th scope="col">Flag</th>
+                    <th scope="col">Operator instruction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Pune Branch</td>
+                    <td>orphaned_parent_deleted</td>
+                    <td>Parent entity was deleted; reported as top-level. Do not silently re-parent; verify hierarchy with tenant.</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="prose" style="margin-top:8px;color:var(--muted);font-size:12.5px;">
+                Note: Names are tenant-entered. Verify any remediation steps against the tenant’s intended hierarchy.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-coverage">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-coverage">Internal coverage map (internal governance vs statutory-only)</h3>
+            <div class="small">High emphasis. Surfaces where internal governance is configured and where statutory compliance runs without internal governance.</div>
+          </div>
+          <div class="badges" aria-label="Findings referenced in this section">
+            <span class="badge sev-high">F-COVER</span>
+            <span class="badge sev-note">F-GAP-AGG</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <p class="prose">
+            Use internal-governance configuration to map WHICH locations have internal governance vs which do not.
+            As context (branch counts, not instance counts), internal governance runs at 59 of 99 locations that carry statutory obligations.
+            44 of 99 locations (44.4%) run statutory compliance with no internal governance.
+          </p>
+
+          <div class="grid-2" aria-label="Coverage summary visuals and table">
+            <div class="chart-card">
+              <p class="chart-title">Locations with statutory obligations: internal governance coverage (counts)</p>
+              <svg viewBox="0 0 560 170" width="100%" height="170" role="img" aria-label="Donut chart showing internal governance coverage across locations with statutory obligations">
+                <title>Internal governance coverage across locations with statutory obligations</title>
+
+                
+                
+                <g transform="translate(140,88)">
+                  <circle r="52" cx="0" cy="0" fill="none" stroke="#e2e8f0" stroke-width="18"></circle>
+
+                  
+                  <circle r="52" cx="0" cy="0" fill="none" stroke="rgba(4,120,87,.75)" stroke-width="18" stroke-linecap="butt" stroke-dasharray="194.7 132.0" transform="rotate(-90)"></circle>
+
+                  
+                  <circle r="52" cx="0" cy="0" fill="none" stroke="rgba(180,83,9,.65)" stroke-width="18" stroke-linecap="butt" stroke-dasharray="145.2 181.5" stroke-dashoffset="-194.7" transform="rotate(-90)"></circle>
+
+                  <text x="0" y="-2" text-anchor="middle" font-size="16" font-weight="800" fill="#0f172a">99</text>
+                  <text x="0" y="16" text-anchor="middle" font-size="11.5" fill="#475569">locations</text>
+                </g>
+
+                <g transform="translate(260,36)">
+                  <rect x="0" y="0" width="280" height="120" rx="10" fill="#f8fafc" stroke="#e2e8f0"></rect>
+                  <text x="14" y="26" font-size="12.5" fill="#0f172a" font-weight="700">Coverage summary</text>
+
+                  <rect x="14" y="42" width="12" height="12" rx="3" fill="rgba(4,120,87,.75)" stroke="rgba(15,23,42,.14)"></rect>
+                  <text x="34" y="52" font-size="12" fill="#334155">Internal governance present</text>
+                  <text x="256" y="52" font-size="12" fill="#0f172a" font-weight="700" text-anchor="end">59</text>
+
+                  <rect x="14" y="68" width="12" height="12" rx="3" fill="rgba(180,83,9,.65)" stroke="rgba(15,23,42,.14)"></rect>
+                  <text x="34" y="78" font-size="12" fill="#334155">No internal governance</text>
+                  <text x="256" y="78" font-size="12" fill="#0f172a" font-weight="700" text-anchor="end">44</text>
+
+                  <text x="14" y="104" font-size="11.5" fill="#475569">Counts are locations (branch counts), not instance counts.</text>
+                </g>
+              </svg>
+            </div>
+
+            <div>
+              <table aria-label="Internal coverage headline metrics">
+                <caption>Coverage headline metrics</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Metric</th>
+                    <th scope="col" class="num">Value</th>
+                    <th scope="col">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Locations with statutory obligations</td>
+                    <td class="num">99</td>
+                    <td>Denominator for coverage rates in this section</td>
+                  </tr>
+                  <tr>
+                    <td>Locations with internal governance</td>
+                    <td class="num">59</td>
+                    <td>Branch counts (not instance counts)</td>
+                  </tr>
+                  <tr>
+                    <td>Locations without internal governance</td>
+                    <td class="num">44 (44.4%)</td>
+                    <td>Statutory compliance runs without internal governance</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-outliers">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-outliers">Location outliers (worst overdue &amp; thin staffing pattern)</h3>
+            <div class="small">High emphasis. Identifies the single worst location and quantifies tenant-wide single-performer/reviewer dependency as an aggregate pattern.</div>
+          </div>
+          <div class="badges" aria-label="Findings referenced in this section">
+            <span class="badge sev-crit">F-WORST</span>
+            <span class="badge sev-note">F-SPOF-AGG</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <p class="prose">
+            Steel Pune has the highest overdue rate at 100.0% (rank 1 of 99), versus the tenant overdue rate of 55.8%.
+            Separately, 42 of 99 locations (42.4%) depend on a single performer or reviewer (aggregate - thin staffing is a tenant-wide pattern, not per-site exceptions).
+          </p>
+
+          <table aria-label="Location outliers and staffing dependency summary">
+            <caption>Key location-level signals captured in this report</caption>
+            <thead>
+              <tr>
+                <th scope="col">Item</th>
+                <th scope="col">Location / scope</th>
+                <th scope="col" class="num">Value</th>
+                <th scope="col">Comparison / note</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Worst overdue rate</td>
+                <td>Steel Pune</td>
+                <td class="num">100.0%</td>
+                <td>Rank 1 of 99; tenant overdue rate baseline is 55.8%</td>
+              </tr>
+              <tr>
+                <td>Single performer/reviewer dependency</td>
+                <td>Tenant-wide aggregate</td>
+                <td class="num">42 / 99 (42.4%)</td>
+                <td>Thin staffing is a pattern; treat as operational risk, not a per-site exception</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-users">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-users">Users: concentration &amp; continuity risk</h3>
+            <div class="small">High emphasis. Separates distinct-instance union from additive counts and highlights continuity risk from non-logging-in assignees and single-reviewer dependency.</div>
+          </div>
+          <div class="badges" aria-label="Findings referenced in this section">
+            <span class="badge sev-high">F-DEPEND</span>
+            <span class="badge sev-high">F-CONC</span>
+            <span class="badge sev-crit">F-SOLEREV</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <p class="prose">
+            The ten busiest users hold 88.8% of all assigned obligations; this is a distinct-instance union, not a sum of per-user counts—summing double-counts paired performer/reviewer work and can exceed 100%.
+            Continuity risk: 11 user(s) hold work that is current but are not logging in (dependency_risk: current work held by users who are not present. Not a performance verdict - a continuity one.).
+            3064 of 3064 assigned obligations depend on a single reviewer; this is counted at the instance level so it cannot be double-counted across users.
+          </p>
+
+          <div class="grid-2" aria-label="User risk summaries">
+            <div class="chart-card">
+              <p class="chart-title">Work concentration (assigned obligations)</p>
+              <svg viewBox="0 0 560 150" width="100%" height="150" role="img" aria-label="Stacked bar showing share of assigned obligations held by top ten users versus everyone else">
+                <title>Share of assigned obligations held by top ten users</title>
+                
+                <rect x="0" y="0" width="560" height="150" fill="transparent"></rect>
+
+                
+                <rect x="50" y="60" width="460" height="24" rx="8" fill="#e2e8f0" stroke="#cbd5e1"></rect>
+
+                
+                <rect x="50" y="60" width="408.48" height="24" rx="8" fill="rgba(29,78,216,.65)"></rect>
+                
+                <rect x="458.48" y="60" width="51.52" height="24" rx="8" fill="rgba(71,85,105,.35)"></rect>
+
+                <text x="50" y="44" font-size="12.5" fill="#334155" font-weight="700">Top 10 users</text>
+                <text x="510" y="44" font-size="12.5" fill="#0f172a" font-weight="800" text-anchor="end">88.8%</text>
+
+                <text x="50" y="112" font-size="12" fill="#475569">
+                  Measured as a distinct-instance union (not additive per-user totals).
+                </text>
+              </svg>
+              <div class="legend" aria-label="Legend">
+                <span class="leg-item"><span class="swatch" style="background: rgba(29,78,216,.65)"></span>Top 10 users (88.8%)</span>
+                <span class="leg-item"><span class="swatch" style="background: rgba(71,85,105,.35)"></span>All other users (11.2%)</span>
+              </div>
+            </div>
+
+            <div>
+              <table aria-label="Continuity and dependency metrics">
+                <caption>Continuity &amp; dependency metrics (instance-level where stated)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Signal</th>
+                    <th scope="col" class="num">Value</th>
+                    <th scope="col">Interpretation guard</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Users with current work but not logging in</td>
+                    <td class="num">11</td>
+                    <td>Continuity risk (not a performance verdict)</td>
+                  </tr>
+                  <tr>
+                    <td>Assigned obligations depending on a single reviewer</td>
+                    <td class="num">3064 / 3064</td>
+                    <td>Counted at the instance level; cannot be double-counted across users</td>
+                  </tr>
+                  <tr>
+                    <td>Work held by top ten users</td>
+                    <td class="num">88.8%</td>
+                    <td>Distinct-instance union; additive per-user sums can exceed 100%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-nature">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-nature">Nature hotspots (overdue by nature)</h3>
+            <div class="small">Low emphasis. Highlights the worst-overdue nature category against the tenant baseline.</div>
+          </div>
+          <div class="badges" aria-label="Findings referenced in this section">
+            <span class="badge sev-high">F-WORST-NATURE</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <p class="prose">
+            Returns has the highest overdue rate at 88.5% (rank 1 of 10), versus the tenant overdue rate of 55.8%.
+          </p>
+
+          <div class="grid-2" aria-label="Nature hotspot comparison visual">
+            <div class="chart-card">
+              <p class="chart-title">Overdue rate: worst nature vs tenant average</p>
+              <svg viewBox="0 0 560 160" width="100%" height="160" role="img" aria-label="Bar chart comparing Returns overdue rate and tenant average overdue rate">
+                <title>Returns overdue rate vs tenant average</title>
+
+                <line x1="70" y1="18" x2="70" y2="132" stroke="#cbd5e1" stroke-width="1"></line>
+                <line x1="70" y1="132" x2="540" y2="132" stroke="#cbd5e1" stroke-width="1"></line>
+
+                <text x="62" y="136" text-anchor="end" font-size="11" fill="#475569">0%</text>
+                <text x="62" y="80" text-anchor="end" font-size="11" fill="#475569">50%</text>
+                <text x="62" y="24" text-anchor="end" font-size="11" fill="#475569">100%</text>
+                <line x1="70" y1="76" x2="540" y2="76" stroke="#e2e8f0" stroke-width="1"></line>
+                <line x1="70" y1="20" x2="540" y2="20" stroke="#e2e8f0" stroke-width="1"></line>
+
+                
+                <rect x="130" y="32.88" width="150" height="99.12" rx="6" fill="rgba(180,83,9,.80)" stroke="rgba(180,83,9,.95)"></rect>
+                <text x="205" y="28" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">88.5%</text>
+                <text x="205" y="150" text-anchor="middle" font-size="12" fill="#334155">Returns</text>
+
+                
+                <rect x="335" y="69.504" width="150" height="62.496" rx="6" fill="rgba(71,85,105,.22)" stroke="rgba(71,85,105,.45)"></rect>
+                <text x="410" y="64" text-anchor="middle" font-size="12" fill="#0f172a" font-weight="700">55.8%</text>
+                <text x="410" y="150" text-anchor="middle" font-size="12" fill="#334155">Tenant avg</text>
+              </svg>
+              <div class="legend" aria-label="Legend">
+                <span class="leg-item"><span class="swatch" style="background: rgba(180,83,9,.80)"></span>Worst nature (Returns)</span>
+                <span class="leg-item"><span class="swatch" style="background: rgba(71,85,105,.22)"></span>Tenant average</span>
+              </div>
+            </div>
+
+            <div>
+              <table aria-label="Nature hotspot summary">
+                <caption>Nature hotspot (reported)</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Nature</th>
+                    <th scope="col" class="num">Overdue rate</th>
+                    <th scope="col">Rank</th>
+                    <th scope="col" class="num">Tenant baseline</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Returns</td>
+                    <td class="num">88.5%</td>
+                    <td>1 of 10</td>
+                    <td class="num">55.8%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-dq">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-dq">Data-quality caveats (visible &amp; operational)</h3>
+            <div class="small">These caveats affect interpretation and prioritization. They are surfaced inline (not footnoted away).</div>
+          </div>
+          <div class="badges" aria-label="Data quality caveats">
+            <span class="badge">tenant_recently_onboarded</span>
+            <span class="badge">flow_metric_drift</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <div class="dq" role="note" aria-label="Data quality caveats">
+            <h4>Interpretation caveats</h4>
+            <ul>
+              <li><b>tenant_recently_onboarded</b>: Early-stage configuration and onboarding transitions can inflate structural anomalies and concentration signals.</li>
+              <li><b>flow_metric_drift</b>: Workflow / flow metrics may drift during process changes; compare trends carefully and re-check after stabilization.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="sec-omitted">
+        <div class="sec-head">
+          <div>
+            <h3 id="sec-omitted">Omitted blocks (and why)</h3>
+            <div class="small">To keep remediation-focused signal density, the following blocks were intentionally excluded.</div>
+          </div>
+          <div class="badges" aria-label="Omitted blocks">
+            <span class="badge">act_hotspots_and_adoption_lag</span>
+            <span class="badge">event_module_adoption</span>
+            <span class="badge">departments</span>
+          </div>
+        </div>
+        <div class="sec-body">
+          <table aria-label="Omitted blocks and reasons">
+            <caption>Omissions</caption>
+            <thead>
+              <tr>
+                <th scope="col">Block</th>
+                <th scope="col">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>act_hotspots_and_adoption_lag</td>
+                <td>Lower decision value for immediate compliance-health remediation; adoption-lag is explicitly a proxy (emerging_law_proxy) and would dilute the core operational drivers.</td>
+              </tr>
+              <tr>
+                <td>event_module_adoption</td>
+                <td>Findings require 'question, not accusation' framing and may be tracked off-system (events_may_be_tracked_off_system); kept out to preserve a crisp compliance-health narrative.</td>
+              </tr>
+              <tr>
+                <td>departments</td>
+                <td>Department assignment is largely missing (unassigned_department), so per-department comparisons are not action-safe.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer aria-label="Report footer">
+      <div>
+        <div><b style="color:var(--ink);font-weight:700;">Dictionary version</b>: v1 (MVP)</div>
+        <div>Provenance: system-generated compliance-health report; derived from live tenant data at generation time.</div>
+      </div>
+      <div>
+        <div><b style="color:var(--ink);font-weight:700;">Composition order</b>: risk_mix ? entity_rollup ? internal_coverage_map ? location_outliers_table ? users_concentration_and_continuity ? nature_hotspots</div>
+        <div>Guards: union vs sum (user concentration), instance-level counting (single reviewer), and hierarchy verification (orphaned parent deleted).</div>
+      </div>
+    </footer>
+  </div>
+
+</body></html>
