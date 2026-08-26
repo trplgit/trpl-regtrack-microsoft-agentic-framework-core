@@ -33,6 +33,31 @@ public static class PaidReportAgentsRegistration
             The metrics below are what supply that number.                                        */
         var maxTokensPerCall = configuration.GetValue<int?>("Agents:MaxTokensPerCall");
 
+        // Otel:EnableSensitiveData - design doc Sec.3.2's two-projection audit. Off by default:
+        // full prompt/response text is genuinely sensitive (customer names, entity data), and
+        // turning it on is a deliberate internal-observability choice, not something that should
+        // happen just because LangFuse is configured at all (endpoint/keys control WHERE spans go;
+        // this controls WHAT they carry).
+        var enableSensitiveTelemetry = configuration.GetValue<bool>("Otel:EnableSensitiveData");
+
+        /*  Item 17 (design doc Sec.4.4) - the concurrency semaphore. Agents:MaxConcurrentLlmCalls
+            is OPTIONAL, same stance as MaxTokensPerCall above: unset means ungated (today's
+            behaviour, unchanged), so this cannot make an existing working setup worse by being
+            present. One shared gate instance registered here and threaded into every one of the
+            five agent-factory calls below - see LlmConcurrencyGate's doc comment for why it must
+            be ONE shared instance, not one per agent.                                              */
+        var maxConcurrentLlmCalls = configuration.GetValue<int?>("Agents:MaxConcurrentLlmCalls");
+        if (maxConcurrentLlmCalls is int cap)
+        {
+            var gate = new LlmConcurrencyGate(cap);
+            services.AddSingleton(gate);
+            // insights.queue.depth{lane}, insights.governor.saturation_pct/batch_max_wait_seconds
+            // (CONFIGURATION.md, Sec.13). Only meaningful once a gate exists - ungated means no
+            // queueing to measure, and ConcurrencyGatedChatClient itself never enters the chain
+            // either (see MafAgentFactory).
+            services.AddSingleton(new LlmConcurrencyGateMetrics(gate));
+        }
+
         services.AddSingleton<InsightsCostMetrics>();
         services.AddSingleton<ILlmUsageRecorder>(sp => sp.GetRequiredService<InsightsCostMetrics>());
 
@@ -43,23 +68,23 @@ public static class PaidReportAgentsRegistration
 
         services.AddSingleton<ICompositionAgent>(sp => new MafCompositionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "CompositionAgent", "Decides report structure.",
-            LoadPromptSync(sp, "01_composition.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall)));
+            LoadPromptSync(sp, "01_composition.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         services.AddSingleton<ICompositionReflectionAgent>(sp => new MafCompositionReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "CompositionReflectionAgent", "Critiques the composition plan.",
-            LoadPromptSync(sp, "02_composition_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall)));
+            LoadPromptSync(sp, "02_composition_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",
-            LoadPromptSync(sp, "03_narrative.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall)));
+            LoadPromptSync(sp, "03_narrative.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         services.AddSingleton<INarrativeReflectionAgent>(sp => new MafNarrativeReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
-            LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall)));
+            LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         services.AddSingleton<IReportHtmlAgent>(sp => new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
             endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.",
-            LoadPromptSync(sp, "05_report_html.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall)));
+            LoadPromptSync(sp, "05_report_html.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         // Headless Chromium, launched once at startup, shared by both DomPurifySanitizer and
         // PlaywrightReportQa - launching per-activity-call would be a multi-hundred-millisecond

@@ -95,6 +95,10 @@ public sealed class GenerateReportEndpointTests
         Assert.Equal(Tenant, call.TenantId);
         Assert.Equal("compliance_health", call.ReportType);
         Assert.Equal("FY2025-26", call.Period);
+        // A human clicked Generate - this is the paid_interactive lane, always drains first
+        // (design doc Sec.4.4). RunEndpoints.cs never sets this explicitly; it relies on
+        // EnqueueAsync's default, which is exactly what this pins.
+        Assert.Equal(Insights.Domain.LlmCallPriority.Interactive, call.Priority);
     }
 
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)

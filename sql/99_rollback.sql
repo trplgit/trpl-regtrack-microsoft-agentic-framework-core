@@ -84,6 +84,11 @@ IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.In
      other index pointing at it once this row is gone.                                    */
 IF OBJECT_ID('dbo.GeneratedReport', 'U') IS NOT NULL DROP TABLE dbo.GeneratedReport;
 
+/*   InsightsTenantTokenUsage (sql/20). No FKs, so order is irrelevant.
+     NOTE: dropping this discards the per-tenant monthly spend history the circuit breaker
+     (Sec.12.3) reads - a fresh install's first month has no idea what any tenant already spent.*/
+IF OBJECT_ID('dbo.InsightsTenantTokenUsage', 'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;
+
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;
 IF OBJECT_ID('dbo.InsightsDictionaryVersion',    'U') IS NOT NULL DROP TABLE dbo.InsightsDictionaryVersion;

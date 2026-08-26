@@ -1,5 +1,4 @@
 ﻿<Project>
-
   <!--
     Central package management. Versions are pinned HERE, once. A .csproj names the
     package it needs and never carries a Version attribute.
@@ -7,31 +6,25 @@
     Versions below are aligned with the existing RegTrack API (RegtrackCompliance.csproj)
     so the two solutions do not disagree on a shared dependency.
   -->
-
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
-
   <ItemGroup Label="Data access - versions matched to the RegTrack API">
     <PackageVersion Include="Dapper" Version="2.1.66" />
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.0.2" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.23" />
   </ItemGroup>
-
   <ItemGroup Label="Azure - versions matched to the RegTrack API">
     <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.8.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
   </ItemGroup>
-
   <ItemGroup Label="Presentation">
     <PackageVersion Include="HtmlSanitizer" Version="9.0.892" />
   </ItemGroup>
-
   <ItemGroup Label="Host">
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="8.0.1" />
   </ItemGroup>
-
   <ItemGroup Label="Test">
     <PackageVersion Include="coverlet.collector" Version="6.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
@@ -46,7 +39,6 @@
          without a real UAT connection. -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.23" />
   </ItemGroup>
-
   <!--
     Phase 1d - MAF (Microsoft Agent Framework), current stable per NuGet as of 2026-08-20.
     CLAUDE.md 3.2/7 still document Claude as the real provider; Microsoft.Agents.AI.OpenAI is
@@ -64,7 +56,6 @@
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.7.0" />
     <PackageVersion Include="OpenAI" Version="2.11.0" />
   </ItemGroup>
-
   <!--
     Playwright drives a real headless Chromium for two distinct jobs: executing the vendored
     DOMPurify bundle (vendor/dompurify-3.4.14.min.js - fetched and checked in, never fetched at
@@ -74,7 +65,6 @@
   <ItemGroup Label="Presentation - Playwright (DOMPurify execution + cosmetic QA)">
     <PackageVersion Include="Microsoft.Playwright" Version="1.62.0" />
   </ItemGroup>
-
   <!--
     Durable execution (build order item 11) - classic DTFx (DurableTask.Core's TaskHubWorker/
     TaskHubClient), NOT the newer Microsoft.DurableTask.Worker/.Client portable SDK - that SDK
@@ -87,7 +77,6 @@
     <PackageVersion Include="Microsoft.DurableTask.SqlServer" Version="1.8.1" />
     <PackageVersion Include="Microsoft.Azure.DurableTask.Core" Version="3.9.0" />
   </ItemGroup>
-
   <!--
     Envelope encryption (build order item 14) - the real DocAI pattern, reused verbatim (design
     doc Sec.9.2). Both deprecated by Microsoft in favour of Azure.Identity/Microsoft.Identity.Client,
@@ -98,12 +87,20 @@
     <PackageVersion Include="Microsoft.Azure.KeyVault" Version="3.0.5" />
     <PackageVersion Include="Microsoft.IdentityModel.Clients.ActiveDirectory" Version="5.3.0" />
   </ItemGroup>
+  <!--
+    Observability (build order item 17 / CLAUDE.md 7) - OTel -> LangFuse. IChatClient calls are
+    instrumented via Microsoft.Extensions.AI's own OpenTelemetryChatClient (ships inside the
+    Microsoft.Extensions.AI package already referenced transitively via Microsoft.Extensions.AI.
+    OpenAI - no separate package for that half). These two are the SDK side: collect the spans/
+    metrics this process emits and ship them to LangFuse's OTLP endpoint over HTTP.
+  -->
+  <ItemGroup Label="Observability - OpenTelemetry -> LangFuse (build order item 17)">
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+  </ItemGroup>
 
   <!--
     Phase 1d additions, still not pinned:
-      The Anthropic MAF provider                                        (real compose / narrate provider)
-      OpenTelemetry.Exporter.OpenTelemetryProtocol                      (LangFuse)
+      The Anthropic MAF provider   (real compose / narrate provider)
   -->
-
 </Project>
-

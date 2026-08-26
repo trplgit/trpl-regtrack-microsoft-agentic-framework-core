@@ -16,4 +16,22 @@ public sealed record InsightsScopeRequest(string Type, int? EntityId)
     /// spellings of the same scope would become two separate 30-day buckets.
     /// </summary>
     public string ToDescriptor() => EntityId is int entityId ? $"entity:{entityId}" : "tenant";
+
+    /// <summary>
+    /// The inverse of <see cref="ToDescriptor"/> - recovers the request shape from a persisted
+    /// GeneratedReport.ScopeDescriptor, for the paid keep-warm scheduler re-enqueueing a past key.
+    /// Fails closed on anything unrecognised, same stance ReportContentService.CoversReportScopeAsync
+    /// already takes on this exact string - a scheduler must not guess a scope from a malformed label.
+    /// </summary>
+    public static InsightsScopeRequest Parse(string descriptor)
+    {
+        if (descriptor == "tenant")
+            return new InsightsScopeRequest("tenant", null);
+
+        if (descriptor.StartsWith("entity:", StringComparison.Ordinal) &&
+            int.TryParse(descriptor.AsSpan("entity:".Length), out var entityId))
+            return new InsightsScopeRequest("entity", entityId);
+
+        throw new InvalidOperationException($"Unrecognised report scope descriptor '{descriptor}'.");
+    }
 }

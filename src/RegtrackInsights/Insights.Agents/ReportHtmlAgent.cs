@@ -15,7 +15,7 @@ public interface IReportHtmlAgent
     /// no runtime network calls, inline SVG, system fonts only) are NOT enforced here - that is
     /// <see cref="ReportEmitNormalizer"/>'s job, deterministically, after this call returns.
     /// </summary>
-    Task<string> RenderAsync(
+    Task<AgentCallResult<string>> RenderAsync(
         CompositionPlan plan,
         NarrativeResult narrative,
         string tenantName,
@@ -32,7 +32,7 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
-    public async Task<string> RenderAsync(
+    public async Task<AgentCallResult<string>> RenderAsync(
         CompositionPlan plan,
         NarrativeResult narrative,
         string tenantName,
@@ -59,7 +59,8 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
         if (string.IsNullOrWhiteSpace(html))
             throw new InvalidOperationException("Report HTML agent returned no text.");
 
-        return StripMarkdownFence(html);
+        var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
+        return new AgentCallResult<string>(StripMarkdownFence(html), totalTokens);
     }
 
     /// <summary>

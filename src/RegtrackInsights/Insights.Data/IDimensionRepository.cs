@@ -13,9 +13,19 @@ namespace Insights.Data;
 ///   <see cref="DimensionDictionaryGapException"/>     - a required dictionary value is missing
 ///   <see cref="DimensionContractViolationException"/> - a result-set rule SQL cannot enforce
 ///
-/// A caller catching any of these MUST refuse to publish. None of them may be degraded to a
-/// warning or an empty result: a dimension that silently drops a thousand instances still looks
-/// entirely plausible in a report, which is the failure this whole design exists to prevent.
+/// None of these may EVER be degraded to a warning, an empty result, or the unreconciled numbers -
+/// a dimension that silently drops a thousand instances still looks entirely plausible in a
+/// report, which is the failure this whole design exists to prevent. That rule is absolute and
+/// applies to all four uniformly.
+///
+/// What is NOT absolute: whether one of these failing must refuse the WHOLE report.
+/// FetchDimensionsActivity (design doc Sec.11.4, "Partial generation") catches
+/// DimensionReconciliationException and DimensionContractViolationException specifically - both
+/// represent a bug local to ONE dimension's own procedure - and degrades just that dimension's
+/// slot to a fixed, non-numeric placeholder, publishing the rest of the report. The dimension's
+/// DATA still never reaches the user in any form; only whether the REPORT AS A WHOLE still ships
+/// differs. DimensionScopeDeniedException and DimensionDictionaryGapException remain uncaught and
+/// still fail the entire run - see each exception's own doc comment for why.
 /// </summary>
 public interface IDimensionRepository
 {

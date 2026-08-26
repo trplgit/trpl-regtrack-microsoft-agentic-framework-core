@@ -15,8 +15,17 @@ namespace Insights.Persistence;
 /// "-temp" one. One-line config change once ops provisions the real name; not blocking the write
 /// path on a rename.
 /// </summary>
-public sealed class AzureReportBlobWriter(string storageConnectionString, string containerName) : IReportBlobWriter
+public sealed class AzureReportBlobWriter(string storageConnectionString, string containerName) : IReportBlobWriter, IReportBlobReader
 {
+    /// <summary>Item 14's read half. Downloads the still-encrypted bytes exactly as WriteAsync left them - IV-prepended ciphertext, no decryption here.</summary>
+    public async Task<byte[]> ReadAsync(BlobLocation location, CancellationToken cancellationToken = default)
+    {
+        var service = new BlobServiceClient(storageConnectionString);
+        var blob = service.GetBlobContainerClient(location.Container).GetBlobClient(location.Path);
+        var downloaded = await blob.DownloadContentAsync(cancellationToken);
+        return downloaded.Value.Content.ToArray();
+    }
+
     public async Task<BlobLocation> WriteAsync(EncryptedReportEnvelope envelope, CancellationToken cancellationToken = default)
     {
         var service = new BlobServiceClient(storageConnectionString);

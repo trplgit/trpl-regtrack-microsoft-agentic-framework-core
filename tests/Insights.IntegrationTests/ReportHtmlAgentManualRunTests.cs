@@ -45,16 +45,16 @@ public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
 
         var compositionAgent = new MafCompositionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "CompositionAgent", "Decides report structure.", await LoadPromptAsync("01_composition.md")));
-        var plan = await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health");
+        var plan = (await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health")).Value;
 
         var narrativeAgent = new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.", await LoadPromptAsync("03_narrative.md")));
-        var narrative = await narrativeAgent.NarrateAsync(plan, assertions, findings);
+        var narrative = (await narrativeAgent.NarrateAsync(plan, assertions, findings)).Value;
         output.WriteLine($"Composed + narrated {narrative.Blocks.Count} blocks");
 
         var htmlAgent = new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
             endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.", await LoadPromptAsync("05_report_html.md")));
-        var html = await htmlAgent.RenderAsync(plan, narrative, tenantName: $"Tenant {customerId} (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow);
+        var html = (await htmlAgent.RenderAsync(plan, narrative, tenantName: $"Tenant {customerId} (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow)).Value;
 
         var outputPath = Environment.GetEnvironmentVariable("REPORT_HTML_OUTPUT_PATH")
             ?? Path.Combine(AppContext.BaseDirectory, "rendered-report.html");

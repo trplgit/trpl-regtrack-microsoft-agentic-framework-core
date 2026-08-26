@@ -11,7 +11,7 @@ public interface ICompositionReflectionAgent
     /// composition agent had - the critic needs them to check claims like "is the highest-
     /// severity finding the hero" (rule 1) and "does direction invert the reading" (rule 2).
     /// </summary>
-    Task<CompositionReflectionResult> ReflectAsync(
+    Task<AgentCallResult<CompositionReflectionResult>> ReflectAsync(
         CompositionPlan plan,
         IReadOnlyList<Assertion> assertions,
         IReadOnlyList<Finding> findings,
@@ -33,7 +33,7 @@ public sealed class MafCompositionReflectionAgent(AIAgent agent) : ICompositionR
         PropertyNameCaseInsensitive = true,
     };
 
-    public async Task<CompositionReflectionResult> ReflectAsync(
+    public async Task<AgentCallResult<CompositionReflectionResult>> ReflectAsync(
         CompositionPlan plan,
         IReadOnlyList<Assertion> assertions,
         IReadOnlyList<Finding> findings,
@@ -55,7 +55,10 @@ public sealed class MafCompositionReflectionAgent(AIAgent agent) : ICompositionR
         if (string.IsNullOrWhiteSpace(text))
             throw new InvalidOperationException("Composition reflection agent returned no text.");
 
-        return JsonSerializer.Deserialize<CompositionReflectionResult>(text, JsonOptions)
+        var result = JsonSerializer.Deserialize<CompositionReflectionResult>(text, JsonOptions)
             ?? throw new InvalidOperationException($"Composition reflection agent returned unparsable JSON: {text}");
+
+        var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
+        return new AgentCallResult<CompositionReflectionResult>(result, totalTokens);
     }
 }

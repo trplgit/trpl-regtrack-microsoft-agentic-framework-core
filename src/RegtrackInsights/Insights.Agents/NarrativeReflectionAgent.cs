@@ -12,7 +12,7 @@ public interface INarrativeReflectionAgent
     /// story - inverted direction, an orphaned caveat, an invented severity word, a buried lede.
     /// This is judgement work, layered ON TOP OF PublishGate, never a substitute for it.
     /// </summary>
-    Task<NarrativeReflectionResult> ReflectAsync(
+    Task<AgentCallResult<NarrativeReflectionResult>> ReflectAsync(
         NarrativeResult narrative,
         IReadOnlyList<Assertion> assertions,
         IReadOnlyList<Finding> findings,
@@ -28,7 +28,7 @@ public sealed class MafNarrativeReflectionAgent(AIAgent agent) : INarrativeRefle
         PropertyNameCaseInsensitive = true,
     };
 
-    public async Task<NarrativeReflectionResult> ReflectAsync(
+    public async Task<AgentCallResult<NarrativeReflectionResult>> ReflectAsync(
         NarrativeResult narrative,
         IReadOnlyList<Assertion> assertions,
         IReadOnlyList<Finding> findings,
@@ -46,7 +46,10 @@ public sealed class MafNarrativeReflectionAgent(AIAgent agent) : INarrativeRefle
         if (string.IsNullOrWhiteSpace(text))
             throw new InvalidOperationException("Narrative reflection agent returned no text.");
 
-        return JsonSerializer.Deserialize<NarrativeReflectionResult>(text, JsonOptions)
+        var result = JsonSerializer.Deserialize<NarrativeReflectionResult>(text, JsonOptions)
             ?? throw new InvalidOperationException($"Narrative reflection agent returned unparsable JSON: {text}");
+
+        var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
+        return new AgentCallResult<NarrativeReflectionResult>(result, totalTokens);
     }
 }

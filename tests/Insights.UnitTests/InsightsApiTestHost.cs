@@ -25,7 +25,8 @@ internal static class InsightsApiTestHost
         ITenantDirectoryRepository tenants,
         IRunStatusReader? runs = null,
         IScopeRepository? scope = null,
-        IInsightsRunEnqueuer? enqueuer = null)
+        IInsightsRunEnqueuer? enqueuer = null,
+        IReportContentService? content = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -41,6 +42,8 @@ internal static class InsightsApiTestHost
                     services.AddSingleton(scope);
                 if (enqueuer is not null)
                     services.AddSingleton(enqueuer);
+                if (content is not null)
+                    services.AddSingleton(content);
             });
             web.Configure(app =>
             {
@@ -49,6 +52,7 @@ internal static class InsightsApiTestHost
                 {
                     endpoints.MapInsightsTenantEndpoints();
                     endpoints.MapInsightsRunEndpoints();
+                    endpoints.MapInsightsReportContentEndpoints();
                 });
             });
         });
@@ -120,16 +124,28 @@ internal sealed class FakeScopeRepository(int scopePairCount) : IScopeRepository
         throw new NotSupportedException("Not needed by the endpoints under test.");
 }
 
+/// <summary>Answers with a fixed result (or null, for "not visible"), and RECORDS what it was asked - same reasoning as the other fakes.</summary>
+internal sealed class FakeReportContentService(ReportContentResult? result) : IReportContentService
+{
+    public List<(Guid ReportId, int TenantId, int ViewerUserId)> Calls { get; } = [];
+
+    public Task<ReportContentResult?> OpenAsync(Guid reportId, int tenantId, int viewerUserId, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((reportId, tenantId, viewerUserId));
+        return Task.FromResult(result);
+    }
+}
+
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
 internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
 {
-    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId)> Calls { get; } = [];
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority)> Calls { get; } = [];
 
     public Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive)
     {
-        Calls.Add((tenantId, reportType, scope, period, userId));
+        Calls.Add((tenantId, reportType, scope, period, userId, priority));
         return Task.FromResult(runIdToReturn);
     }
 }

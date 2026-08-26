@@ -45,7 +45,7 @@ public sealed class CompositionAgentManualRunTests(ITestOutputHelper output)
             instructions);
         var compositionAgent = new MafCompositionAgent(mafAgent);
 
-        var plan = await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health");
+        var plan = (await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health")).Value;
 
         output.WriteLine($"Hero: {plan.Hero.Block} - {plan.Hero.Reason}");
         output.WriteLine("--- Blocks ---");

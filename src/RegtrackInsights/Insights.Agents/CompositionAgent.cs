@@ -18,7 +18,7 @@ public interface ICompositionAgent
     /// critic's issues, and this call is expected to produce a genuinely revised plan addressing
     /// them - not silently ignore them and repeat the same output.
     /// </summary>
-    Task<CompositionPlan> ComposeAsync(
+    Task<AgentCallResult<CompositionPlan>> ComposeAsync(
         IReadOnlyDictionary<string, object> dimensionResults,
         string tenantShape,
         string reportType,
@@ -41,7 +41,7 @@ public sealed class MafCompositionAgent(AIAgent agent) : ICompositionAgent
         PropertyNameCaseInsensitive = true,
     };
 
-    public async Task<CompositionPlan> ComposeAsync(
+    public async Task<AgentCallResult<CompositionPlan>> ComposeAsync(
         IReadOnlyDictionary<string, object> dimensionResults,
         string tenantShape,
         string reportType,
@@ -73,7 +73,10 @@ public sealed class MafCompositionAgent(AIAgent agent) : ICompositionAgent
         if (string.IsNullOrWhiteSpace(text))
             throw new InvalidOperationException("Composition agent returned no text.");
 
-        return JsonSerializer.Deserialize<CompositionPlan>(text, JsonOptions)
+        var plan = JsonSerializer.Deserialize<CompositionPlan>(text, JsonOptions)
             ?? throw new InvalidOperationException($"Composition agent returned unparsable JSON: {text}");
+
+        var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
+        return new AgentCallResult<CompositionPlan>(plan, totalTokens);
     }
 }

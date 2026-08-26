@@ -19,8 +19,19 @@ public interface IInsightsRunEnqueuer
     /// id. The run id is DERIVED from (tenantId, scope, reportType, period) - not random - which
     /// is what makes a second call for the same key attach to the existing run instead of starting
     /// a duplicate (API_CONTRACTS.md §3 step 4, the one-active-run-per-key lock).
+    ///
+    /// <paramref name="priority"/> defaults to Interactive - every caller before priority lanes
+    /// existed (RunEndpoints.cs's Generate click, InsightsRunOnceWorker's CLI trigger) IS a human
+    /// waiting, so the default matches their actual meaning without those call sites needing to
+    /// change. Only PaidKeepWarmScheduler passes Batch explicitly (design doc Sec.4.4).
+    ///
+    /// Placed AFTER <paramref name="cancellationToken"/>, not before it - <paramref
+    /// name="cancellationToken"/> already had every existing call site passing it as a bare
+    /// positional 6th argument; inserting a new optional parameter ahead of it would silently
+    /// rebind those positional CancellationToken arguments onto this one instead (both optional,
+    /// so the compiler would accept it - it just would not mean what the call site wrote).
     /// </summary>
     Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive);
 }

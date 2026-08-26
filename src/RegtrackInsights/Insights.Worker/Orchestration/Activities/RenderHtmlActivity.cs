@@ -4,8 +4,10 @@ using Insights.Domain;
 
 namespace Insights.Worker.Orchestration.Activities;
 
-public sealed record RenderHtmlInput(CompositionPlan Plan, NarrativeResult Narrative, string TenantName, string ReportType, DateTime GeneratedAt);
-public sealed record RenderHtmlOutput(string Html);
+public sealed record RenderHtmlInput(
+    CompositionPlan Plan, NarrativeResult Narrative, string TenantName, string ReportType, DateTime GeneratedAt,
+    LlmCallPriority Priority = LlmCallPriority.Interactive);
+public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 
 /// <summary>Node 7, runs AFTER the publish gate (spec 3) - no point rendering a refused narrative.</summary>
 public sealed class RenderHtmlActivity(IReportHtmlAgent htmlAgent) : AsyncTaskActivity<RenderHtmlInput, RenderHtmlOutput>
@@ -14,7 +16,8 @@ public sealed class RenderHtmlActivity(IReportHtmlAgent htmlAgent) : AsyncTaskAc
 
     internal async Task<RenderHtmlOutput> RunAsync(RenderHtmlInput input)
     {
-        var html = await htmlAgent.RenderAsync(input.Plan, input.Narrative, input.TenantName, input.ReportType, input.GeneratedAt, CancellationToken.None);
-        return new RenderHtmlOutput(html);
+        using var _priority = LlmCallPriorityContext.Push(input.Priority);
+        var result = await htmlAgent.RenderAsync(input.Plan, input.Narrative, input.TenantName, input.ReportType, input.GeneratedAt, CancellationToken.None);
+        return new RenderHtmlOutput(result.Value, result.TotalTokens);
     }
 }

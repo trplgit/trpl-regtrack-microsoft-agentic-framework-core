@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker;
 
@@ -97,6 +98,14 @@ public static class WorkerRegistration
     {
         RegisterSqlOrchestrationService(services, configuration);
 
+        // insights.dimension.block_failures_total (design doc Sec.11.4/Sec.11.5, CONFIGURATION.md
+        // Sec.13). One singleton exposed under both types, same reasoning as InsightsCostMetrics:
+        // two registrations would mean two Meters with the same name double-counting failures.
+        services.AddSingleton<DimensionFailureMetrics>();
+        services.AddSingleton<IDimensionFailureRecorder>(sp => sp.GetRequiredService<DimensionFailureMetrics>());
+
+        services.AddTransient<CheckTenantTokenBudgetActivity>();
+        services.AddTransient<RecordTenantTokenUsageActivity>();
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
         services.AddTransient<ComposeActivity>();
@@ -111,7 +120,8 @@ public static class WorkerRegistration
         services.AddTransient<PersistActivity>();
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
-        RegisterPersistence(services, configuration);
+        RegisterReportCodec(services, configuration);
+        RegisterReportsDbContext(services, configuration);
 
         // Free digest lane (design doc 10.2) - resolve -> compose per scope group -> send per recipient.
         services.AddTransient<ResolveDigestRecipientsActivity>();
@@ -140,6 +150,7 @@ public static class WorkerRegistration
                 FreeDigestOrchestrator.Name, FreeDigestOrchestrator.Version, typeof(FreeDigestOrchestrator)));
 
             worker.AddTaskActivities(
+                ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
                 ActivityCreator<ComposeActivity>(sp), ActivityCreator<ReflectOnCompositionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
@@ -177,22 +188,78 @@ public static class WorkerRegistration
     }
 
     /// <summary>
-    /// Build order item 14 write path. IReportEncryptor and InsightsReportsDbContext both need
-    /// ConnectionStrings:RegTrack - the encryptor to look up the Key Vault key config
-    /// (tbl_SecretKeyCredentialsCustomerwise), the DbContext for the GeneratedReport table. Both
-    /// live in the same database (vitComplianceSystem).
+    /// Build order item 14's read half (design doc Sec.9.3, API_CONTRACTS.md §5) - what
+    /// ReportContentEndpoints needs. Belongs to the API HOST, not the worker: unlike
+    /// AddInsightsOrchestrationWorker, this never registers TaskHubWorker or any activity, so
+    /// calling it from the RegTrack API (or a test host) cannot accidentally start a second
+    /// dequeue loop, same reasoning as AddInsightsOrchestrationClient's split from ...Worker.
+    ///
+    /// Call AFTER AddInsightsData - IReportContentService depends on IScopeRepository and
+    /// IEntityRepository, both registered there.
     /// </summary>
-    private static void RegisterPersistence(IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddInsightsReportContentService(this IServiceCollection services, IConfiguration configuration)
+    {
+        RegisterReportCodec(services, configuration);
+        RegisterReportsDbContext(services, configuration);
+
+        var blobConnectionString = Require(configuration, "Azure:BlobConnectionString");
+        var blobContainer = Require(configuration, "Azure:BlobContainer");
+        services.AddSingleton<IReportViewPublisher>(_ => new AzureReportViewPublisher(blobConnectionString, blobContainer));
+
+        // Reports:SasLifetimeMinutes - already scaffolded in appsettings.json (=10) ahead of this
+        // being wired. Required, not optional-with-a-guessed-default: a view link's lifetime is a
+        // security parameter (design doc Sec.9.3's "short-lived, single-use"), not a tunable that
+        // should silently default to something nobody chose.
+        var sasLifetimeMinutes = configuration.GetValue<int?>("Reports:SasLifetimeMinutes")
+            ?? throw new InvalidOperationException("Reports:SasLifetimeMinutes is not configured.");
+        var sasLifetime = TimeSpan.FromMinutes(sasLifetimeMinutes);
+
+        /*  SCOPED, not singleton - depends on InsightsReportsDbContext (scoped by AddDbContext)
+            and IScopeRepository/IEntityRepository (both scoped in AddInsightsData). A singleton
+            depending on any of those would be a captive-dependency bug, holding one DbContext/
+            connection open for the process lifetime instead of one per request.               */
+        services.AddScoped<IReportContentService>(sp => new ReportContentService(
+            sp.GetRequiredService<InsightsReportsDbContext>(),
+            sp.GetRequiredService<IScopeRepository>(),
+            sp.GetRequiredService<IEntityRepository>(),
+            sp.GetRequiredService<IReportDecryptor>(),
+            sp.GetRequiredService<IReportBlobReader>(),
+            sp.GetRequiredService<IReportViewPublisher>(),
+            sasLifetime,
+            sp.GetRequiredService<ILogger<ReportContentService>>()));
+
+        return services;
+    }
+
+    /// <summary>
+    /// AdalKeyVaultReportEncryptor and AzureReportBlobWriter each implement TWO interfaces
+    /// (encrypt+decrypt, write+read) - registered ONCE as concrete singletons and exposed under
+    /// both, so a process that does both write (PersistActivity, worker-only) and read
+    /// (IReportContentService, API-host-only) never pays for a second Key Vault auth or blob
+    /// client. In production these run in different processes entirely (worker is private/
+    /// queue-driven, the API host is public - CLAUDE.md 6), so the sharing mostly matters for this
+    /// repo's own combined test/demo hosts, but it costs nothing either way.
+    /// </summary>
+    private static void RegisterReportCodec(IServiceCollection services, IConfiguration configuration)
     {
         var regTrackConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
         var blobConnectionString = Require(configuration, "Azure:BlobConnectionString");
         var blobContainer = Require(configuration, "Azure:BlobContainer");
 
-        services.AddSingleton<IReportEncryptor>(_ => new AdalKeyVaultReportEncryptor(regTrackConnectionString));
-        services.AddSingleton<IReportBlobWriter>(_ => new AzureReportBlobWriter(blobConnectionString, blobContainer));
+        services.TryAddSingleton(_ => new AdalKeyVaultReportEncryptor(regTrackConnectionString));
+        services.TryAddSingleton<IReportEncryptor>(sp => sp.GetRequiredService<AdalKeyVaultReportEncryptor>());
+        services.TryAddSingleton<IReportDecryptor>(sp => sp.GetRequiredService<AdalKeyVaultReportEncryptor>());
 
-        services.AddDbContext<InsightsReportsDbContext>(options =>
-            options.UseSqlServer(regTrackConnectionString));
+        services.TryAddSingleton(_ => new AzureReportBlobWriter(blobConnectionString, blobContainer));
+        services.TryAddSingleton<IReportBlobWriter>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
+        services.TryAddSingleton<IReportBlobReader>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
+    }
+
+    /// <summary>TryAdd - both the worker's write path and AddInsightsReportContentService's read path need this, and a combined host calls both.</summary>
+    private static void RegisterReportsDbContext(IServiceCollection services, IConfiguration configuration)
+    {
+        var regTrackConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
+        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(regTrackConnectionString));
     }
 
     private static DelegateActivityCreator<TActivity> ActivityCreator<TActivity>(IServiceProvider sp)

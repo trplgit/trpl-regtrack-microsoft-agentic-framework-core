@@ -18,7 +18,7 @@ public interface INarrativeAgent
     /// reflection returns Revise, the caller passes the previous narrative and the critic's
     /// issues (each with its offending quote), expecting a genuinely revised narrative.
     /// </summary>
-    Task<NarrativeResult> NarrateAsync(
+    Task<AgentCallResult<NarrativeResult>> NarrateAsync(
         CompositionPlan plan,
         IReadOnlyList<Assertion> assertions,
         IReadOnlyList<Finding> findings,
@@ -35,7 +35,7 @@ public sealed class MafNarrativeAgent(AIAgent agent) : INarrativeAgent
         PropertyNameCaseInsensitive = true,
     };
 
-    public async Task<NarrativeResult> NarrateAsync(
+    public async Task<AgentCallResult<NarrativeResult>> NarrateAsync(
         CompositionPlan plan,
         IReadOnlyList<Assertion> assertions,
         IReadOnlyList<Finding> findings,
@@ -65,7 +65,10 @@ public sealed class MafNarrativeAgent(AIAgent agent) : INarrativeAgent
         if (string.IsNullOrWhiteSpace(text))
             throw new InvalidOperationException("Narrative agent returned no text.");
 
-        return JsonSerializer.Deserialize<NarrativeResult>(text, JsonOptions)
+        var narrative = JsonSerializer.Deserialize<NarrativeResult>(text, JsonOptions)
             ?? throw new InvalidOperationException($"Narrative agent returned unparsable JSON: {text}");
+
+        var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
+        return new AgentCallResult<NarrativeResult>(narrative, totalTokens);
     }
 }

@@ -5,9 +5,10 @@ using Insights.Domain;
 namespace Insights.Worker.Orchestration.Activities;
 
 public sealed record ReflectOnCompositionInput(
-    CompositionPlan Plan, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings, string TenantShape);
+    CompositionPlan Plan, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings, string TenantShape,
+    LlmCallPriority Priority = LlmCallPriority.Interactive);
 
-public sealed record ReflectOnCompositionOutput(CompositionReflectionResult Result);
+public sealed record ReflectOnCompositionOutput(CompositionReflectionResult Result, long TotalTokens);
 
 /// <summary>Node 5r. The bounded revise loop itself lives in the orchestrator, not here (Task 14).</summary>
 public sealed class ReflectOnCompositionActivity(ICompositionReflectionAgent reflectionAgent)
@@ -17,7 +18,8 @@ public sealed class ReflectOnCompositionActivity(ICompositionReflectionAgent ref
 
     internal async Task<ReflectOnCompositionOutput> RunAsync(ReflectOnCompositionInput input)
     {
+        using var _priority = LlmCallPriorityContext.Push(input.Priority);
         var result = await reflectionAgent.ReflectAsync(input.Plan, input.Assertions, input.Findings, input.TenantShape, CancellationToken.None);
-        return new ReflectOnCompositionOutput(result);
+        return new ReflectOnCompositionOutput(result.Value, result.TotalTokens);
     }
 }

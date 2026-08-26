@@ -14,6 +14,13 @@ public sealed class GeneratedReport
     public required string Period { get; init; }
     public DateTime GeneratedAtUtc { get; init; }
     public required int GeneratedByUserId { get; init; }
+
+    /// <summary>
+    /// Stamped by ReportContentService.OpenAsync on a successful view (sql/19). NULL until then.
+    /// The keep-warm scheduler's sole gate on "actually viewed recently" (design doc Sec.4.3) -
+    /// a report generated once but never opened must age out and stop consuming tokens.
+    /// </summary>
+    public DateTime? LastViewedUtc { get; set; }
     public required string BlobContainer { get; init; }
     public required string BlobPath { get; init; }
     public required string Status { get; init; }

@@ -49,6 +49,19 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             // Build order item 14's write path.
             ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
             ["Azure:BlobContainer"] = "insights-reports-temp",
+
+            // Design doc Sec.12.3's per-tenant monthly circuit breaker - not optional, see
+            // TenantTokenBudgetRegistration's doc comment. Matches appsettings.json's defaults.
+            ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
+            ["Budget:AlertAtPercentOfCeiling"] = "80",
+
+            // OTel -> LangFuse (build order item 17 / O-4). Genuinely optional here, unlike every
+            // RequireEnv above - ObservabilityRegistration itself skips wiring cleanly when
+            // LANGFUSE_BASE_URL is absent, so a run without it still exercises everything else.
+            ["Otel:LangfuseEndpoint"] = Environment.GetEnvironmentVariable("LANGFUSE_BASE_URL"),
+            ["Otel:LangfusePublicKey"] = Environment.GetEnvironmentVariable("LANGFUSE_PUBLIC_KEY"),
+            ["Otel:LangfuseSecretKey"] = Environment.GetEnvironmentVariable("LANGFUSE_SECRET_KEY"),
+            ["Otel:EnableSensitiveData"] = Environment.GetEnvironmentVariable("LANGFUSE_ENABLE_SENSITIVE_DATA") ?? "false",
         })
         .Build();
 
@@ -69,9 +82,11 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         var services = new ServiceCollection();
 
         services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
         services.AddInsightsWorker();
         services.AddInsightsPaidReportAgents(configuration);
         services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
         var provider = services.BuildServiceProvider();
 
         foreach (var hosted in provider.GetServices<IHostedService>())
@@ -99,23 +114,32 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
-    /// THROWAWAY - a real worker process that only DEQUEUES: picks up whatever is already queued
-    /// (e.g. a run enqueued via POST /api/insights/reports through the Postman host, which is
-    /// deliberately worker-less - see InsightsApiManualRunTests.HostForPostmanAsync) and lets it
-    /// run to completion, rather than enqueueing anything itself. Same 29/tenant/FY2025-26 key as
-    /// the Postman guide, so the run id is computed the same deterministic way, not pasted in.
-    /// Spends real LLM tokens. Requires the same env vars as the Theory above.
+    /// THROWAWAY - a real worker process that only DEQUEUES, and stays alive INDEFINITELY (up to
+    /// the 30-minute budget below) rather than polling one known run and exiting.
+    ///
+    /// [TRAP] The first version of this polled one deterministic run id and returned as soon as it
+    /// went terminal - which meant it exited almost instantly against a key that already had a
+    /// completed run from earlier, stopping the worker (and its dequeue loop) long before a human
+    /// could click Generate on the AG-UI test page and have anything pick it up. A worker's job is
+    /// to sit and dequeue for as long as the process lives, not to watch one instance.
+    ///
+    /// Picks up whatever is queued (e.g. via the AG-UI test page / POST /api/insights/reports
+    /// through the deliberately worker-less Postman host - see
+    /// InsightsApiManualRunTests.HostForPostmanAsync). Spends real LLM tokens per run it processes.
+    /// Requires the same env vars as the Theory above.
     /// </summary>
     [Fact]
-    public async Task RunAsync_ProcessesWhateverIsAlreadyQueued()
+    public async Task RunAsync_StaysLiveAndDequeuesWhateverArrives()
     {
         var configuration = BuildConfiguration();
         var services = new ServiceCollection();
 
         services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
         services.AddInsightsWorker();
         services.AddInsightsPaidReportAgents(configuration);
         services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
         var provider = services.BuildServiceProvider();
 
         foreach (var hosted in provider.GetServices<IHostedService>())
@@ -123,13 +147,8 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
 
         try
         {
-            var client = provider.GetRequiredService<TaskHubClient>();
-            var runId = InsightsRunId.For(29, "tenant", "compliance_health", "FY2025-26");
-
-            output.WriteLine($"Watching {runId} - worker is now live and dequeuing.");
-            var state = await PollUntilTerminalAsync(client, runId, TimeSpan.FromMinutes(15));
-
-            output.WriteLine($"Final: {state.OrchestrationStatus}, custom status {state.Status}");
+            output.WriteLine("Worker is live and dequeuing. Staying up for 30 minutes or until stopped.");
+            await Task.Delay(TimeSpan.FromMinutes(30));
         }
         finally
         {

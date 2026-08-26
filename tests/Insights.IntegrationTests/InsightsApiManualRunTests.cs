@@ -96,7 +96,9 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
 
     /// <summary>
     /// THROWAWAY - a real (not in-memory) Kestrel listener on localhost, so all three endpoints
-    /// (tenants, generate, stream) can be poked from Postman.
+    /// (tenants, generate, stream) can be poked from Postman, PLUS the AG-UI test frontend
+    /// (AgUiTestFrontend.cs) at "/" - a real browser page driving the real pipeline through genuine
+    /// AG-UI protocol events.
     ///
     /// [TRAP - found live 2026-08-24] The first version of this called AddInsightsOrchestration,
     /// which bundles in AddHostedService&lt;DurableTaskHostedService&gt; - that starts a REAL
@@ -108,8 +110,12 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
     /// AddInsightsOrchestrationWorker (TaskHubWorker + activities + DurableTaskHostedService,
     /// worker-process only). This listener is now structurally incapable of dequeuing a task.
     ///
-    /// Listens until the process is killed - run this alone, not as part of a normal test pass.
-    /// Requires ConnectionStrings__RegTrack, ConnectionStrings__DurableTaskHub, INSIGHTS_USER_ID.
+    /// Listens until the process is killed - run this alone, not as part of a normal test pass. A
+    /// real worker (InsightsReportOrchestratorManualRunTests.RunAsync_ProcessesWhateverIsAlreadyQueued
+    /// or a full RunAsync_RealTenant_ReachesCompleteStatus run) must be running separately for a
+    /// generated run to ever actually progress - this host only enqueues and reads, never processes.
+    /// Requires ConnectionStrings__RegTrack, ConnectionStrings__DurableTaskHub, INSIGHTS_USER_ID,
+    /// AZURE_BLOB_CONNECTION_STRING (for the AG-UI page's "view report" link).
     /// </summary>
     [Fact]
     public async Task HostForPostmanAsync()
@@ -120,6 +126,10 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
             {
                 ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
                 ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+                ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+                // Item 14 read path (design doc Sec.9.3) - the SAS lifetime for GET .../content.
+                ["Reports:SasLifetimeMinutes"] = "10",
             })
             .Build();
 
@@ -132,6 +142,15 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
                 services.AddRouting();
                 services.AddLogging();
 
+                // [FIX - found live 2026-08-24] A bare HostBuilder() does not wire the local
+                // `configuration` object built above into DI as IConfiguration - it provides its
+                // own (near-empty) one. AddInsightsData/AddInsightsOrchestrationClient below both
+                // take `configuration` as a direct parameter and never hit this, so they worked
+                // fine; AgUiTestFrontend's view endpoint asks for IConfiguration via DI (a normal
+                // minimal-API parameter) and got the WRONG, empty one - "ConnectionStrings:RegTrack
+                // is not configured" even though it plainly was, right above.
+                services.AddSingleton<IConfiguration>(configuration);
+
                 // IScopeRepository, ITenantDirectoryRepository, and friends - all scoped SQL
                 // wrappers, no hosted services, safe for an API host.
                 services.AddInsightsData(configuration);
@@ -139,21 +158,32 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
                 // Client-only orchestration pieces - see the TRAP note above.
                 services.AddInsightsOrchestrationClient(configuration);
 
+                // Item 14 read path (design doc Sec.9.3, API_CONTRACTS.md §5) - decrypt, re-auth,
+                // mint a view SAS. Same "client-only, no dequeue loop" safety as AddInsightsData/
+                // AddInsightsOrchestrationClient above - never registers TaskHubWorker or an activity.
+                services.AddInsightsReportContentService(configuration);
+
                 services.AddSingleton<IInsightsCaller>(new FixedCaller(userId));
             });
             web.Configure(app =>
             {
+                // TEST-ONLY, kept deliberately: shows the real exception instead of a bare 500. Found
+                // OrchestrationAlreadyExistsException this way (2026-08-24) - a bare 500 would have
+                // taken far longer to diagnose.
+                app.UseDeveloperExceptionPage();
                 app.UseRouting();
                 app.UseEndpoints(endpoints =>
                 {
                     endpoints.MapInsightsTenantEndpoints();
                     endpoints.MapInsightsRunEndpoints();
+                    endpoints.MapInsightsReportContentEndpoints();
+                    endpoints.MapAgUiTestEndpoints();
                 });
             });
         });
 
         using var host = await builder.StartAsync();
-        output.WriteLine("Listening on http://localhost:5080 - hit it from Postman now.");
+        output.WriteLine("Listening on http://localhost:5080 - open it in a browser for the AG-UI test page.");
         await host.WaitForShutdownAsync();
     }
 

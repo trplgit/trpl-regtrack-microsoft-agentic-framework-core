@@ -10,9 +10,10 @@ public sealed record ComposeInput(
     string TenantShape,
     string ReportType,
     CompositionPlan? PreviousPlan,
-    IReadOnlyList<CompositionReflectionIssue>? Issues);
+    IReadOnlyList<CompositionReflectionIssue>? Issues,
+    LlmCallPriority Priority = LlmCallPriority.Interactive);
 
-public sealed record ComposeOutput(CompositionPlan Plan);
+public sealed record ComposeOutput(CompositionPlan Plan, long TotalTokens);
 
 /// <summary>
 /// Node 5. Idempotency (CLAUDE.md 6, spec 7): keyed by (run_id, node_id) is DTFx's job, not this
@@ -34,7 +35,8 @@ public sealed class ComposeActivity(ICompositionAgent compositionAgent) : AsyncT
         (CompositionPlan, IReadOnlyList<CompositionReflectionIssue>)? revision =
             input.PreviousPlan is not null && input.Issues is not null ? (input.PreviousPlan, input.Issues) : null;
 
-        var plan = await compositionAgent.ComposeAsync(dimensionResults, input.TenantShape, input.ReportType, revision, CancellationToken.None);
-        return new ComposeOutput(plan);
+        using var _priority = LlmCallPriorityContext.Push(input.Priority);
+        var result = await compositionAgent.ComposeAsync(dimensionResults, input.TenantShape, input.ReportType, revision, CancellationToken.None);
+        return new ComposeOutput(result.Value, result.TotalTokens);
     }
 }

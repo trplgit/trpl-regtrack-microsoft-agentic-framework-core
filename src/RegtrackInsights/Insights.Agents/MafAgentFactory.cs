@@ -17,26 +17,57 @@ namespace Insights.Agents;
 /// </summary>
 public static class MafAgentFactory
 {
+    /// <summary>
+    /// The ActivitySource name Microsoft.Extensions.AI's built-in chat-client instrumentation
+    /// actually uses, in the pinned 10.7.0 build - confirmed by inspecting the compiled
+    /// Microsoft.Extensions.AI.dll directly (2026-08-25: OpenTelemetryConsts.DefaultSourceName is
+    /// the literal string "Microsoft.Extensions.AI", not the "Experimental.Microsoft.Extensions.AI"
+    /// name older preview versions used and some public examples still show). Insights.Worker.
+    /// ObservabilityRegistration's AddSource(...) call must use this exact same constant, or it
+    /// silently matches nothing and every LLM span is dropped before export - no error, just an
+    /// empty LangFuse project.
+    /// </summary>
+    public const string ChatClientActivitySourceName = "Microsoft.Extensions.AI";
+
     /// <summary>For agents whose contract is a JSON object (composition, reflection, narrative).</summary>
-    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall);
+    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// </summary>
-    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall);
+    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall)
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate)
     {
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint) });
         IChatClient chatClient = client.GetResponsesClient().AsIChatClient(model);
+
+        /*  OTel wraps the RAW client, innermost, so its span timing measures the actual network
+            call rather than anything the layers above add. EnableSensitiveData gates whether the
+            span carries full prompt/response text (Otel:EnableSensitiveData, design doc Sec.3.2's
+            two-projection audit: full content internally, never shown to a customer) - off by
+            default, since tokens/cost/latency alone are useful without it and turning it on is a
+            deliberate choice, not a default.                                                     */
+        chatClient = new OpenTelemetryChatClient(chatClient, sourceName: ChatClientActivitySourceName)
+        {
+            EnableSensitiveData = enableSensitiveTelemetry,
+        };
 
         /*  Metering wraps the CHAT CLIENT, so every agent this factory builds is instrumented at
             one point - including any added later, without anyone remembering to do it. The stage
             tag is the agent name, which is already a closed set of five values.                 */
         chatClient = new MeteredChatClient(chatClient, name, model, usage ?? ILlmUsageRecorder.Null, maxTokensPerCall);
+
+        /*  OUTERMOST, deliberately - see ConcurrencyGatedChatClient's doc comment: queue-wait time
+            must never be counted as part of the OTel span's latency or MeteredChatClient's timing,
+            both of which should reflect the real network call only. Null when no concurrency cap
+            is configured (Agents:MaxConcurrentLlmCalls unset) - same "optional, off until a real
+            number is measured" stance as maxTokensPerCall above, not a guessed default.           */
+        if (concurrencyGate is not null)
+            chatClient = new ConcurrencyGatedChatClient(chatClient, concurrencyGate);
 
         var options = new ChatClientAgentOptions
         {

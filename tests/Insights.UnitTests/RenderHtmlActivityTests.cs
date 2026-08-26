@@ -17,11 +17,12 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
 
         agent.Setup(a => a.RenderAsync(plan, narrative, "Tenant 29 (UAT)", "compliance_health", generatedAt, It.IsAny<CancellationToken>()))
-            .ReturnsAsync("<!DOCTYPE html><html></html>");
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100));
 
         var activity = new RenderHtmlActivity(agent.Object);
         var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, "Tenant 29 (UAT)", "compliance_health", generatedAt));
 
         Assert.Equal("<!DOCTYPE html><html></html>", result.Html);
+        Assert.Equal(3100, result.TotalTokens);
     }
 }

@@ -25,6 +25,13 @@ var builder = Host.CreateApplicationBuilder(args);
 // and never degrade one to a warning or an empty result.
 builder.Services.AddInsightsData(builder.Configuration);
 
+// Design doc Sec.12.3's per-tenant monthly token circuit breaker + 80% alert - NOT optional like
+// the schedulers below: InsightsReportOrchestrator now calls CheckTenantTokenBudgetActivity
+// unconditionally at the start of every run, so this must always be registered, not gated behind
+// a feature flag. Must come AFTER AddInsightsData (needs ConnectionStrings:RegTrack) and BEFORE
+// AddInsightsOrchestration (registers the two activities that consume it).
+builder.Services.AddInsightsTenantTokenBudget(builder.Configuration);
+
 // The free weekly digest (Phase 1c): LLM client, prompt loader, writer, renderer, email sender,
 // pipeline, IFreeDigestService, and the weekly scheduler. Must come AFTER AddInsightsData.
 //
@@ -41,6 +48,18 @@ builder.Services.AddInsightsWorker();
 // registered there and reuse the same PublishGate singleton, never a duplicate.
 builder.Services.AddInsightsPaidReportAgents(builder.Configuration);
 builder.Services.AddInsightsOrchestration(builder.Configuration);
+
+// The paid_batch keep-warm lane (design doc Sec.4.2-4.5) - re-runs a (scope, reportType, period)
+// key a paying tenant has generated AND actually viewed recently, staggered by
+// hash(tenantId) % Schedule:PaidAnchorModulo. Middle of the three priority lanes - behind
+// paid_interactive, ahead of the free digest (Sec.4.4). Must come AFTER AddInsightsOrchestration -
+// depends on IInsightsRunEnqueuer and InsightsReportsDbContext, both registered there. Inert
+// unless Schedule:PaidKeepWarm:Enabled is true.
+builder.Services.AddInsightsPaidKeepWarm(builder.Configuration);
+
+// OTel -> LangFuse (build order item 17 / O-4). Skips itself if Otel:LangfuseEndpoint is unset -
+// see ObservabilityRegistration's doc comment for why that one key alone is optional.
+builder.Services.AddInsightsObservability(builder.Configuration);
 
 // One-shot runner for testing a single tenant from the command line. Does nothing unless
 // FreeDigest:RunOnce=true:

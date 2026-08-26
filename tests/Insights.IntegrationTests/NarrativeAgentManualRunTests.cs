@@ -38,13 +38,13 @@ public sealed class NarrativeAgentManualRunTests(ITestOutputHelper output)
         var compositionInstructions = await File.ReadAllTextAsync(Path.Combine(promptsDir, "01_composition.md"));
         var compositionAgent = new MafCompositionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "CompositionAgent", "Decides report structure.", compositionInstructions));
-        var plan = await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health");
+        var plan = (await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health")).Value;
         output.WriteLine($"Composed hero: {plan.Hero.Block}");
 
         var narrativeInstructions = await File.ReadAllTextAsync(Path.Combine(promptsDir, "03_narrative.md"));
         var narrativeAgent = new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.", narrativeInstructions));
-        var narrative = await narrativeAgent.NarrateAsync(plan, assertions, findings);
+        var narrative = (await narrativeAgent.NarrateAsync(plan, assertions, findings)).Value;
 
         output.WriteLine("");
         output.WriteLine("--- Narrative ---");

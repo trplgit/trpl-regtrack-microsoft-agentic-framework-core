@@ -27,7 +27,7 @@ namespace Insights.Persistence;
 /// Azure.Identity/ClientSecretCredential (already referenced in this project for other purposes) is
 /// a natural follow-up, not done here without the team's sign-off first.
 /// </summary>
-public sealed class AdalKeyVaultReportEncryptor : IReportEncryptor
+public sealed class AdalKeyVaultReportEncryptor : IReportEncryptor, IReportDecryptor
 {
     private readonly string _connectionString;
     private readonly Lazy<Task<(KeyVaultClient Client, KeyBundle KeyBundle)>> _keyLoader;
@@ -69,6 +69,35 @@ public sealed class AdalKeyVaultReportEncryptor : IReportEncryptor
             EncryptedAesKey: wrapped.Result,
             KeyVaultObjectName: keyBundle.KeyIdentifier.Name,
             KeyVaultObjectVersion: keyId);
+    }
+
+    /// <summary>
+    /// Item 14's read half - build order §9.3's view-time decrypt step. Reverses EncryptAsync
+    /// exactly: unwrap the AES key via the same cached Key Vault client, split the IV back off the
+    /// front of the content stream (same convention EncryptAsync wrote it with), decrypt.
+    /// </summary>
+    public async Task<string> DecryptAsync(
+        byte[] encryptedContent, byte[] encryptedAesKey, string keyVaultObjectVersion, CancellationToken cancellationToken = default)
+    {
+        var (kvClient, _) = await _keyLoader.Value;
+
+        var unwrapped = await kvClient.DecryptAsync(keyVaultObjectVersion, JsonWebKeyEncryptionAlgorithm.RSAOAEP, encryptedAesKey, cancellationToken);
+
+        var iv = encryptedContent[..16];
+        var ciphertext = encryptedContent[16..];
+
+        using var aes = Aes.Create();
+        aes.Key = unwrapped.Result;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+
+        using var decryptor = aes.CreateDecryptor();
+        using var ciphertextStream = new MemoryStream(ciphertext, writable: false);
+        using var cryptoStream = new CryptoStream(ciphertextStream, decryptor, CryptoStreamMode.Read);
+        using var reader = new StreamReader(cryptoStream, System.Text.Encoding.UTF8);
+
+        return await reader.ReadToEndAsync(cancellationToken);
     }
 
     private async Task<(KeyVaultClient, KeyBundle)> LoadKeyAsync()

@@ -15,11 +15,12 @@ public class NarrateActivityTests
         var plan = new CompositionPlan(new CompositionHero("coverage_map", "why"), [], [], []);
         var expected = new NarrativeResult([]);
         agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(expected);
+            .ReturnsAsync(new AgentCallResult<NarrativeResult>(expected, 2200));
 
         var activity = new NarrateActivity(agent.Object);
         var result = await activity.RunAsync(new NarrateInput(plan, [], [], null, null));
 
         Assert.Equal(expected, result.Narrative);
+        Assert.Equal(2200, result.TotalTokens);
     }
 }

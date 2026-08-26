@@ -37,7 +37,7 @@ public sealed class CompositionReflectionAgentManualRunTests(ITestOutputHelper o
             endpoint, model, apiKey, "CompositionAgent",
             "Decides report structure and emphasis from dimension data.", compositionInstructions));
 
-        var plan = await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health");
+        var plan = (await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health")).Value;
         output.WriteLine($"Composed hero: {plan.Hero.Block} - {plan.Hero.Reason}");
         output.WriteLine($"Composed {plan.Blocks.Count} blocks, {plan.Omitted.Count} omitted");
         output.WriteLine("");
@@ -52,7 +52,7 @@ public sealed class CompositionReflectionAgentManualRunTests(ITestOutputHelper o
             endpoint, model, apiKey, "CompositionReflectionAgent",
             "Critiques a composition plan before narrative runs.", reflectionInstructions));
 
-        var reflection = await reflectionAgent.ReflectAsync(plan, assertions, findings, tenantShape: "multi_entity");
+        var reflection = (await reflectionAgent.ReflectAsync(plan, assertions, findings, tenantShape: "multi_entity")).Value;
 
         output.WriteLine($"Verdict: {reflection.Verdict}");
         foreach (var issue in reflection.Issues)
