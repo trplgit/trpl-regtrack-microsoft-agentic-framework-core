@@ -35,6 +35,9 @@
          risk logic in this feature, and testing it through real routing and real status codes is
          worth far more than testing the helper it calls. -->
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="8.0.11" />
+    <!-- Swagger UI for tools/Insights.ApiDevHost only - a LOCAL harness, never deployed. The
+         worker itself stays private with no ingress (CLAUDE.md 6). -->
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="6.6.2" />
     <!-- In-memory EF Core provider for PersistActivityTests - the GeneratedReport row shape
          without a real UAT connection. -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.23" />

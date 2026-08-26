@@ -52,6 +52,23 @@ public interface IFreeDigestRepository
     Task<IReadOnlyList<FreeDigestRecipient>> GetRecipientsAsync(int customerId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The user ids that already hold this week's claim for this tenant - already sent, or
+    /// claimed by a run still in flight.
+    ///
+    /// WHY THIS EXISTS (design doc Sec.5.3): the gate sequence draws a hard cost boundary -
+    /// "resolve recipients ... NONE =&gt; EXIT before any aggregation or LLM call", and "steps 5-7,
+    /// the only steps that cost anything, run ONLY when there is a real, entitled, opted-in
+    /// recipient". A recipient who already has this week's claim cannot receive anything, so
+    /// composing for them spends tokens the gate exists to save. Subtracting them here moves the
+    /// claim check to the spec's side of that boundary.
+    ///
+    /// This does NOT replace the claim in TryClaimSendAsync - that stays as the race backstop
+    /// between two workers resolving at the same moment. This is the cheap filter; that is the
+    /// atomic guarantee.
+    /// </summary>
+    Task<IReadOnlyList<long>> GetClaimedUserIdsAsync(int customerId, DateOnly weekEnding, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Atomically claims this week's send for one recipient. Returns true to exactly ONE caller
     /// per (customer, user, week); everyone after gets false and must not send.
     ///

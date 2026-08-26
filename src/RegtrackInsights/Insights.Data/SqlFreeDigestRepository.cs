@@ -43,21 +43,30 @@ public sealed class SqlFreeDigestRepository(string connectionString) : IFreeDige
                     commandType: CommandType.StoredProcedure,
                     cancellationToken: cancellationToken));
 
-            /*  [TRAP] A NESTED EXEC ADDS A RESULT SET.
-                This proc opens with
-                    EXEC dbo.usp_Insights_AssertStatusCoverage;
-                and that proc ends in SELECT CAST(1 AS BIT) AS StatusCoverageComplete. Its row
-                arrives FIRST, so a plain QuerySingle binds the coverage flag instead of the
-                aggregates and fails with a materialisation error naming StatusCoverageComplete.
-                Skip that grid, then read the fifteen numbers from the second.                */
-            await multi.ReadAsync();
+            /*  [TRAP - THE CONTRACT MOVED UNDER THIS CODE] There is NO coverage grid to skip.
+
+                usp_Insights_AssertStatusCoverage USED to end in
+                SELECT CAST(1 AS BIT) AS StatusCoverageComplete, so its row arrived as result set
+                #1 and this read had to step over it. The proc was corrected to return nothing at
+                all ("success is silence; failure is a THROW") - verified: zero occurrences of
+                StatusCoverageComplete in sql/01 today.
+
+                Skipping a grid that no longer exists consumes the AGGREGATES, and the read below
+                then finds an exhausted reader: "The reader has been disposed; this can happen
+                after all data has been consumed". The aggregates are result set #1. Read them
+                directly.
+
+                The same stale skip existed in SqlDimensionRepository and was fixed there; this
+                copy was reverted by a merge and had to be fixed twice. If a proc ever regains a
+                pre-flight SELECT, this fails loudly as a Dapper materialisation error naming the
+                columns it could not bind - not as silently wrong numbers.                       */
 
             return await multi.ReadSingleAsync<FreeDigestAggregates>();
         }
         catch (SqlException ex) when (ex.Number == FreeDigestDictionaryGapErrorNumber)
         {
-            // The 51040 THROW lands after the coverage grid but before the aggregates,
-            // so the only result set in hand is the one we already discarded.
+            // 51040 is the dictionary-gap THROW raised by the proc before it selects anything,
+            // so there is no result set to salvage - only the typed refusal to surface.
             throw new FreeDigestDictionaryGapException(customerId, ex);
         }
     }
@@ -153,6 +162,36 @@ public sealed class SqlFreeDigestRepository(string connectionString) : IFreeDige
         The alternative is a global SqlMapper.AddTypeHandler<DateOnly>, which would fix every
         future call site too - worth doing if DateOnly spreads, but a global behaviour change for
         three call sites is the bigger surprise.                                                */
+    public async Task<IReadOnlyList<long>> GetClaimedUserIdsAsync(
+        int customerId, DateOnly weekEnding, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        /*  A plain read of the claim table, deliberately NOT a call to usp_Insights_FreeDigestClaimSend -
+            that proc CLAIMS, and claiming here would consume every recipient before a single email
+            was composed. This only asks who already holds a claim.
+
+            Any row for the week counts, whatever its Outcome: a row with Outcome NULL is a run
+            still in flight or one that died mid-send, and in both cases this recipient must not be
+            composed for again. Filtering to Outcome = sent would re-compose exactly the recipients
+            whose previous attempt is unresolved.                                                  */
+        const string sql = """
+            SELECT UserID
+            FROM dbo.InsightsFreeDigestLog
+            WHERE CustomerID = @CustomerID
+              AND WeekEnding = @WeekEnding;
+            """;
+
+        // [TRAP] Dapper 2.1.66 cannot bind DateOnly - converted at this boundary, as everywhere
+        // else in this class. The column is DATE, so the midnight component is discarded by SQL.
+        var rows = await connection.QueryAsync<long>(
+            new CommandDefinition(sql,
+                new { CustomerID = customerId, WeekEnding = weekEnding.ToDateTime(TimeOnly.MinValue) },
+                cancellationToken: cancellationToken));
+
+        return rows.AsList();
+    }
+
     public async Task<bool> TryClaimSendAsync(int customerId, long userId, DateOnly weekEnding, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(connectionString);

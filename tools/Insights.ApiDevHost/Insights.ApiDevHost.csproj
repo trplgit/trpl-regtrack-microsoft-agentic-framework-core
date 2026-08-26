@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    LOCAL DEVELOPER HARNESS. Never deployed, never referenced by the worker.
+
+    It exists because the Insights worker is private by design - no public endpoints, no ingress
+    (CLAUDE.md 6) - and the endpoints in Insights.Api/ are SOURCE FOR THE REGTRACK API, which is
+    where auth already lives. That is the right architecture, but it leaves no way to click
+    through the endpoints while developing them. This project is that way.
+
+    WHAT IT DOES NOT PROVE: the caller is a stub reading a header. Real token validation only
+    exists in the RegTrack API, so the IDOR guard is genuinely exercised only once these endpoints
+    land there. This harness covers routing, SQL, serialisation and the eligibility LOGIC.
+
+    Sibling of src/ and tests/, never nested inside another project directory - see the note in
+    RegtrackInsights.csproj about the SDK's default globs and MSB3030.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Insights.ApiDevHost</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
+  </ItemGroup>
+
+  <!-- Insights.Api is excluded from the worker build; compiled here so it can actually be hosted. -->
+  <ItemGroup>
+    <Compile Include="../../src/RegtrackInsights/Insights.Api/**/*.cs" LinkBase="Insights.Api" />
+  </ItemGroup>
+
+</Project>
