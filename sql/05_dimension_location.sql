@@ -142,6 +142,13 @@ BEGIN
         NodeType              VARCHAR(20)    NULL,
         RootKind              VARCHAR(20)    NULL,
         ApexName              NVARCHAR(400)  NULL,
+        StateID               INT            NULL,   -- peer-grouping key. NOT Region: confirmed
+                                                        -- live 99.9% blank tenant-wide; StateID was
+                                                        -- 152/152 populated on the reference tenant.
+        StateName             NVARCHAR(200)  NULL,   -- dbo.State.Name, for a human-readable grid
+                                                        -- grouping label - real Indian state names
+                                                        -- (Maharashtra, Karnataka, ...), never the
+                                                        -- raw numeric StateID shown to a user.
         Instances             INT            NOT NULL,
         Overdue               INT            NOT NULL,
         Ownerless             INT            NOT NULL,
@@ -157,14 +164,16 @@ BEGIN
         OwnerlessPct          DECIMAL(5,1)   NULL,
         ClosureRatio          DECIMAL(9,2)   NULL,
         OverdueRank           INT            NULL,
+        PeerStateOverduePct   DECIMAL(5,1)   NULL,   -- derived: state-peer median, this tenant's own distribution
+        VsPeerStateNormPP     DECIMAL(9,2)   NULL,   -- derived: this branch's OverduePct minus its state peer median
         Flags                 VARCHAR(200)   NULL
     );
 
-    INSERT #rows (BranchID, BranchName, NodeType, RootKind, ApexName, Instances, Overdue,
+    INSERT #rows (BranchID, BranchName, NodeType, RootKind, ApexName, StateID, StateName, Instances, Overdue,
                   Ownerless, ImprisonmentInstances, ImprisonmentOverdue, CriticalInstances,
                   DistinctPerformers, DistinctReviewers, ClosureEventsLifetime, ActiveChildren)
     SELECT
-        cb.ID, cb.Name, t.NodeType, t.RootKind, t.ApexName,
+        cb.ID, cb.Name, t.NodeType, t.RootKind, t.ApexName, cb.StateID, st.Name,
         COUNT(i.ComplianceInstanceID),
         SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.ComplianceInstanceID IS NOT NULL
@@ -175,7 +184,8 @@ BEGIN
         ISNULL(MAX(p.Performers), 0),
         ISNULL(MAX(p.Reviewers), 0),
         ISNULL(MAX(cl.ClosureEventsLifetime), 0),
-        (SELECT COUNT(*) FROM CustomerBranch ch WHERE ch.ParentID = cb.ID AND ch.IsDeleted = 0)
+        -- [FIX] active children only - IsDeleted=0 AND Status=1, same as tvfInsightsEntityTree
+        (SELECT COUNT(*) FROM CustomerBranch ch WHERE ch.ParentID = cb.ID AND ch.IsDeleted = 0 AND ch.Status = 1)
     FROM CustomerBranch cb
     JOIN dbo.tvfInsightsEntityTree(@CustomerID) t ON t.BranchID = cb.ID
     LEFT JOIN #inst     i  ON i.BranchID = cb.ID
@@ -183,8 +193,12 @@ BEGIN
     LEFT JOIN #owned    w  ON w.ComplianceInstanceID = i.ComplianceInstanceID
     LEFT JOIN #people   p  ON p.BranchID = cb.ID
     LEFT JOIN #closures cl ON cl.BranchID = cb.ID
-    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0
-    GROUP BY cb.ID, cb.Name, t.NodeType, t.RootKind, t.ApexName;
+    LEFT JOIN dbo.State  st ON st.ID = cb.StateID
+    -- cb.IsDeleted/Status are already implied by the tvfInsightsEntityTree join (t only
+    -- contains active branches post-fix) - stated explicitly too, same estate definition
+    -- everywhere rule, so this row set is correct even if the tree function's contract changes.
+    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1
+    GROUP BY cb.ID, cb.Name, t.NodeType, t.RootKind, t.ApexName, cb.StateID, st.Name;
 
     -- derived ratios + rank (comparatives are COMPUTED, never phrased)
     UPDATE #rows SET
@@ -195,6 +209,34 @@ BEGIN
     ;WITH r AS (SELECT BranchID, RANK() OVER (ORDER BY OverduePct DESC) AS rk
                 FROM #rows WHERE Instances > 0)      -- zero-obligation nodes are not ranked
     UPDATE #rows SET OverdueRank = r.rk FROM #rows JOIN r ON r.BranchID = #rows.BranchID;
+
+    /*-------------------------------------------------------------------
+      PEER-COVERAGE-GAP - peer group is the tenant's own StateID members,
+      never a cross-tenant or absolute baseline (same rule as every other
+      detector in this file - spec Sec.4). [TRAP] a state with exactly one
+      branch has nothing to compare against - CLAUDE.md Sec.4 "single
+      member -> suppress comparatives" - so PeerGroupSize >= 2 is required
+      before a branch gets a peer norm at all; branches outside that leave
+      PeerStateOverduePct/VsPeerStateNormPP NULL rather than a fabricated
+      self-comparison. Median, not mean, to match this file's existing
+      peer-relative convention (the onboarding-artifact ratio above uses
+      the same PERCENTILE_CONT approach) - open item: BA sign-off on
+      median vs mean specifically for this tile is still pending, flagged
+      in data_quality below rather than silently presented as settled.
+    -------------------------------------------------------------------*/
+    ;WITH sp AS (
+        SELECT BranchID, StateID,
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY OverduePct) OVER (PARTITION BY StateID) AS PeerMedian,
+               COUNT(*) OVER (PARTITION BY StateID) AS PeerGroupSize
+        FROM #rows
+        WHERE Instances > 0 AND StateID IS NOT NULL
+    )
+    UPDATE #rows SET PeerStateOverduePct = sp.PeerMedian
+    FROM #rows JOIN sp ON sp.BranchID = #rows.BranchID
+    WHERE sp.PeerGroupSize >= 2;
+
+    UPDATE #rows SET VsPeerStateNormPP = OverduePct - PeerStateOverduePct
+    WHERE PeerStateOverduePct IS NOT NULL;
 
     /*-------------------------------------------------------------------
       DETECTIONS
@@ -269,10 +311,16 @@ BEGIN
                   AND Instances >= 50
                   AND ClosureRatio < @artifactThreshold
                  THEN ',onboarding_artifact' ELSE '' END +
-            CASE WHEN DistinctPerformers <= 1 OR DistinctReviewers <= 1 THEN ',single_point_of_failure' ELSE '' END +
+            -- [BUG FOUND LIVE] no Instances>0 guard let zero-instance branches (DistinctPerformers=0,
+            -- DistinctReviewers=0, both <=1) get flagged despite being excluded from Eligible (@withObl
+            -- below is Instances>0 only) - flagged 258 of 3 eligible (8600%) on tenant 5. Same guard
+            -- every other detector in this file already carries.
+            CASE WHEN Instances > 0 AND (DistinctPerformers <= 1 OR DistinctReviewers <= 1) THEN ',single_point_of_failure' ELSE '' END +
             CASE WHEN NodeType = 'intermediate' THEN ',instances_on_intermediate_node' ELSE '' END +
             CASE WHEN RootKind = 'orphan' THEN ',orphaned_parent_deleted' ELSE '' END +
             CASE WHEN OwnerlessPct >= 10.0 THEN ',high_ownerless' ELSE '' END +
+            -- 10pp threshold matches this file's existing OwnerlessPct convention above.
+            CASE WHEN VsPeerStateNormPP >= 10.0 THEN ',peer_coverage_gap' ELSE '' END +
             -- GHOST ENTITY: a leaf with no children and nothing tracked against it.
             -- Distinct from a grouping/holding node, which legitimately holds 0.
             CASE WHEN Instances = 0 AND ActiveChildren = 0 THEN ',no_obligations_configured' ELSE '' END +
@@ -293,6 +341,36 @@ BEGIN
         CASE WHEN @scopedTotal = 0 THEN 0
              ELSE 100.0 * (SELECT COUNT(*) FROM #ovd) / @scopedTotal END;
 
+    /*  TENANT-WIDE TIMELINESS - same dictionary-driven Timeliness classification
+        sql/12_dimension_users.sql already uses PER PERFORMER (RoleID=3 only),
+        pooled here at tenant grain across every completed closure event instead.
+        Event-level, not instance-level - same "Events, not instances" shape as
+        ClosureEventsLifetime (a recurring obligation closed monthly for a year
+        contributes ~12 events, not 1). Lifetime, not FY-scoped: a per-FY trend
+        is a real future enhancement (PAID_TIER_SAMPLE_REFERENCE.md Sec.3.1) but
+        a bigger scope than one tenant-wide number. ClosureClass='completed' AND
+        Timeliness IS NOT NULL mirrors sql/12 exactly - resolved_terminal carries
+        no timeliness and is excluded from the denominator by construction (same
+        rule G-4 already asserts), never by a status-literal filter.            */
+    DECLARE @tenantCompletedEvents INT, @tenantOnTimeEvents INT, @tenantNullTimelinessEvents INT;
+    SELECT
+        @tenantCompletedEvents      = SUM(CASE WHEN d.Timeliness IS NOT NULL THEN 1 ELSE 0 END),
+        @tenantOnTimeEvents         = SUM(CASE WHEN d.Timeliness = 'on_time' THEN 1 ELSE 0 END),
+        @tenantNullTimelinessEvents = SUM(CASE WHEN d.Timeliness IS NULL THEN 1 ELSE 0 END)
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso     ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    JOIN ComplianceTransaction t      ON t.ComplianceScheduleOnID = cso.ID
+    JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = t.StatusId
+    WHERE d.ClosureClass = 'completed';
+
+    SET @tenantCompletedEvents      = ISNULL(@tenantCompletedEvents, 0);
+    SET @tenantOnTimeEvents         = ISNULL(@tenantOnTimeEvents, 0);
+    SET @tenantNullTimelinessEvents = ISNULL(@tenantNullTimelinessEvents, 0);
+
+    DECLARE @tenantOnTimePct DECIMAL(5,1) =
+        CASE WHEN @tenantCompletedEvents = 0 THEN NULL
+             ELSE 100.0 * @tenantOnTimeEvents / @tenantCompletedEvents END;
+
     SELECT
         'control_totals'                       AS ResultSet,
         @scopedTotal                           AS ScopedInstances,
@@ -302,11 +380,14 @@ BEGIN
         @tenantOverduePct                      AS TenantOverduePct,
         (SELECT COUNT(*) FROM #rows)           AS BranchesReported,
         (SELECT COUNT(*) FROM CustomerBranch
-          WHERE CustomerID = @CustomerID AND IsDeleted = 0) AS ActiveBranchesInTenant,
+          WHERE CustomerID = @CustomerID AND IsDeleted = 0 AND Status = 1) AS ActiveBranchesInTenant,
         (SELECT COUNT(*) FROM #rows WHERE Instances = 0)    AS BranchesWithNoObligations,
         (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%no_obligations_configured%') AS GhostEntities,
         @medianRatio                           AS TenantMedianClosureRatio,
-        @tenantIsOnboarding                    AS TenantIsOnboarding;
+        @tenantIsOnboarding                    AS TenantIsOnboarding,
+        @tenantCompletedEvents                 AS TenantCompletedEvents,
+        @tenantOnTimeEvents                    AS TenantOnTimeEvents,
+        @tenantOnTimePct                       AS TenantOnTimePct;
 
     /*===================================================================
       6. ROWS
@@ -367,13 +448,24 @@ BEGIN
     UNION ALL SELECT 'single_point_of_failure', @withObl,
            (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%single_point_of_failure%')
     UNION ALL SELECT 'high_ownerless', @withObl,
-           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%high_ownerless%');
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%high_ownerless%')
+    UNION ALL SELECT 'peer_coverage_gap', (SELECT COUNT(*) FROM #rows WHERE PeerStateOverduePct IS NOT NULL),
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%peer_coverage_gap%');
 
     UPDATE #detector
        SET FlaggedPct = CASE WHEN Eligible = 0 THEN 0 ELSE 100.0 * Flagged / Eligible END;
 
+    /*  [BUG FOUND LIVE] This "reference implementation" file was missing the Eligible<=5 guard
+        that sql/07/09/12 all carry (with the same explanation): individual findings are already
+        capped at the top 5 by materiality, so when the eligible set is 5 or fewer the cap ALREADY
+        bounds the output and aggregating cannot reduce it - it only replaces named members with a
+        percentage. Confirmed live: tenant 5's single_point_of_failure detector had only 3 eligible
+        branches and still tipped to 'aggregate', which DimensionResult.Validate() correctly rejects
+        (Sec below: "no Aggregate emission on a member set of five or fewer"). Below the cap, always
+        name the members.                                                                          */
     UPDATE #detector
        SET EmitMode = CASE WHEN Flagged = 0        THEN 'none'
+                           WHEN Eligible <= 5      THEN 'individual'
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
 
@@ -401,6 +493,12 @@ BEGIN
 
     -- A-TENANT: the baseline every comparative is measured against
     INSERT #assert VALUES ('A-TENANT','overdue_pct',N'tenant',@tenantOverduePct,NULL,NULL,NULL,NULL,NULL,NULL);
+
+    -- A-TIMELINESS: tenant-wide on-time-closure pct. NULL when the tenant has
+    -- zero completed events with a known Timeliness - "cannot assess" per
+    -- CLAUDE.md Sec.4, never presented as 0%.
+    IF @tenantOnTimePct IS NOT NULL
+        INSERT #assert VALUES ('A-TIMELINESS','ontime_pct',N'tenant',@tenantOnTimePct,NULL,NULL,NULL,NULL,NULL,NULL);
 
     /*  [TRAP] A "worst location" claim needs something to compare against.
         Production has many SINGLE-BRANCH tenants; rank 1 of 1 is vacuous and
@@ -456,6 +554,21 @@ BEGIN
                Flagged, NULL, Eligible, @tenantOwnerlessPct, FlaggedPct, 'worse',
                N'aggregate - unassigned ownership is a tenant-wide pattern'
         FROM #detector WHERE Detector='high_ownerless';
+
+    -- peer-coverage-gap vs this branch's own state peer group (policy-gated, top 5 by materiality)
+    IF (SELECT EmitMode FROM #detector WHERE Detector='peer_coverage_gap') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-PEERGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY Instances DESC) AS VARCHAR(5)),
+               'overdue_pct', BranchName, OverduePct, NULL, NULL,
+               PeerStateOverduePct, VsPeerStateNormPP, 'worse',
+               N'peer_coverage_gap: vs. this branch''s own StateID peer group median, not a tenant or cross-tenant baseline'
+        FROM #rows WHERE Flags LIKE '%peer_coverage_gap%' ORDER BY Instances DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='peer_coverage_gap') = 'aggregate'
+        INSERT #assert
+        SELECT 'A-PEERGAP-AGG','locations_peer_coverage_gap',N'tenant',
+               Flagged, NULL, Eligible, NULL, FlaggedPct, 'worse',
+               N'aggregate - lagging behind state peers is a tenant-wide pattern, not per-site exceptions'
+        FROM #detector WHERE Detector='peer_coverage_gap';
 
     /*---------------------------------------------------------------
       GHOST ENTITIES - two-tier, for the same reason as the onboarding
@@ -567,12 +680,46 @@ BEGIN
            AssertionId, NULL
     FROM #assert WHERE AssertionId='A-OWN-AGG';
 
+    INSERT #find
+    SELECT 'F-PEERGAP','medium',
+           CONCAT(N'', ScopeLabel, N' runs ', VsComparatorPP, N'pp above its state-peer overdue rate'),
+           AssertionId,
+           N'Peer group is this branch''s own StateID cohort within the tenant, not a cross-tenant benchmark.'
+    FROM #assert WHERE AssertionId LIKE 'A-PEERGAP-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-PEERGAP-AGG','medium',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' locations (', VsComparatorPP,
+                  N'%) run 10pp+ above their state-peer overdue rate'),
+           AssertionId, NULL
+    FROM #assert WHERE AssertionId='A-PEERGAP-AGG';
+
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*===================================================================
       9. DATA QUALITY - declared, never silent
     ===================================================================*/
+    /*  [FIX] CustomerBranch.Status has values beyond the documented 0/1: confirmed
+        live 37 NULL rows (all on one tenant - a migration gap, not a third state)
+        and 14 rows at Status=2 (undocumented, four tenants, no naming pattern).
+        Both are treated as NOT ACTIVE by the Status=1 filter applied throughout
+        this engine's estate definition - the safe default, never guessed as
+        active - but per CLAUDE.md's own "never silently incomplete" rule, that
+        exclusion must be visible on any tenant it actually affects, not just
+        assumed away because it was rare on the tenant this was measured on.   */
+    DECLARE @ambiguousStatusBranches INT = (
+        SELECT COUNT(*) FROM CustomerBranch
+        WHERE CustomerID = @CustomerID AND IsDeleted = 0
+          AND (Status IS NULL OR Status NOT IN (0, 1)));
+
     SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+        SELECT 'branch_status_ambiguous' AS Issue,
+               CONCAT(N'', @ambiguousStatusBranches, N' non-deleted branch(es) carry a Status value '
+                    + N'other than 0 (deactivated) or 1 (active) - NULL or an unmapped value. Excluded '
+                    + N'from this report as not-active (the safe default), not counted as a confirmed '
+                    + N'deactivation. Verify with the tenant before treating this as settled.') AS Detail
+        WHERE @ambiguousStatusBranches > 0
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL
@@ -595,6 +742,29 @@ BEGIN
         SELECT 'instances_on_intermediate_nodes',
                CONCAT(N'', SUM(Instances), N' instance(s) are held directly on non-leaf nodes and are included in the rollup.')
         FROM #rows WHERE NodeType = 'intermediate' HAVING SUM(Instances) > 0
+        UNION ALL
+        SELECT 'branches_without_state',
+               CONCAT(N'', COUNT(*), N' branch(es) with obligations have no StateID set and are excluded from '
+                    + N'every peer_coverage_gap comparison (no peer group to measure against).')
+        FROM #rows WHERE Instances > 0 AND StateID IS NULL HAVING COUNT(*) > 0
+        UNION ALL
+        SELECT 'peer_norm_statistic_unconfirmed',
+               N'peer_coverage_gap compares each branch to the MEDIAN OverduePct of its own StateID peers, '
+             + N'matching this file''s existing peer-relative convention (see onboarding_artifact above). '
+             + N'Median vs. mean specifically for this tile has not been BA-signed - treat vs_peer_state_norm_pp '
+             + N'as directionally correct, not yet a confirmed formula.'
+        UNION ALL
+        SELECT 'timeliness_excluded_events',
+               CONCAT(N'', @tenantNullTimelinessEvents, N' completed closure event(s) in this tenant have no '
+                    + N'Timeliness classification in the dictionary (ClosureClass=completed but Timeliness IS '
+                    + N'NULL) and are excluded from TenantOnTimePct''s denominator - not counted as on-time or '
+                    + N'late, never silently folded into either bucket.')
+        WHERE @tenantNullTimelinessEvents > 0
+        UNION ALL
+        SELECT 'timeliness_no_completed_events',
+               N'This tenant has zero completed closure events with a known Timeliness classification. '
+             + N'TenantOnTimePct cannot be assessed and is not reported as 0%.'
+        WHERE @tenantCompletedEvents = 0
     ) q;
 
     DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #owned; DROP TABLE #people;

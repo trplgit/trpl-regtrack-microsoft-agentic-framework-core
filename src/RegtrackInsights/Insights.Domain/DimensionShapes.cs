@@ -41,6 +41,9 @@ public sealed record LocationControlTotals
     public int GhostEntities { get; init; }
     public decimal? TenantMedianClosureRatio { get; init; }
     public bool TenantIsOnboarding { get; init; }
+    public int TenantCompletedEvents { get; init; }
+    public int TenantOnTimeEvents { get; init; }
+    public decimal? TenantOnTimePct { get; init; }
 }
 
 public sealed record LocationRow
@@ -64,6 +67,13 @@ public sealed record LocationRow
     public decimal? OwnerlessPct { get; init; }
     public decimal? ClosureRatio { get; init; }
     public int? OverdueRank { get; init; }
+    // [FIX] StateID/StateName/PeerStateOverduePct/VsPeerStateNormPP: sql/05_dimension_location.sql
+    // has computed these for a while (the peer_coverage_gap detector), but this record never
+    // carried them - Dapper silently dropped the columns. Same class of gap as TenantOnTimePct.
+    public int? StateID { get; init; }
+    public string? StateName { get; init; }
+    public decimal? PeerStateOverduePct { get; init; }
+    public decimal? VsPeerStateNormPP { get; init; }
     public string? Flags { get; init; }
 }
 
@@ -300,6 +310,11 @@ public sealed record UsersRow
     public int Instances { get; init; }
     public int PerformerInstances { get; init; }
     public int ReviewerInstances { get; init; }
+    /// <summary>
+    /// RoleID outside {3,4} - e.g. RoleID 6, confirmed live on tenant 1403, not yet in
+    /// DIMENSION_SPECS.md. Never blended into Performer/Reviewer - see sql/12's own trap note.
+    /// </summary>
+    public int OtherRoleInstances { get; init; }
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int ImprisonmentInstances { get; init; }
@@ -388,4 +403,151 @@ public sealed record EventRow
     public int InstancesSinceCutoff { get; init; }
     public int DistinctStartDates { get; init; }
     public string? Flags { get; init; }
+}
+
+// ── Licence (sql/21) ───────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Grain is LICENCE TYPE, not branch - <see cref="LicenceControlTotals.ScopedLicences"/> counts
+/// Lic_tbl_LicenseInstance rows, a different population from every other dimension's
+/// ComplianceInstance-based ScopedInstances. Scope here is BRANCH-ONLY, not the full 2-D
+/// (branch, category) pair every other dimension enforces - see the proc's own header for why.
+/// </summary>
+public sealed record LicenceControlTotals
+{
+    public int ScopedLicences { get; init; }
+    public int TypedLicences { get; init; }
+    public bool Reconciled { get; init; }
+    public decimal TenantLapsedCorroboratedPct { get; init; }
+    public int LicenceTypesReported { get; init; }
+    public int LicenceTypesWithLicences { get; init; }
+    public int UntypedLicences { get; init; }
+    public int UncorroboratedLapsedLicences { get; init; }
+}
+
+public sealed record LicenceRow
+{
+    public int LicenseTypeID { get; init; }
+    public string? LicenseTypeName { get; init; }
+    public bool IsRetired { get; init; }
+    public int TotalLicences { get; init; }
+    public int ActiveLicences { get; init; }
+    public int LapsedCorroborated { get; init; }
+    public int LapsedUncorroborated { get; init; }
+    public int LapsingNext30 { get; init; }
+    public int BranchesCovered { get; init; }
+    public decimal? LapsedCorroboratedPct { get; init; }
+    public int? OverdueRank { get; init; }
+    public string? Flags { get; init; }
+}
+
+// ── Backlog aging (sql/22) ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Overdue schedules bucketed by the FY they fell due in - always exactly 3 rows
+/// (current_fy / previous_fy / older). Grain is the SCHEDULE (ComplianceScheduleOnID), not the
+/// instance - one instance can carry overdue schedules in more than one bucket, so
+/// <see cref="DistinctOverdueSchedules"/> is the reconciling total, never a distinct-instance count.
+/// Overdue is a FLOW metric (RecentComplianceTransactionView drifts between runs) - never compare
+/// this figure against a different run.
+/// </summary>
+public sealed record BacklogAgingControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public string CurrentFyLabel { get; init; } = string.Empty;
+    public string PreviousFyLabel { get; init; } = string.Empty;
+    public int SumOfRows { get; init; }
+    public int DistinctOverdueSchedules { get; init; }
+}
+
+public sealed record BacklogAgingRow
+{
+    public string Bucket { get; init; } = string.Empty;
+    public string? FYLabel { get; init; }
+    public int OverdueCount { get; init; }
+    public DateTime? OldestDueDate { get; init; }
+    public DateTime? NewestDueDate { get; init; }
+    public decimal? SharePct { get; init; }
+}
+
+// ── Timeliness by fiscal year (sql/23) ─────────────────────────────────────────────────
+
+/// <summary>
+/// Current-FY vs previous-FY on-time closure rate, anchored on ScheduleOn (due date), not the
+/// completion date. Tenant-wide single fact, not a per-member breakdown - always exactly 2 rows
+/// (current_fy / previous_fy). <see cref="OnTimePctCurrentFY"/>/<see cref="OnTimePctPreviousFY"/>
+/// are NULL, never 0%, when that FY has zero completed events with a known Timeliness
+/// classification - see CLAUDE.md non-negotiable #5, never a fabricated comparative.
+/// </summary>
+public sealed record TimelinessFYControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public string CurrentFyLabel { get; init; } = string.Empty;
+    public string PreviousFyLabel { get; init; } = string.Empty;
+    public int ClosuresCurrentFY { get; init; }
+    public int ClosuresPreviousFY { get; init; }
+    public decimal? OnTimePctCurrentFY { get; init; }
+    public decimal? OnTimePctPreviousFY { get; init; }
+    public decimal? YoyChangePP { get; init; }
+    public string? FyTrend { get; init; }
+}
+
+public sealed record TimelinessFYRow
+{
+    public string FyBucket { get; init; } = string.Empty;
+    public string FYLabel { get; init; } = string.Empty;
+    public int CompletedEvents { get; init; }
+    public int OnTimeEvents { get; init; }
+    public decimal? OnTimePct { get; init; }
+}
+
+// ── Forward pipeline (sql/24) ──────────────────────────────────────────────────────────
+
+/// <summary>
+/// Schedules due in the next 90 days, bucketed into 5 fixed day-windows - real COUNTS only.
+/// `predicted_at_risk` (design doc Sec.3.8's other field) is deliberately NOT built - it is a
+/// projection with no defined model yet, never fabricated as a byproduct of these real counts.
+/// Grain is the SCHEDULE (ComplianceScheduleOnID), same reconciliation trap as BacklogAging.
+/// </summary>
+public sealed record ForwardPipelineControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public int DueNext90d { get; init; }
+    public int SumOfRows { get; init; }
+}
+
+public sealed record ForwardPipelineRow
+{
+    public string WindowLabel { get; init; } = string.Empty;
+    public int MinDaysOut { get; init; }
+    public int MaxDaysOut { get; init; }
+    public int DueCount { get; init; }
+}
+
+// ── Evidence integrity (sql/25) ────────────────────────────────────────────────────────
+
+/// <summary>
+/// Closures with a real multi-step review trail in ComplianceTransaction (more than one recorded
+/// row), a PROXY for a review step having happened - never for document evidence actually being
+/// attached. <see cref="EvidenceInSql"/> is always false: document evidence lives in blob storage,
+/// not this database, per design doc Sec.3.7's own explicit words. Always exactly 2 rows
+/// (has_trail / single_row_only).
+/// </summary>
+public sealed record EvidenceIntegrityControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public int SumOfRows { get; init; }
+    public int DistinctClosedSchedules { get; init; }
+    public decimal? ClosuresWithReviewTrailPct { get; init; }
+    public bool EvidenceInSql { get; init; }
+}
+
+public sealed record EvidenceIntegrityRow
+{
+    public string TrailBucket { get; init; } = string.Empty;
+    public int ScheduleCount { get; init; }
 }

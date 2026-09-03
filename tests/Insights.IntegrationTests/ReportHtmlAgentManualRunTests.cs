@@ -54,7 +54,7 @@ public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
 
         var htmlAgent = new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
             endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.", await LoadPromptAsync("05_report_html.md")));
-        var html = (await htmlAgent.RenderAsync(plan, narrative, tenantName: $"Tenant {customerId} (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow)).Value;
+        var html = (await htmlAgent.RenderAsync(plan, narrative, assertions, tenantName: $"Tenant {customerId} (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow)).Value;
 
         var outputPath = Environment.GetEnvironmentVariable("REPORT_HTML_OUTPUT_PATH")
             ?? Path.Combine(AppContext.BaseDirectory, "rendered-report.html");

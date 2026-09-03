@@ -133,7 +133,7 @@ BEGIN
         SELECT c.AncestorId, cb.ID
         FROM closure c
         JOIN CustomerBranch cb ON cb.ParentID = c.DescendantId
-        WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0
+        WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1
     )
     SELECT AncestorId, DescendantId
     INTO #closure
@@ -157,6 +157,11 @@ BEGIN
         ParentID            INT            NULL,
         ApexId              INT            NULL,
         ApexName            NVARCHAR(400)  NULL,
+        StateID             INT            NULL,   -- the node's OWN branch state, not a subtree rollup.
+                                                      -- Peer grouping below is leaf-only for exactly that
+                                                      -- reason - an intermediate/apex node's subtree can
+                                                      -- span multiple states, so its StateID cannot stand
+                                                      -- in for what its subtree comparative measures.
         RootKind            VARCHAR(20)    NULL,   -- apex | orphan
         NodeType            VARCHAR(20)    NULL,   -- leaf | intermediate
         Depth               INT            NULL,
@@ -170,20 +175,23 @@ BEGIN
         SubtreeOverduePct   DECIMAL(5,1)   NULL,
         ApexSharePct        DECIMAL(5,1)   NULL,
         SubtreeOverdueRank  INT            NULL,
+        PeerStateOverduePct DECIMAL(5,1)   NULL,   -- derived: leaf-only, state-peer median
+        VsPeerStateNormPP   DECIMAL(9,2)   NULL,   -- derived: leaf-only
         Flags               VARCHAR(200)   NULL
     );
 
-    INSERT #rows (BranchID, BranchName, ParentID, ApexId, ApexName, RootKind, NodeType, Depth,
+    INSERT #rows (BranchID, BranchName, ParentID, ApexId, ApexName, StateID, RootKind, NodeType, Depth,
                   DirectInstances, SubtreeInstances, SubtreeOverdue, SubtreeOwnerless,
                   SubtreeImprisonment, ActiveChildren)
     SELECT
-        t.BranchID, t.BranchName, t.ParentID, t.ApexId, t.ApexName, t.RootKind, t.NodeType, t.Depth,
+        t.BranchID, t.BranchName, t.ParentID, t.ApexId, t.ApexName, cb.StateID, t.RootKind, t.NodeType, t.Depth,
         d.DirectInstances,
         0, 0, 0, 0,
         (SELECT COUNT(*) FROM CustomerBranch ch
-          WHERE ch.ParentID = t.BranchID AND ch.IsDeleted = 0)
+          WHERE ch.ParentID = t.BranchID AND ch.IsDeleted = 0 AND ch.Status = 1)
     FROM dbo.tvfInsightsEntityTree(@CustomerID) t
-    JOIN #direct d ON d.BranchID = t.BranchID;
+    JOIN #direct d ON d.BranchID = t.BranchID
+    LEFT JOIN CustomerBranch cb ON cb.ID = t.BranchID;
 
     /*  Subtree rollups, one GROUP BY over the closure. */
     UPDATE r SET
@@ -235,6 +243,28 @@ BEGIN
     ;WITH r AS (SELECT BranchID, RANK() OVER (ORDER BY SubtreeOverduePct DESC) AS rk
                 FROM #rows WHERE Depth = 0 AND SubtreeInstances >= @rankFloor)
     UPDATE #rows SET SubtreeOverdueRank = r.rk FROM #rows JOIN r ON r.BranchID = #rows.BranchID;
+
+    /*  PEER-COVERAGE-GAP - LEAF NODES ONLY. An intermediate/apex node's
+        SubtreeOverduePct rolls up children that can sit in different states,
+        so its own StateID cannot stand in as the comparison grain for that
+        rollup (see the StateID column note above). A leaf has no descendants,
+        so SubtreeOverduePct there equals its own DirectInstances rate and the
+        comparison is sound. Same PeerGroupSize >= 2 guard and median-based
+        peer-relative convention as sql/05 - open item there (BA sign-off on
+        median vs mean) applies here too, flagged in data_quality below.     */
+    ;WITH sp AS (
+        SELECT BranchID, StateID,
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY SubtreeOverduePct) OVER (PARTITION BY StateID) AS PeerMedian,
+               COUNT(*) OVER (PARTITION BY StateID) AS PeerGroupSize
+        FROM #rows
+        WHERE NodeType = 'leaf' AND SubtreeInstances > 0 AND StateID IS NOT NULL
+    )
+    UPDATE #rows SET PeerStateOverduePct = sp.PeerMedian
+    FROM #rows JOIN sp ON sp.BranchID = #rows.BranchID
+    WHERE sp.PeerGroupSize >= 2;
+
+    UPDATE #rows SET VsPeerStateNormPP = SubtreeOverduePct - PeerStateOverduePct
+    WHERE PeerStateOverduePct IS NOT NULL;
 
     /*=====================================================================
       8. TENANT SHAPE + COMPARISON GRAIN
@@ -301,7 +331,9 @@ BEGIN
                  THEN ',dominant_apex' ELSE '' END +
             CASE WHEN @hasAnyObligations = 1
                   AND Depth = 0 AND ActiveChildren = 0 AND SubtreeInstances = 0
-                 THEN ',childless_holding_shell' ELSE '' END
+                 THEN ',childless_holding_shell' ELSE '' END +
+            -- 10pp threshold matches sql/05's OwnerlessPct convention.
+            CASE WHEN VsPeerStateNormPP >= 10.0 THEN ',peer_coverage_gap' ELSE '' END
         , 1, 1, '');
 
     /*=====================================================================
@@ -328,7 +360,7 @@ BEGIN
         @tenantOverduePct                  AS TenantOverduePct,
         (SELECT COUNT(*) FROM #rows)       AS NodesReported,
         (SELECT COUNT(*) FROM CustomerBranch
-          WHERE CustomerID = @CustomerID AND IsDeleted = 0) AS ActiveBranchesInTenant,
+          WHERE CustomerID = @CustomerID AND IsDeleted = 0 AND Status = 1) AS ActiveBranchesInTenant,
         @apexCount                         AS ApexEntityCount,
         @tenantShape                       AS TenantShape,
         ISNULL(@maxApexShare,0)            AS LargestApexSharePct,
@@ -370,7 +402,9 @@ BEGIN
     UNION ALL SELECT 'dominant_apex', @apexCount,
            (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%dominant_apex%')
     UNION ALL SELECT 'childless_holding_shell', @apexCount,
-           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%childless_holding_shell%');
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%childless_holding_shell%')
+    UNION ALL SELECT 'peer_coverage_gap', (SELECT COUNT(*) FROM #rows WHERE PeerStateOverduePct IS NOT NULL),
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%peer_coverage_gap%');
 
     UPDATE #detector
        SET FlaggedPct = CASE WHEN Eligible = 0 THEN 0 ELSE 100.0 * Flagged / Eligible END;
@@ -515,6 +549,21 @@ BEGIN
                N'aggregate - empty top-level entities are a structural pattern for this tenant'
         FROM #detector WHERE Detector='childless_holding_shell';
 
+    -- peer-coverage-gap vs this leaf's own state peer group (policy-gated, top 5 by materiality)
+    IF (SELECT EmitMode FROM #detector WHERE Detector='peer_coverage_gap') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-PEERGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY SubtreeInstances DESC) AS VARCHAR(5)),
+               'subtree_overdue_pct', BranchName, SubtreeOverduePct, NULL, NULL,
+               PeerStateOverduePct, VsPeerStateNormPP, 'worse',
+               N'peer_coverage_gap: vs. this leaf''s own StateID peer group median, leaf nodes only'
+        FROM #rows WHERE Flags LIKE '%peer_coverage_gap%' ORDER BY SubtreeInstances DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='peer_coverage_gap') = 'aggregate'
+        INSERT #assert
+        SELECT 'A-PEERGAP-AGG','nodes_peer_coverage_gap',N'tenant',
+               Flagged, NULL, Eligible, NULL, FlaggedPct, 'worse',
+               N'aggregate - lagging behind state peers is a tenant-wide pattern, not per-site exceptions'
+        FROM #detector WHERE Detector='peer_coverage_gap';
+
     SELECT 'assertions' AS ResultSet, * FROM #assert;
 
     /*=====================================================================
@@ -593,12 +642,41 @@ BEGIN
            AssertionId, NULL
     FROM #assert WHERE AssertionId = 'A-SHELL-AGG';
 
+    INSERT #find
+    SELECT 'F-PEERGAP','medium',
+           CONCAT(N'', ScopeLabel, N' runs ', VsComparatorPP, N'pp above its state-peer overdue rate'),
+           AssertionId,
+           N'Peer group is this leaf''s own StateID cohort within the tenant, not a cross-tenant benchmark.'
+    FROM #assert WHERE AssertionId LIKE 'A-PEERGAP-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-PEERGAP-AGG','medium',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' nodes (', VsComparatorPP,
+                  N'%) run 10pp+ above their state-peer overdue rate'),
+           AssertionId, NULL
+    FROM #assert WHERE AssertionId = 'A-PEERGAP-AGG';
+
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*=====================================================================
       15. DATA QUALITY - declared, never silent
     =====================================================================*/
+    /*  [FIX] Same CustomerBranch.Status ambiguity sql/05 declares - see that
+        file's header note. Declared per-tenant here too since this dimension
+        computes its own independent ActiveBranchesInTenant control total.   */
+    DECLARE @ambiguousStatusBranches INT = (
+        SELECT COUNT(*) FROM CustomerBranch
+        WHERE CustomerID = @CustomerID AND IsDeleted = 0
+          AND (Status IS NULL OR Status NOT IN (0, 1)));
+
     SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+        SELECT 'branch_status_ambiguous' AS Issue,
+               CONCAT(N'', @ambiguousStatusBranches, N' non-deleted branch(es) carry a Status value '
+                    + N'other than 0 (deactivated) or 1 (active) - NULL or an unmapped value. Excluded '
+                    + N'from this report as not-active (the safe default), not counted as a confirmed '
+                    + N'deactivation. Verify with the tenant before treating this as settled.') AS Detail
+        WHERE @ambiguousStatusBranches > 0
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL
@@ -626,6 +704,17 @@ BEGIN
                       N' obligation(s) in this user''s authorised scope, not the tenant total. '
                     + N'They are not comparable with an unscoped tenant-wide figure.')
         WHERE @hasAnyObligations = 1
+        UNION ALL
+        SELECT 'branches_without_state',
+               CONCAT(N'', COUNT(*), N' leaf node(s) with obligations have no StateID set and are excluded '
+                    + N'from every peer_coverage_gap comparison (no peer group to measure against).')
+        FROM #rows WHERE NodeType = 'leaf' AND SubtreeInstances > 0 AND StateID IS NULL HAVING COUNT(*) > 0
+        UNION ALL
+        SELECT 'peer_norm_statistic_unconfirmed',
+               N'peer_coverage_gap compares each leaf to the MEDIAN SubtreeOverduePct of its own StateID '
+             + N'peers, restricted to leaf nodes because an intermediate/apex subtree can span multiple '
+             + N'states. Median vs. mean has not been BA-signed - treat vs_peer_state_norm_pp as '
+             + N'directionally correct, not yet a confirmed formula. Same open item as sql/05.'
     ) q;
 
     DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #owned; DROP TABLE #direct;

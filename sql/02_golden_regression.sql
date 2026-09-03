@@ -82,7 +82,7 @@ BEGIN
     JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID
     JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID=cso.ID
     LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId=rct.ComplianceStatusID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND i.IsDeleted=0
+    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1 AND i.IsDeleted=0
       AND cso.IsActive=1 AND cso.IsUpcomingNotDeleted=1 AND cso.ScheduleOn<=@AsOf;
     INSERT @results VALUES ('G-2', N'Overdue definition invariant (old to new reconciles)',
         CASE WHEN ISNULL(@new,0)=ISNULL(@old,0)-ISNULL(@c79,0)-ISNULL(@c17,0)+ISNULL(@c18,0) THEN 1 ELSE 0 END,
@@ -115,7 +115,7 @@ BEGIN
     FROM ComplianceInstance i
     JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID
     JOIN Compliance c ON c.ID=i.ComplianceID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND i.IsDeleted=0 AND c.IsDeleted=0;
+    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1 AND i.IsDeleted=0 AND c.IsDeleted=0;
 
     ;WITH tree AS (SELECT BranchID FROM dbo.tvfInsightsEntityTree(@CustomerID))
     SELECT @rollup=COUNT(i.ID)
@@ -142,7 +142,7 @@ BEGIN
     SELECT @scopeRows=COUNT(*),
            @scopeNoCat=SUM(CASE WHEN ea.ComplianceCatagoryID IS NULL OR ea.ComplianceCatagoryID=0 THEN 1 ELSE 0 END)
     FROM EntitiesAssignment ea JOIN CustomerBranch cb ON cb.ID=ea.BranchID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0;
+    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1;
     INSERT @results VALUES ('G-7', N'All scope rows are category-specific (2-D)',
         CASE WHEN ISNULL(@scopeRows,0)=0 OR ISNULL(@scopeNoCat,0)=0 THEN 1 ELSE 0 END,
         CONCAT(N'scope rows=',ISNULL(@scopeRows,0),N' without category=',ISNULL(@scopeNoCat,0)));
@@ -152,11 +152,11 @@ BEGIN
     ;WITH pairs AS (
         SELECT DISTINCT ea.BranchID, ea.ComplianceCatagoryID AS CategoryId
         FROM EntitiesAssignment ea JOIN CustomerBranch cb ON cb.ID=ea.BranchID
-        WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0),
+        WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1),
     inst AS (
         SELECT i.ID, i.CustomerBranchID AS BranchID, a.ComplianceCategoryId AS CategoryId
         FROM ComplianceInstance i
-        JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID AND cb.IsDeleted=0
+        JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID AND cb.IsDeleted=0 AND cb.Status=1
         JOIN Compliance c ON c.ID=i.ComplianceID AND c.IsDeleted=0
         JOIN Act a ON a.ID=c.ActID
         WHERE cb.CustomerID=@CustomerID AND i.IsDeleted=0)
@@ -176,7 +176,7 @@ BEGIN
     JOIN ComplianceInstance i ON i.ID=cso.ComplianceInstanceID
     JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID
     JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID=cso.ID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND i.IsDeleted=0
+    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1 AND i.IsDeleted=0
       AND cso.IsActive=1 AND cso.IsUpcomingNotDeleted=1 AND cso.ScheduleOn<=@AsOf;
     INSERT @results VALUES ('G-9', N'Unknown-status volume is immaterial and declared',
         CASE WHEN ISNULL(@pdAll,0)=0 OR ISNULL(@nullSt,0)*100.0/@pdAll<=0.10 THEN 1 ELSE 0 END,

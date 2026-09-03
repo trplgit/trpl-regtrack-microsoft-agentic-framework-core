@@ -55,7 +55,7 @@ public static class ServiceCollectionExtensions
         // sql/02 - golden invariants. Run these before trusting any dimension output.
         services.AddScoped<IGoldenRegressionRepository>(_ => new SqlGoldenRegressionRepository(connectionString));
 
-        // sql/05, sql/07 - sql/14 - the nine dimensions, one repository for all of them.
+        // sql/05, sql/07 - sql/14, sql/21 - the ten dimensions, one repository for all of them.
         services.AddScoped<IDimensionRepository>(_ => new SqlDimensionRepository(connectionString));
 
         // sql/17 - eligible tenants. THE IDOR GUARD: every endpoint taking a client-supplied

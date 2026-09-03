@@ -16,3 +16,31 @@ page via Playwright - not a .NET reimplementation.
 To update: fetch a newer pinned version the same way, verify the license header, replace this
 file (keep the version number in the filename), and update the reference in
 `RegtrackInsights.csproj` and `DomPurifySanitizer`.
+
+## fonts/poppins-400.woff2, fonts/poppins-600.woff2
+
+Fetched 2026-08-27 from Google Fonts' `css2` endpoint
+(`https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap`, latin subset
+only - `pxiEyp8kv8JHgFVrJJfecg.woff2` / `pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2`, Poppins v24),
+verified before vendoring with `file` (`Web Open Font Format (Version 2), TrueType`) - real
+binary glyph data, not a stub. Poppins is OFL-licensed (SIL Open Font License), free to
+self-host.
+
+This is the fix for the LLM-authored-font trap found earlier: no model can generate real font
+binary, so any `@font-face` the render agent tried to author itself decoded to a handful of
+real bytes (just the WOFF2 magic number) followed by garbage - a broken, non-functional font
+that silently falls back to the system stack while *claiming* to be Poppins. These two files
+are the real thing, vendored once here and injected deterministically post-generation by
+`Insights.Presentation.PoppinsFontInjector` (called from
+`Insights.Worker.Orchestration.Activities.InjectFontActivity`, node 8a in the orchestrator -
+between RenderHtml and the first Normalize call) - the render agent never touches font bytes,
+it only ever writes the CSS name `Poppins` and gets the real face for free.
+
+Only the latin subset is vendored - current reports never render non-Latin glyphs (verified:
+no ₹/devanagari-range characters in any generated report or the approved reference). If a
+report ever needs the Rupee sign or Devanagari text, fetch the `devanagari` subset the same
+way and extend the injector's weight/subset list.
+
+To update: fetch newer pinned versions the same way, verify with `file` that each result is a
+real WOFF2 (not an HTML error page), replace these files (keep version in mind for future
+filenames), and update `RegtrackInsights.csproj` and `PoppinsFontInjector`.

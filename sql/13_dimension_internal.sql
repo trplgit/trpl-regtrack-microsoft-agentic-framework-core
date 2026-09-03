@@ -85,7 +85,7 @@ BEGIN
     FROM InternalComplianceInstance ii
     JOIN CustomerBranch cb ON cb.ID = ii.CustomerBranchID
     JOIN #branch b ON b.BranchID = ii.CustomerBranchID
-    WHERE ii.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.CustomerID = @CustomerID;
+    WHERE ii.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.Status = 1 AND cb.CustomerID = @CustomerID;
 
     /*  Internal overdue, using the SAME dictionary - verified, see header.
         The INNER JOIN is deliberate: a status the dictionary does not know

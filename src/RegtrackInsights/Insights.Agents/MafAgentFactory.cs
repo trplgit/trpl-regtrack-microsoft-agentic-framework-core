@@ -34,7 +34,7 @@ public static class MafAgentFactory
         Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
 
     /// <summary>
-    /// For agents whose output is NOT JSON - report HTML (05_report_html.md) produces a raw HTML
+    /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// </summary>
     public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
@@ -42,7 +42,20 @@ public static class MafAgentFactory
 
     private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate)
     {
-        var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint) });
+        /*  [BUG FOUND LIVE, 2026-09-01] The SDK's own default NetworkTimeout is 100 seconds
+            (ClientPipelineOptions.NetworkTimeout - confirmed via the SDK's own
+            TaskCanceledException message, which names this exact property). A real render call
+            for a large tenant (a fixed-holistic report's location_rows can carry 600+ branches,
+            plus up to Agents:MaxTokensPerCall of reasoning+output) can legitimately take longer
+            than that to complete - confirmed live: a direct curl to this exact endpoint with a
+            trivial prompt returned in ~2s, so the endpoint itself was never the problem, but two
+            consecutive full-size render attempts both hit the 100s wall and were reported as
+            "network failure" when the real cause was an undersized client timeout for this
+            workload's size, not a transient connectivity issue. A RETRY does not fix this - the
+            same oversized call hits the same 100s ceiling every time. Every agent this factory
+            builds (Composition/Reflection/Narrative/Reflection/ReportHtml) can carry a
+            comparably large payload, so this is set here, once, for all of them - not per-caller.  */
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint), NetworkTimeout = TimeSpan.FromMinutes(5) });
         IChatClient chatClient = client.GetResponsesClient().AsIChatClient(model);
 
         /*  OTel wraps the RAW client, innermost, so its span timing measures the actual network

@@ -23,6 +23,12 @@
   - Category resolves ONLY via ComplianceInstance -> Compliance -> Act.ComplianceCategoryId
     (Compliance, ComplianceInstance and ComplianceSubType have NO category column)
   - EMPTY SCOPE => DENY. Never "no restriction" - that inverts the security model.
+  - [FIX] CustomerBranch.Status is a SECOND active flag, separate from IsDeleted.
+    Status = 0 = deactivated: obligations remain tagged to the branch but are not
+    reported, and no schedules/alerts/escalations are generated for them
+    (CLAUDE.md Sec.5). "Active branch" below now means IsDeleted = 0 AND Status = 1
+    everywhere - this is the single choke point every dimension scopes through,
+    so fixing it here fixes the estate definition for the whole engine at once.
   - tenant_wide requires BOTH axes. On a reference tenant, 3 users had all 16
     branches but only 1 had all 9 categories. The other 2 are FUNCTIONAL heads
     (all locations, one function) and must not be classified as tenant-wide CCOs.
@@ -58,6 +64,7 @@ RETURN
     WHERE ea.UserID      = @UserID
       AND cb.CustomerID  = @CustomerID
       AND cb.IsDeleted   = 0        -- active branch
+      AND cb.Status      = 1        -- active branch, second flag - see header
       AND cu.IsDeleted   = 0        -- active tenant
 );
 GO
@@ -85,13 +92,13 @@ BEGIN
     FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID);
 
     SELECT @tenantBranches = COUNT(*)
-    FROM CustomerBranch WHERE CustomerID = @CustomerID AND IsDeleted = 0;
+    FROM CustomerBranch WHERE CustomerID = @CustomerID AND IsDeleted = 0 AND Status = 1;
 
     -- tenant category universe = categories appearing in ANY user's assignments
     SELECT @tenantCats = COUNT(DISTINCT ea.ComplianceCatagoryID)
     FROM EntitiesAssignment ea
     JOIN CustomerBranch cb ON cb.ID = ea.BranchID
-    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0;
+    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1;
 
     SELECT
         @UserID          AS UserID,
@@ -147,6 +154,7 @@ RETURN
         AND sp.CategoryId = a.ComplianceCategoryId
     WHERE cb.CustomerID = @CustomerID
       AND cb.IsDeleted  = 0
+      AND cb.Status     = 1
       AND i.IsDeleted   = 0
       AND c.IsDeleted   = 0
 );

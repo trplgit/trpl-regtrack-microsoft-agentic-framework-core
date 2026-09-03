@@ -24,7 +24,7 @@ public sealed record FetchDimensionsOutput(
 }
 
 /// <summary>
-/// Nodes 3-4: the nine dimension calls, each of which already returns its own Assertions/Findings
+/// Nodes 3-4: the fourteen dimension calls, each of which already returns its own Assertions/Findings
 /// (already reconciled, already validated - see DimensionResult.Validate, called automatically by
 /// SqlDimensionRepository). This is "validating" in API_CONTRACTS.md's stage vocabulary because
 /// the reconciliation THROWs happen inside these calls, not as a separate step.
@@ -40,7 +40,7 @@ public sealed record FetchDimensionsOutput(
 /// any serializer; ComposeActivity parses it back to a JsonElement locally, after DTFx's own
 /// deserialization has already happened, never inside the cross-boundary payload itself.
 ///
-/// PARTIAL GENERATION (design doc Sec.11.4): each of the nine calls is wrapped individually via
+/// PARTIAL GENERATION (design doc Sec.11.4): each of the ten calls is wrapped individually via
 /// <see cref="TryFetchAsync{TControlTotals,TRow}"/>. DimensionReconciliationException and
 /// DimensionContractViolationException are caught - both are a bug local to ONE dimension's own
 /// procedure (see IDimensionRepository's doc comment) - and that dimension is recorded in
@@ -91,9 +91,14 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
         await TryFetchAsync("Users", () => dimensionRepository.GetUsersAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("BacklogAging", () => dimensionRepository.GetBacklogAgingAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("TimelinessFY", () => dimensionRepository.GetTimelinessFYAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("ForwardPipeline", () => dimensionRepository.GetForwardPipelineAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("EvidenceIntegrity", () => dimensionRepository.GetEvidenceIntegrityAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
 
-        // All nine failing is not "partial" - there is nothing left to compose or narrate from,
-        // and a report that is nothing but nine placeholders is not the "correct, individually
+        // All fourteen failing is not "partial" - there is nothing left to compose or narrate from,
+        // and a report that is nothing but fourteen placeholders is not the "correct, individually
         // gate-passed numbers still reach the user" outcome Sec.11.4 describes. Fail loudly rather
         // than let this silently become a real-looking but content-free report.
         if (dimensionResults.Count == 0)

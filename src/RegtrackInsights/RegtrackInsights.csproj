@@ -106,6 +106,21 @@
   </ItemGroup>
 
   <!--
+    Real vendored Poppins glyph data (vendor/README.md "fonts/" entry) - the fix for the
+    LLM-authored-@font-face trap: PoppinsFontInjector embeds these as data: URIs post-
+    generation, so the render agent never has to (and never can) produce real font bytes
+    itself. Same CopyToOutputDirectory/AppContext.BaseDirectory convention as dompurify above.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\vendor\fonts\poppins-400.woff2" Link="vendor\fonts\poppins-400.woff2">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\vendor\fonts\poppins-600.woff2" Link="vendor\fonts\poppins-600.woff2">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
     Insights.Api is SOURCE FOR THE REGTRACK API, not part of this worker.
 
     CLAUDE.md 6: this worker is private and queue-driven, with no public endpoints and no

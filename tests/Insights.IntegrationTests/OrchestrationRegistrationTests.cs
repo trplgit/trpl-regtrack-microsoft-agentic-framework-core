@@ -25,6 +25,13 @@ public class OrchestrationRegistrationTests
                 ?? throw new InvalidOperationException("Set ConnectionStrings__RegTrack before running this test."),
             ["ConnectionStrings:DurableTaskHub"] = Environment.GetEnvironmentVariable("ConnectionStrings__DurableTaskHub")
                 ?? throw new InvalidOperationException("Set ConnectionStrings__DurableTaskHub before running this test."),
+            // [BUG FOUND LIVE, pre-existing, unrelated to RenderHtmlActivity's 2026-09-01 change]
+            // AddInsightsOrchestrationWorker -> RegisterReportCodec requires this - missing here
+            // meant this test could never have passed even before today's changes, it just never
+            // got run far enough to hit it until now.
+            ["Azure:BlobConnectionString"] = Environment.GetEnvironmentVariable("AZURE_BLOB_CONNECTION_STRING")
+                ?? throw new InvalidOperationException("Set AZURE_BLOB_CONNECTION_STRING before running this test."),
+            ["Azure:BlobContainer"] = "insights-reports-temp",
             ["Llm:Maf:Endpoint"] = Environment.GetEnvironmentVariable("MAF_ENDPOINT")
                 ?? throw new InvalidOperationException("Set MAF_ENDPOINT before running this test."),
             ["Llm:Maf:Model"] = Environment.GetEnvironmentVariable("MAF_MODEL")

@@ -17,6 +17,18 @@
   <ItemGroup Label="Azure - versions matched to the RegTrack API">
     <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.8.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
+    <!-- Test-only: the model-comparison lab (Insights.IntegrationTests) authenticates against
+         Foundry via Entra ID (DefaultAzureCredential) instead of an API key, so it never needs to
+         hold a secret for the 3 models under test. Not referenced by RegtrackInsights.csproj itself -
+         production still uses MafAgentFactory's ApiKeyCredential path.
+         [TRAP - found live] Azure.AI.OpenAI's AzureOpenAIClient looked like the obvious fit (it
+         takes a TokenCredential directly) but constructs requests against the classic
+         /openai/deployments/{name}/... route - confirmed via curl that these Foundry Models
+         deployments only support the newer unified /openai/v1/ route (AzureOpenAIClient returned
+         404 for a model curl proved works against that route). Removed - the lab instead builds a
+         plain OpenAI.OpenAIClient (matching MafAgentFactory's proven endpoint shape exactly) with
+         a hand-rolled AuthenticationTokenProvider adapter wrapping DefaultAzureCredential. -->
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
   <ItemGroup Label="Presentation">
     <PackageVersion Include="HtmlSanitizer" Version="9.0.892" />

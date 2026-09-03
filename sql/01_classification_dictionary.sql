@@ -153,6 +153,16 @@ VALUES
  (23,1,N'Deviation APPROVED (extension) - still open',  N'Deviation Approved',                1,'open',             NULL,0,N'BA-confirmed. Extension granted; obligation still open.');
 GO
 
+/*  [TRAP - found live] This DELETE removes EVERY VersionId=1 row, including any seeded
+    out-of-band (a live INSERT run directly against the database, not through this file) -
+    it has no way to know such a row exists. That already happened once: LicenceStatus/
+    expired was added live, never added here, and a routine redeploy of this file silently
+    deleted it - every Licence dimension call started throwing DICTIONARY GAP on every
+    tenant. If a dimension proc starts throwing a dictionary-gap error this file's own
+    INSERT list does not explain, suspect exactly this: query the live table for that
+    Semantic BEFORE running this script, and if it has rows this list does not, add them
+    here first. Never seed a mapping directly against the database without also adding it
+    here - that is how it gets silently deleted the next time this file runs.            */
 DELETE FROM dbo.InsightsEnumPolarity WHERE VersionId = 1;
 GO
 
@@ -168,8 +178,12 @@ VALUES
  (1,'IsDeleted','1',N'Inactive (soft-deleted)',       N'User / Customer / CustomerBranch',NULL),
  (1,'User.IsActive','0',N'Deactivated but EXISTS - keep and FLAG, never hide',N'User',N'Distinct from IsDeleted. Filtering to IsActive=1 would hide the "deactivated user still holding live assignments" finding.'),
  (1,'EntityApex','ParentID IS NULL',N'Top-level entity of a tenant (with IsDeleted=0)',N'CustomerBranch',NULL),
+ (1,'CustomerBranch.Status','0',N'Deactivated - obligations remain tagged but are not reported, no schedules/alerts',N'CustomerBranch',N'A SECOND active flag, separate from IsDeleted. Filter IsDeleted=0 AND Status=1 everywhere. Omitting it overstated overdue by 28% on one tenant.'),
+ (1,'CustomerBranch.Status','1',N'Operating (active, reported)',N'CustomerBranch',N'See RawValue=0 above.'),
  (1,'ScopeSource','EntitiesAssignment',N'2-D scope: (BranchID x ComplianceCatagoryID). Column is misspelled "Catagory".',N'EntitiesAssignment',N'Chosen over ComplianceCategoryMgmtUser: CM is a strict subset (0 exceptions across 2 tenants) that excludes configured-but-dormant sites, which are themselves a key finding.'),
- (1,'CategoryJoin','Act.ComplianceCategoryId',N'The ONLY category join path: ComplianceInstance -> Compliance -> Act',N'Act',N'Compliance, ComplianceInstance and ComplianceSubType have no category column.');
+ (1,'CategoryJoin','Act.ComplianceCategoryId',N'The ONLY category join path: ComplianceInstance -> Compliance -> Act',N'Act',N'Compliance, ComplianceInstance and ComplianceSubType have no category column.'),
+ (1,'LicenceStatus','3',N'expired',N'Lic_tbl_StatusMaster',N'[FIX] This mapping previously existed only as a live out-of-band row, not in this checked-in seed - a redeploy of this file silently deleted it (DELETE FROM InsightsEnumPolarity WHERE VersionId=1 has no way to know about rows this script never inserted). Lic_tbl_StatusMaster.ID=3, StatusName=Expired.'),
+ (1,'LicenceStatus','11',N'expired',N'Lic_tbl_StatusMaster',N'Lic_tbl_StatusMaster.ID=11, StatusName=Validity Expired - confirmed expiry-equivalent to RawValue=3, not a typo or a distinct status. Do NOT map ID=4 (StatusName=Expiring) here - that is forward-looking, not yet expired.');
 GO
 
 /*---------------------------------------------------------------------------
@@ -262,6 +276,7 @@ RETURN
     JOIN dbo.vInsightsStatusCurrent d        ON d.StatusId = rct.ComplianceStatusID  -- INNER = fail closed
     WHERE cb.CustomerID = @CustomerID
       AND cb.IsDeleted  = 0
+      AND cb.Status     = 1
       AND i.IsDeleted   = 0
       AND c.IsDeleted   = 0
       AND cso.IsActive  = 1
@@ -319,7 +334,7 @@ BEGIN
     -- fails at CREATE time. Semantically identical - the view is filtered to IsCurrent = 1
     -- and keyed (VersionId, StatusId), so there is at most one row per status and no fan-out.
     LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = rct.ComplianceStatusID
-    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND i.IsDeleted = 0
+    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1 AND i.IsDeleted = 0
       AND cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1
       AND cso.ScheduleOn <= GETDATE();
 
@@ -359,7 +374,7 @@ BEGIN
     FROM ComplianceInstance i
     JOIN CustomerBranch cb ON cb.ID = i.CustomerBranchID
     JOIN Compliance c      ON c.ID = i.ComplianceID
-    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0
+    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1
       AND i.IsDeleted = 0 AND c.IsDeleted = 0 AND c.Imprisonment = 1;
 
     DECLARE @impPct DECIMAL(5,1) = CASE WHEN ISNULL(@impTot,0)=0 THEN NULL

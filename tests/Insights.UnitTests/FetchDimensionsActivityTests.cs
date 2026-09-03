@@ -7,7 +7,7 @@ namespace Insights.UnitTests;
 
 /// <summary>
 /// Design doc Sec.11.4 (Partial generation). Unit-level, mocked IDimensionRepository - the real
-/// nine-dimension success path against UAT is covered separately by
+/// fourteen-dimension success path against UAT is covered separately by
 /// Insights.IntegrationTests.FetchDimensionsActivityTests. These pin the CATCH logic itself:
 /// exactly which two exception types get degraded to a placeholder slot, which two still fail the
 /// whole run, and that a failed dimension's data never reaches DimensionResults/Assertions/
@@ -40,18 +40,28 @@ public sealed class FetchDimensionsActivityTests
             .ReturnsAsync(new DimensionResult<InternalControlTotals, InternalRow>("Internal", new InternalControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetEventAsync(UserId, TenantId, null, 12, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EventControlTotals, EventRow>("Event", new EventControlTotals(), [], [], [], [], []));
+        repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DimensionResult<LicenceControlTotals, LicenceRow>("Licence", new LicenceControlTotals(), [], [], [], [], []));
+        repo.Setup(r => r.GetBacklogAgingAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>("BacklogAging", new BacklogAgingControlTotals(), [], [], [], [], []));
+        repo.Setup(r => r.GetTimelinessFYAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>("TimelinessFY", new TimelinessFYControlTotals(), [], [], [], [], []));
+        repo.Setup(r => r.GetForwardPipelineAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>("ForwardPipeline", new ForwardPipelineControlTotals(), [], [], [], [], []));
+        repo.Setup(r => r.GetEvidenceIntegrityAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>("EvidenceIntegrity", new EvidenceIntegrityControlTotals(), [], [], [], [], []));
         return repo;
     }
 
     [Fact]
-    public async Task RunAsync_AllNineSucceed_ReturnsEmptyFailedDimensions()
+    public async Task RunAsync_AllFourteenSucceed_ReturnsEmptyFailedDimensions()
     {
         var repo = BuildHealthyRepository();
         var activity = new FetchDimensionsActivity(repo.Object);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
 
-        Assert.Equal(9, result.DimensionResults.Count);
+        Assert.Equal(14, result.DimensionResults.Count);
         Assert.Empty(result.FailedDimensions);
     }
 
@@ -71,7 +81,7 @@ public sealed class FetchDimensionsActivityTests
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
 
-        Assert.Equal(8, result.DimensionResults.Count);
+        Assert.Equal(13, result.DimensionResults.Count);
         Assert.DoesNotContain("Risk", result.DimensionResults.Keys);
         Assert.Equal(["Risk"], result.FailedDimensions);
         recorder.Verify(r => r.RecordBlockFailure("Risk"), Times.Once);
@@ -123,9 +133,9 @@ public sealed class FetchDimensionsActivityTests
         await Assert.ThrowsAsync<DimensionDictionaryGapException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
     }
 
-    /// <summary>[TRAP this guards] All nine failing is total failure, not a nine-placeholder "partial" report with nothing real in it.</summary>
+    /// <summary>[TRAP this guards] All fourteen failing is total failure, not a fourteen-placeholder "partial" report with nothing real in it.</summary>
     [Fact]
-    public async Task RunAsync_AllNineDimensionsFail_ThrowsRatherThanReturningAnEmptyReport()
+    public async Task RunAsync_AllFourteenDimensionsFail_ThrowsRatherThanReturningAnEmptyReport()
     {
         var repo = new Mock<IDimensionRepository>();
         repo.Setup(r => r.GetLocationAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
@@ -146,6 +156,16 @@ public sealed class FetchDimensionsActivityTests
             .ThrowsAsync(new DimensionReconciliationException("Internal", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetEventAsync(UserId, TenantId, null, 12, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Event", TenantId, new Exception("inner")));
+        repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DimensionReconciliationException("Licence", TenantId, new Exception("inner")));
+        repo.Setup(r => r.GetBacklogAgingAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DimensionReconciliationException("BacklogAging", TenantId, new Exception("inner")));
+        repo.Setup(r => r.GetTimelinessFYAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DimensionReconciliationException("TimelinessFY", TenantId, new Exception("inner")));
+        repo.Setup(r => r.GetForwardPipelineAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DimensionReconciliationException("ForwardPipeline", TenantId, new Exception("inner")));
+        repo.Setup(r => r.GetEvidenceIntegrityAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DimensionReconciliationException("EvidenceIntegrity", TenantId, new Exception("inner")));
 
         var activity = new FetchDimensionsActivity(repo.Object);
 

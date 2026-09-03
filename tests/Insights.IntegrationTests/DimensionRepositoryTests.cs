@@ -127,6 +127,32 @@ public sealed class DimensionRepositoryTests
         Assert.True(result.ControlTotals.Reconciled);
     }
 
+    [Theory]
+    [MemberData(nameof(ValidatedTenants))]
+    public async Task GetLicenceAsync_ReturnsWellFormedResult(int userId, int customerId)
+    {
+        var result = await Repository.GetLicenceAsync(userId, customerId);
+        AssertWellFormed(result, "Licence");
+        Assert.True(result.ControlTotals.Reconciled);
+    }
+
+    /// <summary>
+    /// [TRAP] Licence's grain is licence TYPE, not branch - ScopedLicences counts
+    /// Lic_tbl_LicenseInstance rows, a different population from every other dimension's
+    /// ComplianceInstance-based ScopedInstances. This asserts the untyped-residual reconciliation
+    /// (TypedLicences + UntypedLicences = ScopedLicences, same shape as Nature's untagged bucket)
+    /// rather than assuming the row sum alone ties to the total.
+    /// </summary>
+    [Fact]
+    public async Task GetLicenceAsync_TypedPlusUntypedTiesToScopedTotal()
+    {
+        var result = await Repository.GetLicenceAsync(userId: 38, customerId: 29);
+
+        Assert.Equal(
+            result.ControlTotals.ScopedLicences,
+            result.ControlTotals.TypedLicences + result.ControlTotals.UntypedLicences);
+    }
+
     /// <summary>
     /// [TRAP] Users does NOT partition instances - SumOfPerUserInstances legitimately exceeds
     /// ScopedInstances (one obligation carries a performer AND a reviewer). Reconciling on the

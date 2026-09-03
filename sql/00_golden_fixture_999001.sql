@@ -21,6 +21,15 @@
   container. One gap was already found and fixed this way (a missing DEFAULT
   constraint on ComplianceInstance.DirectorId) - treat this file as reviewed but
   UNPROVEN until a real container run confirms it.
+
+  -- [FIX] CustomerBranch.Status is nullable with no DEFAULT (confirmed live -
+  -- see sys.columns above). Every fixture branch INSERT below now sets it to 1
+  -- explicitly; without that they would default to NULL and every one would be
+  -- excluded from every dimension the moment sql/01-17 started filtering
+  -- Status=1, silently zeroing out this entire fixture. No fixture branch tests
+  -- Status=0 (deactivated) specifically yet - that is real gap, not covered by
+  -- this fix, worth its own F-series case (mirroring how F-7's soft-deleted
+  -- branch is tested) before shipping the estate-definition change.
 ===========================================================================*/
 
 -- Generated from real UAT schema (sys.columns/sys.types) for the golden-fixture CI container.
@@ -592,44 +601,44 @@ DECLARE @ApexId INT, @Main1Id INT, @Main2Id INT, @IntermediateId INT,
         @LeafAId INT, @LeafBId INT, @GhostId INT, @DeletedBranchId INT,
         @OrphanParentId INT, @OrphanChildId INT;
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Apex', 999001, 0, @Now, NULL, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Apex', 999001, 0, @Now, NULL, @BranchType, @StateID, @CityID, 1);
 SET @ApexId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Main 1', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Main 1', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID, 1);
 SET @Main1Id = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Main 2', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Main 2', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID, 1);
 SET @Main2Id = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Intermediate', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Intermediate', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID, 1);
 SET @IntermediateId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Leaf A', 999001, 0, @Now, @IntermediateId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Leaf A', 999001, 0, @Now, @IntermediateId, @BranchType, @StateID, @CityID, 1);
 SET @LeafAId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Leaf B', 999001, 0, @Now, @IntermediateId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Leaf B', 999001, 0, @Now, @IntermediateId, @BranchType, @StateID, @CityID, 1);
 SET @LeafBId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Ghost Leaf', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Ghost Leaf', 999001, 0, @Now, @ApexId, @BranchType, @StateID, @CityID, 1);
 SET @GhostId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Deleted Branch', 999001, 1, @Now, @ApexId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Deleted Branch', 999001, 1, @Now, @ApexId, @BranchType, @StateID, @CityID, 1);
 SET @DeletedBranchId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Orphan Parent (deleted)', 999001, 1, @Now, NULL, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Orphan Parent (deleted)', 999001, 1, @Now, NULL, @BranchType, @StateID, @CityID, 1);
 SET @OrphanParentId = SCOPE_IDENTITY();
 
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Orphan Child', 999001, 0, @Now, @OrphanParentId, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Orphan Child', 999001, 0, @Now, @OrphanParentId, @BranchType, @StateID, @CityID, 1);
 SET @OrphanChildId = SCOPE_IDENTITY();
 
 DECLARE @i INT, @NewInstanceId INT, @NewScheduleId INT;
@@ -870,8 +879,8 @@ VALUES (999002, N'Golden Fixture Tenant Single-Branch (999002)', N'N/A', N'N/A',
 SET IDENTITY_INSERT Customer OFF;
 
 DECLARE @SingleBranchId INT;
-INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID)
-VALUES (N'Golden Only Branch', 999002, 0, @Now, NULL, @BranchType, @StateID, @CityID);
+INSERT CustomerBranch (Name, CustomerID, IsDeleted, CreatedOn, ParentID, Type, StateID, CityID, Status)
+VALUES (N'Golden Only Branch', 999002, 0, @Now, NULL, @BranchType, @StateID, @CityID, 1);
 SET @SingleBranchId = SCOPE_IDENTITY();
 
 SET @i = 0;
