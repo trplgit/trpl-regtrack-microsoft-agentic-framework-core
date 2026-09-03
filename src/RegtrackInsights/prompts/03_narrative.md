@@ -86,6 +86,38 @@ used causes a refusal.
   its configured obligations. Treat the clean record as absence of data, not
   performance."
 
+**Composite score assertion - STATE THE NUMBER, do not skip it:**
+```jsonc
+{ "id":"A-SCORE-composite", "metric":"composite_score", "scope":"tenant",
+  "value":40, "caveat":"Band: At Risk. Trend: flat. PROVISIONAL - see OverallHealth.Method. Not yet reviewed with the business." }
+```
+- ❌ Listing only the component breakdown and never stating the overall
+  number. *(This is the exact gap that let a render step invent "24/100"
+  for a real value of 40 - there was no sentence anywhere stating the real
+  one for it to copy.)*
+- ✅ "The composite compliance-health score is 40 of 100 (At Risk, trend flat)
+  - provisional, pending business review of the scoring model."
+- If a `composite_score` block is in the plan, this assertion MUST be cited
+  and its number MUST appear in the prose in plain digits - never paraphrase
+  it as "low" or "moderate" without the actual number, and never let the
+  component breakdown stand in for stating the overall figure.
+
+**Score-component assertion (PROVISIONAL - the caveat is mandatory, never drop it):**
+```jsonc
+{ "id":"A-SCORE-risk_weighted", "metric":"component_score", "scope":"tenant",
+  "value":45, "comparator_value":0.20,
+  "caveat":"PROVISIONAL - see OverallHealth.Method. Not yet reviewed with the business." }
+```
+- ❌ "Risk-weighted exposure scores 45/100, a serious weakness in the programme."
+  *(Uncomputed severity - "serious weakness" is not in the assertion. Also drops
+  the mandatory PROVISIONAL caveat.)*
+- ✅ "Risk-weighted exposure scores 45 of 100 (weighted 20% of the composite) -
+  provisional, pending business review of the scoring model."
+- Only cite a component that actually appears in the assertion set this run -
+  some areas (e.g. evidence, timeliness) may have no score this pass. Never
+  imply a missing component is zero, poor, or absent-because-bad; simply do not
+  mention what was not supplied.
+
 **Aggregate finding:**
 ```jsonc
 { "id":"A-GHOST-AGG", "value":181, "of":331, "vs_comparator_pp":54.7 }

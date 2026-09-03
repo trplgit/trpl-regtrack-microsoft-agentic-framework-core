@@ -68,6 +68,47 @@ public sealed class ResolveDigestRecipientsActivity(
 
         var recipients = await repository.GetRecipientsAsync(input.TenantId);
 
+        /*  [DESIGN DOC Sec.5.3 - THE COST BOUNDARY] Subtract recipients who already hold this
+            week's claim, BEFORE anything is aggregated or composed.
+
+            The spec puts the boundary here explicitly: "resolve recipients ... NONE => EXIT
+            before any aggregation or LLM call", and "steps 5-7 - the only steps that cost
+            anything - run ONLY when there is a real, entitled, opted-in recipient".
+
+            Without this the claim was only consulted inside SendDigestActivity, i.e. AFTER
+            composition. Observed live: a re-run of an already-sent week made 3 LLM calls and then
+            reported Sent:0, Skipped:4 - full token cost, zero emails. At ~600 tenants any deploy
+            inside the send window, manual retry, or scheduler double-fire repeats the entire
+            weekly LLM bill for nothing (Sec.10.5).
+
+            The claim in SendDigestActivity STAYS. This filter is cheap and racy by nature - two
+            workers resolving in the same instant both see an unclaimed recipient - and that race
+            is exactly what the atomic claim is for. This saves the money; that guarantees
+            at-most-once.                                                                        */
+        var alreadyClaimed = (await repository.GetClaimedUserIdsAsync(
+            input.TenantId, DigestWeek.EndingFor(asOf))).ToHashSet();
+
+        if (alreadyClaimed.Count > 0)
+        {
+            var before = recipients.Count;
+            recipients = recipients.Where(r => !alreadyClaimed.Contains(r.UserId)).ToList();
+
+            for (var i = recipients.Count; i < before; i++)
+                metrics.RecordSkipped(FreeDigestSkipReason.AlreadySent);
+        }
+
+        if (recipients.Count == 0)
+        {
+            /*  Every recipient already served this week. This is the spec's step-4 exit, reached
+                without spending a token - previously this same state cost a full set of LLM calls
+                before anything noticed.                                                          */
+            return new ResolveDigestRecipientsOutput(
+                false,
+                EntitlementDecision.ExitNoRecipients.ToString(),
+                "Every recipient already holds this week's claim - exiting before any aggregation or LLM call.",
+                tenant.TenantName, weekEnding, [], 0);
+        }
+
         var groups = new Dictionary<string, (int RepresentativeUserId, List<DigestRecipientRef> Members)>(StringComparer.Ordinal);
         var withoutScope = 0;
 

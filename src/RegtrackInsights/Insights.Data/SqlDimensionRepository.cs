@@ -23,6 +23,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
     private const int UsersErrorBase       = 51100;
     private const int InternalErrorBase    = 51110;
     private const int EventErrorBase       = 51120;
+    private const int LicenceErrorBase     = 51160;
 
     /*  Measured: 30s on a large tenant, and the largest tenant in the estate carries ~1.49M
         past-due schedules and has not been timed. The default 30s command timeout would fail
@@ -88,6 +89,66 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             new { UserID = userId, CustomerID = customerId, AsOf = asOf, DormancyMonths = dormancyMonths },
             null, cancellationToken);
 
+    /*  [FIX] Licence's THROWs no longer fit the base/base+1/base+2 single-code-per-kind shape
+        every other dimension uses: sql/21 was moved off the 51130 block (collided outright with
+        sql/15_freetier_digest_log.sql) onto 51160-51169, AND split its two reused codes into one
+        per condition per CLAUDE.md Sec.5b - two reconciliation codes (51161/51162) and two
+        dictionary-gap codes (51165/51166), not one of each. The exact-match `errorBase+1`/
+        `errorBase+2` overload below cannot express that, so this call goes through the explicit
+        overload with the real code sets instead of introducing a false collision between them.  */
+    public Task<DimensionResult<LicenceControlTotals, LicenceRow>> GetLicenceAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<LicenceControlTotals, LicenceRow>(
+            "Licence", "dbo.usp_Insights_Dimension_Licence",
+            scopeDeniedCode: LicenceErrorBase,
+            reconciliationCodes: [LicenceErrorBase + 1, LicenceErrorBase + 2],
+            dictionaryGapCodes: [LicenceErrorBase + 5, LicenceErrorBase + 6],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
+    /*  [FIX] sql/22-25 all share ONE 51170-51179 block instead of one block each (see sql/22's
+        own header note: single-row/fixed-bucket tenant-wide aggregates, not per-member
+        dimensions, don't need a full 10-code block on top of each other's) - the clean
+        errorBase/+1/+2 convenience overload cannot express 4 procs sharing one block, so all
+        four go through the explicit overload with their real, individually-allocated codes,
+        same treatment as Licence above. None of the four throw a dictionary-gap code of their
+        own - EXEC dbo.usp_Insights_AssertStatusCoverage's own codes (sql/01) cover that path,
+        same as every other dimension - so dictionaryGapCodes is empty for all four.            */
+    public Task<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>> GetBacklogAgingAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<BacklogAgingControlTotals, BacklogAgingRow>(
+            "BacklogAging", "dbo.usp_Insights_Dimension_BacklogAging",
+            scopeDeniedCode: 51170,
+            reconciliationCodes: [51171],
+            dictionaryGapCodes: [],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
+    public Task<DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>> GetTimelinessFYAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<TimelinessFYControlTotals, TimelinessFYRow>(
+            "TimelinessFY", "dbo.usp_Insights_Dimension_TimelinessFY",
+            scopeDeniedCode: 51172,
+            reconciliationCodes: [],
+            dictionaryGapCodes: [],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
+    public Task<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>> GetForwardPipelineAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<ForwardPipelineControlTotals, ForwardPipelineRow>(
+            "ForwardPipeline", "dbo.usp_Insights_Dimension_ForwardPipeline",
+            scopeDeniedCode: 51173,
+            reconciliationCodes: [51174],
+            dictionaryGapCodes: [],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
+    public Task<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>> GetEvidenceIntegrityAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>(
+            "EvidenceIntegrity", "dbo.usp_Insights_Dimension_EvidenceIntegrity",
+            scopeDeniedCode: 51175,
+            reconciliationCodes: [51176],
+            dictionaryGapCodes: [],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
     /// <summary>
     /// Reads the five result sets positionally and translates the proc's THROWs into typed
     /// exceptions. ORDER IS THE CONTRACT - the procs emit no result-set names, so reading these
@@ -97,10 +158,28 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
     /// partial result set to lose here (unlike usp_Insights_GoldenInvariants, which selects
     /// first and then throws - see SqlGoldenRegressionRepository).
     /// </summary>
-    private async Task<DimensionResult<TControlTotals, TRow>> ExecuteAsync<TControlTotals, TRow>(
+    private Task<DimensionResult<TControlTotals, TRow>> ExecuteAsync<TControlTotals, TRow>(
         string dimension,
         string procedureName,
         int errorBase,
+        int userId,
+        int customerId,
+        object parameters,
+        Func<SqlMapper.GridReader, Task<TControlTotals>>? controlTotalsReader,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync<TControlTotals, TRow>(
+            dimension, procedureName,
+            scopeDeniedCode: errorBase,
+            reconciliationCodes: [errorBase + 1],
+            dictionaryGapCodes: [errorBase + 2],
+            userId, customerId, parameters, controlTotalsReader, cancellationToken);
+
+    private async Task<DimensionResult<TControlTotals, TRow>> ExecuteAsync<TControlTotals, TRow>(
+        string dimension,
+        string procedureName,
+        int scopeDeniedCode,
+        IReadOnlyCollection<int> reconciliationCodes,
+        IReadOnlyCollection<int> dictionaryGapCodes,
         int userId,
         int customerId,
         object parameters,
@@ -149,15 +228,15 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
 
             return result;
         }
-        catch (SqlException ex) when (ex.Number == errorBase)
+        catch (SqlException ex) when (ex.Number == scopeDeniedCode)
         {
             throw new DimensionScopeDeniedException(dimension, userId, customerId, ex);
         }
-        catch (SqlException ex) when (ex.Number == errorBase + 1)
+        catch (SqlException ex) when (reconciliationCodes.Contains(ex.Number))
         {
             throw new DimensionReconciliationException(dimension, customerId, ex);
         }
-        catch (SqlException ex) when (ex.Number == errorBase + 2)
+        catch (SqlException ex) when (dictionaryGapCodes.Contains(ex.Number))
         {
             throw new DimensionDictionaryGapException(dimension, ex);
         }

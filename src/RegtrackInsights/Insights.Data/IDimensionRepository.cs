@@ -3,9 +3,9 @@ using Insights.Domain;
 namespace Insights.Data;
 
 /// <summary>
-/// Wraps the nine dimension procs (sql/05, sql/07 - sql/14). Every one emits the SAME six result
-/// sets in the same order - control_totals, rows, detector_policy, assertions, findings,
-/// data_quality - which is what lets a single repository serve all of them.
+/// Wraps the thirteen dimension procs (sql/05, sql/07 - sql/14, sql/21 - sql/25). Every one emits
+/// the SAME six result sets in the same order - control_totals, rows, detector_policy, assertions,
+/// findings, data_quality - which is what lets a single repository serve all of them.
 ///
 /// EVERY METHOD CAN THROW, and that is the point:
 ///   <see cref="DimensionScopeDeniedException"/>       - caller has no authorised scope
@@ -67,4 +67,24 @@ public interface IDimensionRepository
     /// </summary>
     Task<DimensionResult<EventControlTotals, EventRow>> GetEventAsync(
         int userId, int customerId, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default);
+
+    /// <summary>Licences. Grain is licence TYPE, not branch. Branch-only scope (no category axis) - see LicenceControlTotals.</summary>
+    Task<DimensionResult<LicenceControlTotals, LicenceRow>> GetLicenceAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Backlog aging. Overdue schedules by the FY they fell due in - a flow metric, never compare across runs.</summary>
+    Task<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>> GetBacklogAgingAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Timeliness by fiscal year. Current-FY vs previous-FY on-time rate, anchored on ScheduleOn (due date).</summary>
+    Task<DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>> GetTimelinessFYAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Forward pipeline. Real due-next-90d counts by day-window - no "predicted at risk", no model exists yet.</summary>
+    Task<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>> GetForwardPipelineAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Evidence integrity. Review-trail PROXY only - EvidenceInSql is always false, see EvidenceIntegrityControlTotals.</summary>
+    Task<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>> GetEvidenceIntegrityAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 }

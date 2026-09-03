@@ -10,7 +10,7 @@ lying narrative"** is prevented. (Design spec §6.10.)
 | `02_composition_reflection.md` | Composition critic | loop, bounded |
 | `03_narrative.md` | Narrative | after composition is settled |
 | `04_narrative_reflection.md` | Narrative critic | loop, bounded |
-| `05_report_html.md` | Report generation (Way 1) | after narrative passes |
+| `05_report_html_fixed_holistic.md` | Report generation (Way 1, fixed 6-tab template) | after narrative passes |
 | `06_freetier_digest.md` | Free digest writer | free tier only |
 
 ---

@@ -125,6 +125,10 @@ BEGIN
         Instances             INT            NOT NULL,   -- distinct instances held, any role
         PerformerInstances    INT            NOT NULL,
         ReviewerInstances     INT            NOT NULL,
+        OtherRoleInstances    INT            NOT NULL,   -- [TRAP] RoleID outside {3,4} - e.g. RoleID 6, seen live on
+                                                           -- tenant 1403, not yet in DIMENSION_SPECS.md. Never blended
+                                                           -- into Performer/Reviewer - surfaced separately so an
+                                                           -- undocumented role cannot silently vanish into a total.
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
@@ -139,7 +143,7 @@ BEGIN
     );
 
     INSERT #rows (UserID, UserName, IsActive, Instances, PerformerInstances, ReviewerInstances,
-                  Overdue, ImprisonmentInstances, BranchesCovered, Logins12m,
+                  OtherRoleInstances, Overdue, ImprisonmentInstances, BranchesCovered, Logins12m,
                   CompletedEvents, OnTimeEvents)
     SELECT
         a.UserID,
@@ -148,6 +152,7 @@ BEGIN
         COUNT(DISTINCT a.ComplianceInstanceID),
         COUNT(DISTINCT CASE WHEN a.RoleID = 3 THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN a.RoleID = 4 THEN a.ComplianceInstanceID END),
+        COUNT(DISTINCT CASE WHEN a.RoleID NOT IN (3,4) THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN i.Imprisonment = 1 THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT i.BranchID),
@@ -459,6 +464,18 @@ BEGIN
         SELECT 'login_keyed_by_email',
                N'UserLoginTrack is keyed by Email, not UserID. A user whose email changed, or who shares an '
              + N'address, may have an inaccurate login count. Engagement bands are indicative, not exact.'
+        UNION ALL
+        SELECT 'undocumented_role_id',
+               CONCAT(N'RoleID(s) ', ids.List,
+                      N' appear on ', cnt.InstanceCount,
+                      N' assignment(s) in this scope and are not RoleID 3 (performer) or 4 (reviewer). ',
+                      N'Not classified as performer or reviewer work - counted only in OtherRoleInstances. ',
+                      N'DIMENSION_SPECS.md needs a BA-signed definition before this can be classified.')
+        FROM (SELECT STRING_AGG(CAST(RoleID AS VARCHAR(10)), ', ') AS List
+              FROM (SELECT DISTINCT RoleID FROM #asg WHERE RoleID NOT IN (3,4)) r) ids
+        CROSS JOIN (SELECT COUNT(DISTINCT ComplianceInstanceID) AS InstanceCount
+                    FROM #asg WHERE RoleID NOT IN (3,4)) cnt
+        WHERE ids.List IS NOT NULL
     ) q;
 
     DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #asg; DROP TABLE #quality;

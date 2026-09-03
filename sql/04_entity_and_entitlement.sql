@@ -54,6 +54,16 @@ GO
   Orphan roots are FLAGGED (RootKind = 'orphan') so the report can declare
   "this group's parent entity was deleted; it is shown as a top-level group"
   rather than silently re-parenting it.
+
+  -- [FIX] CustomerBranch.Status IS A SECOND ACTIVE FLAG, SEPARATE FROM IsDeleted
+  Status = 0 means the branch is DEACTIVATED: obligations remain tagged to it
+  but are not reported, and no schedules/alerts/escalations are generated for
+  them (CLAUDE.md Sec.5, METRIC_CALCULATION_REFERENCE.md Sec.1.1). "Active
+  branch" throughout this function now means IsDeleted = 0 AND Status = 1 -
+  the same generalisation applied at every hop IsDeleted already was.
+  A deactivated PARENT gets the identical orphan treatment a soft-deleted one
+  already gets: its still-active (IsDeleted=0, Status=1) children must remain
+  reachable, or they vanish from the rollup exactly as the apex-only bug did.
 ---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.tvfInsightsEntityTree', 'IF') IS NOT NULL
     DROP FUNCTION dbo.tvfInsightsEntityTree;
@@ -69,10 +79,12 @@ RETURN
         FROM CustomerBranch cb
         WHERE cb.CustomerID = @CustomerID
           AND cb.IsDeleted  = 0
+          AND cb.Status     = 1
           AND (cb.ParentID IS NULL
                OR NOT EXISTS (SELECT 1 FROM CustomerBranch p
                               WHERE p.ID = cb.ParentID
                                 AND p.IsDeleted = 0
+                                AND p.Status = 1
                                 AND p.CustomerID = cb.CustomerID))
     ),
     tree AS (
@@ -89,6 +101,7 @@ RETURN
         JOIN tree t ON c.ParentID = t.ID
         WHERE c.CustomerID = @CustomerID
           AND c.IsDeleted  = 0
+          AND c.Status     = 1
     )
     SELECT
         t.ID            AS BranchID,
@@ -99,7 +112,7 @@ RETURN
         t.RootKind,                       -- 'apex' | 'orphan'
         t.Depth,
         CASE WHEN EXISTS (SELECT 1 FROM CustomerBranch ch
-                          WHERE ch.ParentID = t.ID AND ch.IsDeleted = 0)
+                          WHERE ch.ParentID = t.ID AND ch.IsDeleted = 0 AND ch.Status = 1)
              THEN 'intermediate' ELSE 'leaf' END AS NodeType
     FROM tree t
 );
@@ -137,7 +150,7 @@ BEGIN
     SELECT @control = COUNT(*)
     FROM ComplianceInstance i
     JOIN CustomerBranch cb ON cb.ID = i.CustomerBranchID
-    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND i.IsDeleted = 0;
+    WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1 AND i.IsDeleted = 0;
 
     SELECT @rollup = SUM(DirectInstances) FROM #nodes;
 

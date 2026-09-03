@@ -82,9 +82,16 @@ public static class PaidReportAgentsRegistration
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
             LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
+        // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
+        // tabs, composition-agent-decided structure) - that file and report type were removed
+        // this session. Fixed Holistic (05_report_html_fixed_holistic.md, ReportType
+        // "fixed_holistic" = FixedHolisticComposition.ReportType) is now the only render prompt.
+        // A second IFixedHolisticReportHtmlAgent registration briefly existed alongside this one
+        // (so RenderHtmlActivity could pick between two agents by report type) - removed the same
+        // session once the plain path it existed to distinguish from was gone; back to one agent.
         services.AddSingleton<IReportHtmlAgent>(sp => new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
-            endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.",
-            LoadPromptSync(sp, "05_report_html.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            endpoint, model, apiKey, "ReportHtmlAgent", "Renders the fixed 6-tab Holistic Insights report as self-contained HTML.",
+            LoadPromptSync(sp, "05_report_html_fixed_holistic.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         // Headless Chromium, launched once at startup, shared by both DomPurifySanitizer and
         // PlaywrightReportQa - launching per-activity-call would be a multi-hundred-millisecond

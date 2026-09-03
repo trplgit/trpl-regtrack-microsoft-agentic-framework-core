@@ -108,14 +108,20 @@ public static class WorkerRegistration
         services.AddTransient<RecordTenantTokenUsageActivity>();
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
+        services.AddTransient<ComputeScoreActivity>();
         services.AddTransient<ComposeActivity>();
         services.AddTransient<ReflectOnCompositionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
         services.AddTransient<PublishGateActivity>();
         services.AddTransient<RenderHtmlActivity>();
+        services.AddTransient<InjectFontActivity>();
+        services.AddTransient<InjectCoverageGridActivity>();
+        services.AddTransient<InjectCoverageCssActivity>();
+        services.AddTransient<InjectCoverageScriptActivity>();
         services.AddTransient<NormalizeActivity>();
         services.AddTransient<SanitizeActivity>();
+        services.AddTransient<ValidateFixedHolisticStructureActivity>();
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<PersistActivity>();
 
@@ -152,10 +158,14 @@ public static class WorkerRegistration
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
+                ActivityCreator<ComputeScoreActivity>(sp),
                 ActivityCreator<ComposeActivity>(sp), ActivityCreator<ReflectOnCompositionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
+                ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
+                ActivityCreator<InjectCoverageCssActivity>(sp), ActivityCreator<InjectCoverageScriptActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
+                ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<SendDigestActivity>(sp));

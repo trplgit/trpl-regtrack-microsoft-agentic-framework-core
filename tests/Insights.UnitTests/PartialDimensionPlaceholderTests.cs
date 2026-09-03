@@ -10,7 +10,7 @@ namespace Insights.UnitTests;
 /// </summary>
 public sealed class PartialDimensionPlaceholderTests
 {
-    private const string Document = "<!DOCTYPE html><html><head></head><body><h1>Report</h1></body></html>";
+    private const string Document = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><h1>Report</h1></body></html>";
 
     [Fact]
     public void NoFailures_ReturnsTheDocumentUnchanged()

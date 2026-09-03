@@ -151,7 +151,7 @@ BEGIN
         FROM ComplianceInstance i2
         JOIN CustomerBranch cb ON cb.ID = i2.CustomerBranchID
         WHERE @UserID IS NULL AND cb.CustomerID = @CustomerID
-          AND cb.IsDeleted = 0 AND i2.IsDeleted = 0
+          AND cb.IsDeleted = 0 AND cb.Status = 1 AND i2.IsDeleted = 0
     ) s
     JOIN Compliance c ON c.ID = s.ComplianceID AND c.IsDeleted = 0;
 
@@ -169,6 +169,25 @@ BEGIN
       AND cso.ScheduleOn > @AsOf
       AND cso.ScheduleOn <= DATEADD(DAY, 30, @AsOf)
       AND (d.ClosureClass IS NULL OR d.ClosureClass = 'open');
+
+    /* Licence-lapse window, next 30 days. [FIX] The prior version read
+       Compliance.ComplianceType = 2 - confirmed live against prod (tenant 1403)
+       to be an unrelated 3,423-row in-table flag, NOT the licence module. Real
+       licence data lives in Lic_tbl_LicenseInstance, scoped here to the same
+       branches #i already resolved (so a scoped recipient never sees a licence
+       outside their authorised branches).
+       [TODO - verify live once DB reachable] Lic_tbl_LicenseInstance's
+       IsDeleted column was not confirmed live before this DB connection dropped.
+       Add "AND li.IsDeleted = 0" here if the column exists - CLAUDE.md Sec.3
+       requires IsDeleted=0 at every hop and this table has not been checked. */
+    IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
+    SELECT li.ID AS LicenseId
+    INTO #lic
+    FROM Lic_tbl_LicenseInstance li
+    WHERE li.CustomerID = @CustomerID
+      AND li.CustomerBranchID IN (SELECT DISTINCT BranchID FROM #i)
+      AND li.EndDate > @AsOf
+      AND li.EndDate <= DATEADD(DAY, 30, @AsOf);
 
     /* Backward window: ABSOLUTE completed count only. See recency warning above. */
     DECLARE @completedLast7 INT = (
@@ -198,7 +217,7 @@ BEGIN
         -- severity radar: next 30 days - THE CONVERSION HOOK (4)
         (SELECT COUNT(*) FROM #due)                                                                AS DueNext30,
         (SELECT COUNT(*) FROM #due WHERE Imprisonment = 1)                                         AS ImprisonmentDueNext30,
-        (SELECT COUNT(*) FROM #due WHERE ComplianceType = 2)                                       AS LicencesLapsingNext30,
+        (SELECT COUNT(*) FROM #lic)                                                                AS LicencesLapsingNext30,
         (SELECT COUNT(*) FROM #due WHERE RiskType = 3)                                             AS CriticalDueNext30,
 
         -- momentum: backward, ABSOLUTE COUNT ONLY (1)
@@ -210,7 +229,7 @@ BEGIN
         (SELECT COUNT(DISTINCT BranchID) FROM #i i2
           WHERE EXISTS (SELECT 1 FROM #due dd WHERE dd.ComplianceInstanceID = i2.ComplianceInstanceID)) AS BranchesWithUpcoming;
 
-    DROP TABLE #i; DROP TABLE #due;
+    DROP TABLE #i; DROP TABLE #due; DROP TABLE #lic;
 END
 GO
 

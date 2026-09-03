@@ -41,7 +41,12 @@ IF OBJECT_ID('dbo.usp_Insights_StatusDataQuality',    'P') IS NOT NULL DROP PROC
 IF OBJECT_ID('dbo.usp_Insights_AssertStatusCoverage', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_AssertStatusCoverage;
 GO
 
-/*   Dimension procedures (sql/05, 07-14)  */
+/*   Dimension procedures (sql/05, 07-14, 21, 22, 23, 24, 25)  */
+IF OBJECT_ID('dbo.usp_Insights_Dimension_EvidenceIntegrity', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_EvidenceIntegrity;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_ForwardPipeline', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_ForwardPipeline;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_TimelinessFY', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_TimelinessFY;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_BacklogAging', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_BacklogAging;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Licence',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Licence;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Users',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Users;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Internal',    'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Internal;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Event',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Event;
@@ -66,6 +71,7 @@ IF OBJECT_ID('dbo.tvfInsightsScopedInstances',   'IF') IS NOT NULL DROP FUNCTION
 IF OBJECT_ID('dbo.tvfInsightsScopePairs',        'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsScopePairs;
 IF OBJECT_ID('dbo.tvfInsightsEntityTree',        'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsEntityTree;
 IF OBJECT_ID('dbo.tvfInsightsOverdueSchedules',  'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsOverdueSchedules;
+IF OBJECT_ID('dbo.tvfInsightsForwardPipelineSchedules', 'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsForwardPipelineSchedules;
 GO
 
 /*-- 3. View ----------------------------------------------------------------*/

@@ -25,6 +25,10 @@ Two products, already present in `Product` table of `vitComplianceSystem`:
 |---|---|
 | `docs/RegTrack_Insights_System_Design_v1.md` | **The spec.** Every decision + rationale. Section refs below point here. |
 | `docs/DIMENSION_SPECS.md` | Contracts for all 9 dimensions |
+| `docs/METRIC_CALCULATION_REFERENCE.md` | **Every data point: definition, derivation, traps, QA checks** |
+| `docs/PAID_TIER_SAMPLE_REFERENCE.md` | The target report shape, block by block, and what is not yet built |
+| `docs/LEGAL_BRIEF_peer_comparison.md` | **[OPEN]** Counsel question gating the coverage-gaps dimension |
+| `samples/` | Reconciled real-data report samples (anonymised) |
 | `docs/RegTrack_Classification_Dictionary_v1.xlsx` | BA-signed status/enum semantics |
 | `PHASE_1A_BUILD_BRIEF.md` | Phase 1a tasks, acceptance criteria, validation findings |
 | `docs/API_CONTRACTS.md` | The five API endpoints; the IDOR rule |
@@ -188,10 +192,48 @@ On one tenant that was a phantom 3,946-instance gap.
 | `ComplianceTransaction.Penalty` | Essentially empty (~₹300 total). Report **exposure**, never *incurred* |
 | `NatureOfCompliance` | ~49% "Others" on the reference tenant — declare the gap |
 | `Compliance.Frequency` | ~28.5% NULL |
+| `CustomerBranch.Status` | **A SECOND active flag.** `Status = 0` = deactivated: obligations remain but are frozen - not reported, no schedules or alerts. Filter `IsDeleted = 0 AND Status = 1` everywhere. Omitting it overstated overdue by **28%** on one tenant |
+| `ComplianceInstance.IsAvantis` | **OBSOLETE - ignore it.** Set on 97.6% of instances (3,580,854 of 3,670,054), so it discriminates nothing, and 1.9M of those are NOT Labour. The canonical view `vw_ci_ActiveInstance` maps `IsAvantis -> Labour`; that mapping is **stale**. Use `Act.ComplianceCategoryId` for category |
 | Pre-flight procs | A helper that `SELECT`s shifts the caller's result-set contract by one — and only for callers that invoke it, so offsets differ per procedure |
 | `Compliance.IsDeleted` | Instances can reference a **soft-deleted** Compliance master (70 on one tenant). Omitting the filter makes the control total disagree with every dimension |
 | SQL file encoding | The deployment path is **not** UTF-8 aware. It corrupted a pre-existing RegTrack proc (`USP_GetEscalationCounts_Mobile_Statutory`) as well as ours |
 | Character detection | Default collation is accent-insensitive; `LIKE` gives false positives when detecting non-ASCII |
+| `Lic_tbl_LicenseInstance.LicenseTypeID` | NOT NULL, but real data still needs to express "no type assigned" - some rows use **-1** as a sentinel instead. Confirmed live (UAT tenant 29): 5 legacy licences (2019-2021). Treat any `LicenseTypeID <= 0` as untyped, never as a broken reference - a *positive* id with no matching type row is the real referential break |
+
+---
+
+## 5b. Error code allocation
+
+Every `THROW` code is unique across the whole codebase, and each file owns a
+block of ten. Within a block:
+
+```
+x0        SCOPE DENIED
+x1 - x4   RECONCILIATION FAILED
+x5 - x9   DICTIONARY / MASTER DATA GAP
+```
+
+| Block | File | Block | File |
+|---|---|---|---|
+| 51000-51009 | `01`, `02` | 51100-51109 | `12` users |
+| 51010-51019 | `03` scope | 51110-51119 | `13` internal |
+| 51020-51029 | `04` entity/entitlement | 51120-51129 | `14` event |
+| 51030-51039 | `05` location | 51130-51139 | `15` digest log |
+| 51050-51059 | `07` entity | 51140-51149 | `16` suppression |
+| 51060-51069 | `08` risk | 51150-51159 | `20` forward pipeline |
+| 51070-51079 | `09` nature | 51160-51169 | `21` licence |
+| 51080-51089 | `10` departments | 51040-51049, 51170+ | **free** |
+| 51090-51099 | `11` act | | |
+
+> **[TRAP] One code per CONDITION, never per category of condition.** Seven files
+> originally reused a single code for two or three different failures - one used
+> 51101 for three distinct reconciliation errors. An operator seeing the code
+> could not tell which check failed without reading the message text, and two
+> files had also collided on 51130 outright. A code that does not identify a
+> condition is not doing its job.
+
+**Adding a new file:** take the next free block, declare it in the header
+comment (`Error block NNNNN-NNNNN`), and follow the x0/x1-x4/x5-x9 convention.
 
 ---
 

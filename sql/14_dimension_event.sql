@@ -62,7 +62,7 @@ BEGIN
     FROM EventInstance ei
     JOIN CustomerBranch cb ON cb.ID = ei.CustomerBranchID
     JOIN #branch b ON b.BranchID = ei.CustomerBranchID
-    WHERE ei.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.CustomerID = @CustomerID;
+    WHERE ei.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.Status = 1 AND cb.CustomerID = @CustomerID;
 
     CREATE CLUSTERED INDEX IX_ei ON #ei (EventID, EventInstanceID);
 

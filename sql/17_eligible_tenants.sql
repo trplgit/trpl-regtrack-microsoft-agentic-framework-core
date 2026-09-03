@@ -78,6 +78,7 @@ BEGIN
     JOIN CustomerBranch cb ON cb.ID = ea.BranchID
     WHERE ea.UserID = @UserID
       AND cb.IsDeleted = 0
+      AND cb.Status = 1
       AND (@CustomerID IS NULL OR cb.CustomerID = @CustomerID)
     GROUP BY cb.CustomerID;
 
@@ -100,6 +101,7 @@ BEGIN
     FROM CustomerBranch cb
     LEFT JOIN EntitiesAssignment ea ON ea.BranchID = cb.ID
     WHERE cb.IsDeleted = 0
+      AND cb.Status = 1
       AND cb.CustomerID IN (SELECT CustomerID FROM #scope)
     GROUP BY cb.CustomerID;
 
