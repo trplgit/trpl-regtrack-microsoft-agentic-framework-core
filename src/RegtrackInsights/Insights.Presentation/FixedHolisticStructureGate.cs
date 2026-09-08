@@ -33,6 +33,16 @@ namespace Insights.Presentation;
 ///    (prose instruction, not always followed), just for Coverage's markup shape rather than
 ///    score-card count.
 ///
+///    [FIX 2026-09-07] That second failure mode recurred twice MORE on tenant 29 even after
+///    narrowing the render agent's job to "just leave one placeholder div" - ruling out one-off
+///    sampling luck. CoverageGridInjector no longer trusts the render agent with ANY of this
+///    pane's markup: it now replaces the section's entire body unconditionally with deterministic
+///    content (05_report_html_fixed_holistic.md's Tab 3 section asks for nothing but an empty
+///    `&lt;div id="di-pane-3-body"&gt;&lt;/div&gt;` now). This check is therefore expected to
+///    always pass in practice - it stays as defense-in-depth against a malformed
+///    `&lt;section id="di-pane-3"&gt;` the injector itself declined to touch (see its own no-op
+///    conditions), not as the primary defense against a render-agent authoring miss any more.
+///
 /// Regex-based, not a real HTML/CSS parser - same deliberate posture as ReportEmitNormalizer
 /// (see its own doc comment): a fast, auditable static check for the two specific violation
 /// classes found live, not a general-purpose HTML validator. Both checks are no-ops (approve) on

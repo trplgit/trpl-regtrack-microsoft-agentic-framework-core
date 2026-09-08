@@ -86,16 +86,11 @@ BEGIN
         WHERE ucm.CustomerID = @CustomerID
           AND ucm.ProductID  = 18
           AND ucm.IsActive   = 0        -- INVERTED
-          AND u.IsDeleted    = 0
-          -- Durable opt-outs (Sec.5.4). The store is sql/16, so the earlier TODO here is
-          -- satisfied: suppression is keyed (CustomerID, UserID) and SURVIVES tier changes,
-          -- so an upgrade/downgrade cycle cannot silently re-subscribe someone who asked to
-          -- stop. sql/16 need not precede this file at INSTALL time (SQL Server defers
-          -- name resolution inside a procedure body), but it must exist before this
-          -- procedure is first EXECUTED.
-          AND NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression s
-                          WHERE s.CustomerID = ucm.CustomerID
-                            AND s.UserID     = ucm.UserID);
+          AND u.IsDeleted    = 0;
+        -- TODO: subtract per-recipient opt-outs once that store exists (Sec.5.4).
+        --       Opt-out is DURABLE and must SURVIVE tier changes - otherwise an
+        --       upgrade/downgrade cycle silently re-subscribes someone who asked
+        --       to stop.
 
         IF @recips = 0
             SELECT @decision = 'EXIT_NO_RECIPIENTS',
@@ -163,31 +158,15 @@ BEGIN
     INTO #due
     FROM #i i
     JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
-    LEFT JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID = cso.ID
-    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = rct.ComplianceStatusID
+    /*  [PERF] explicit latest-status seek, never the 45.7M-row view - see sql/01 */
+    OUTER APPLY (SELECT TOP 1 t.StatusId FROM ComplianceTransaction t
+                 WHERE t.ComplianceScheduleOnID = cso.ID
+                 ORDER BY t.Dated DESC, t.ID DESC) rct
+    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = rct.StatusId
     WHERE cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1
       AND cso.ScheduleOn > @AsOf
       AND cso.ScheduleOn <= DATEADD(DAY, 30, @AsOf)
       AND (d.ClosureClass IS NULL OR d.ClosureClass = 'open');
-
-    /* Licence-lapse window, next 30 days. [FIX] The prior version read
-       Compliance.ComplianceType = 2 - confirmed live against prod (tenant 1403)
-       to be an unrelated 3,423-row in-table flag, NOT the licence module. Real
-       licence data lives in Lic_tbl_LicenseInstance, scoped here to the same
-       branches #i already resolved (so a scoped recipient never sees a licence
-       outside their authorised branches).
-       [TODO - verify live once DB reachable] Lic_tbl_LicenseInstance's
-       IsDeleted column was not confirmed live before this DB connection dropped.
-       Add "AND li.IsDeleted = 0" here if the column exists - CLAUDE.md Sec.3
-       requires IsDeleted=0 at every hop and this table has not been checked. */
-    IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
-    SELECT li.ID AS LicenseId
-    INTO #lic
-    FROM Lic_tbl_LicenseInstance li
-    WHERE li.CustomerID = @CustomerID
-      AND li.CustomerBranchID IN (SELECT DISTINCT BranchID FROM #i)
-      AND li.EndDate > @AsOf
-      AND li.EndDate <= DATEADD(DAY, 30, @AsOf);
 
     /* Backward window: ABSOLUTE completed count only. See recency warning above. */
     DECLARE @completedLast7 INT = (
@@ -217,7 +196,7 @@ BEGIN
         -- severity radar: next 30 days - THE CONVERSION HOOK (4)
         (SELECT COUNT(*) FROM #due)                                                                AS DueNext30,
         (SELECT COUNT(*) FROM #due WHERE Imprisonment = 1)                                         AS ImprisonmentDueNext30,
-        (SELECT COUNT(*) FROM #lic)                                                                AS LicencesLapsingNext30,
+        (SELECT COUNT(*) FROM #due WHERE ComplianceType = 2)                                       AS LicencesLapsingNext30,
         (SELECT COUNT(*) FROM #due WHERE RiskType = 3)                                             AS CriticalDueNext30,
 
         -- momentum: backward, ABSOLUTE COUNT ONLY (1)
@@ -229,7 +208,7 @@ BEGIN
         (SELECT COUNT(DISTINCT BranchID) FROM #i i2
           WHERE EXISTS (SELECT 1 FROM #due dd WHERE dd.ComplianceInstanceID = i2.ComplianceInstanceID)) AS BranchesWithUpcoming;
 
-    DROP TABLE #i; DROP TABLE #due; DROP TABLE #lic;
+    DROP TABLE #i; DROP TABLE #due;
 END
 GO
 

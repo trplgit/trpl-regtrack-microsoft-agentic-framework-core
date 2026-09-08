@@ -1,49 +1,22 @@
-/*==========================================================================
-  RegTrack Insights - Phase 1d, Step 15
-  ELIGIBLE TENANTS  (the IDOR guard)
+/*===========================================================================
+  RegTrack Insights - API support
+  ELIGIBLE TENANTS - the server-side IDOR guard (docs/API_CONTRACTS.md, Sec.1)
 
-  Spec reference : RegTrack_Insights_System_Design_v1.md Sec.5.6.2, Sec.5.6.3
-                   docs/API_CONTRACTS.md Sec.1 (GET /api/insights/tenants)
-  Purpose        : Given an authenticated user, return the tenants that user is
-                   allowed to see Insights for - the server own answer, derived
-                   from nothing the client supplied but the identity.
+  Authored by Claude Code; deployed to production 2026-09-03. Pulled from
+  sys.sql_modules and committed here so the repo matches what is running.
 
-  -- THE CENTRAL TRAP ------------------------------------------------------
-  This procedure IS the IDOR control. Every other Insights endpoint takes a
-  client-supplied @CustomerID and must re-run this membership test against it,
-  on every single request. Never cache the answer in session state and trust it
-  later: 53 users span more than one customer, and a user who switches tenants
-  legitimately is indistinguishable - at the HTTP layer - from one who edits the
-  id in the URL. The difference is only ever this query.
+  Returns every tenant the caller may generate a report for, with tier and
+  scope class. The API MUST call this on every request and reject any
+  client-supplied tenant id not in the result - never trust the client.
 
-  -- ELIGIBILITY IS THE CONJUNCTION OF THREE THINGS ------------------------
+  Eligibility is the conjunction of three tests (design spec Sec.5.6.2):
     1. Customer.IsDeleted = 0
-    2. RegInsights mapped AND enabled  (ProductMapping.IsActive = 0 - INVERTED)
-    3. The user has scope rows (EntitiesAssignment) for that customer
+    2. RegInsights product mapped AND enabled (ProductMapping.IsActive = 0 - INVERTED)
+    3. The user has scope rows (EntitiesAssignment) on OPERATING branches
 
-  Dropping any one is a leak, and (3) is the one that looks redundant and is
-  not: a customer can be fully entitled while this particular user has no
-  authorised branches in it. Entitlement is customer-level, scope is user-level,
-  and only the pair means "this user may see this tenant".
-
-  -- OTHER TRAPS ----------------------------------------------------------
-  * ProductMapping.IsActive IS INVERTED: 0 = ENABLED, 1 = DISABLED. Never
-    "correct" this to = 1 - it disables the product for every customer.
-  * Tier is PAID-WINS. A tenant mid-transition is briefly mapped to both 18 and
-    19; reporting basic then would downgrade a paying customer UI. This mirrors
-    usp_Insights_EvaluateGate EXIT_SUPERSEDED, which resolves the same overlap
-    the same way.
-  * ScopeClass duplicates usp_Insights_ClassifyScope CASE deliberately - that
-    proc is per-(user, tenant) and this one is set-based over all of a user
-    tenants. If either changes, CHANGE BOTH: the picker badge and the report
-    scope classification disagreeing is a support ticket nobody can reproduce.
-  * Scope source is EntitiesAssignment, NOT ComplianceCategoryMgmtUser
-    (Sec.5.5.4). Matches dbo.tvfInsightsScopePairs exactly.
-  * Active branches only, again matching tvfInsightsScopePairs. A user whose
-    only branches are soft-deleted has no live scope and is not eligible.
-
-  IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
-==========================================================================*/
+  No error block: this proc never THROWs - an ineligible tenant is simply
+  absent from the result, and an empty result means DENY.
+===========================================================================*/
 
 SET NOCOUNT ON;
 GO
@@ -58,13 +31,7 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    /*----------------------------------------------------------------------
-      1. The user scope footprint, per customer.
-
-         One pass over EntitiesAssignment for THIS user, joined up to the
-         owning customer through CustomerBranch. Active branches only.
-         A customer absent from here fails eligibility test (3).
-    ----------------------------------------------------------------------*/
+    /*-- 1. The user's scope footprint, per customer. Active branches only. --*/
     CREATE TABLE #scope (
         CustomerID      INT PRIMARY KEY,
         ScopeBranches   INT NOT NULL,
@@ -82,13 +49,7 @@ BEGIN
       AND (@CustomerID IS NULL OR cb.CustomerID = @CustomerID)
     GROUP BY cb.CustomerID;
 
-    /*----------------------------------------------------------------------
-      2. The tenant universe for those same customers.
-
-         Denominator for the scope classification: how many active branches
-         the customer has, and how many distinct categories appear across ANY
-         user assignments. Both mirror usp_Insights_ClassifyScope.
-    ----------------------------------------------------------------------*/
+    /*-- 2. The tenant universe for those customers (mirrors ClassifyScope). --*/
     CREATE TABLE #universe (
         CustomerID       INT PRIMARY KEY,
         TenantBranches   INT NOT NULL,
@@ -105,12 +66,7 @@ BEGIN
       AND cb.CustomerID IN (SELECT CustomerID FROM #scope)
     GROUP BY cb.CustomerID;
 
-    /*----------------------------------------------------------------------
-      3. Entitlement, resolved paid-wins.
-
-         Product 18 = RegInsights Basic (free), 19 = RegInsights Pro (paid).
-         IsActive = 0 means ENABLED.
-    ----------------------------------------------------------------------*/
+    /*-- 3. Entitlement, resolved paid-wins. 18 = Basic, 19 = Pro. ---------*/
     CREATE TABLE #entitled (
         CustomerID INT PRIMARY KEY,
         Tier       VARCHAR(10) NOT NULL);
@@ -125,10 +81,7 @@ BEGIN
       AND pm.CustomerID IN (SELECT CustomerID FROM #scope)
     GROUP BY pm.CustomerID;
 
-    /*----------------------------------------------------------------------
-      4. The conjunction. An INNER JOIN on every axis - a customer missing
-         from any one of the three sets simply does not appear.
-    ----------------------------------------------------------------------*/
+    /*-- 4. The conjunction - INNER JOIN on every axis. -----------------------*/
     SELECT
         c.ID    AS TenantId,
         c.Name  AS Name,
@@ -153,5 +106,5 @@ BEGIN
 END
 GO
 
-PRINT 'Eligible tenants (IDOR guard) installed.';
+PRINT 'Eligible tenants installed.';
 GO

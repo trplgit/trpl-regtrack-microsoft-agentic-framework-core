@@ -578,142 +578,34 @@ Card 3 — **Licence** (pairs shape): corroborated lapses, stores affected, avg 
 expiring-in-90d — from `LicenceControlTotals` and Licence dimension rows. If `expiring_90d` has no
 real assertion, omit that one pair rather than invent it - 3 real pairs beats 4 with one fake.
 
-## Tab 3 — Coverage (`di-kpigrid` KPI card + region-grouped, REAL CLICK-TO-SELECT store grid)
+## Tab 3 — Coverage
 
-You are given a `coverage_status_counts` object alongside `assertions` for this run:
-`{total, healthy, under_configured, has_ownerless, unmapped}` - 5 REAL numbers, leaf branches only,
-computed the same way the store grid itself is classified (see the note below - never recomputed
-or guessed, always echoed exactly). **This is the ONE exception to "every number comes from
-assertions" in this whole prompt.** Never use these 5 numbers as material for a narrative claim,
-a comparative, or a ranking outside the chip/KPI/legend text below - if you want to say something
-about coverage in prose, it needs its own assertion, exactly like everywhere else in this document.
+**[CHANGED LIVE, 2026-09-07] You do not author ANY of this pane's body.** Every number and every
+markup shape this pane needs (`coverage_status_counts`, the region/tile grid, the KPI card, the
+filter chips, the legend, the detail panel) is already known deterministically before you are ever
+called - there is no real judgement call for you to make here, unlike a narrative-prose pane.
+Earlier versions of this prompt asked you to write everything except the grid tiles themselves, on
+the theory that a large hand-authored per-row grid was the only unreliable part - that was wrong: a
+live render skipped the whole grid shape and substituted a plain KPI-only summary card instead
+(FixedHolisticStructureGate's own doc comment, item 3 - "found live twice"), confirmed AGAIN twice
+more on tenant 29 with the previous instructions. Writing any part of this pane's markup, even "just"
+the wrapper around the grid, is real output you could get wrong on any given attempt - so none of
+it is your job any more.
 
-**[CHANGED LIVE, 2026-09-02] You do not author the store grid itself.** A live render asked to
-hand-write one `<button>` tile per real leaf branch (up to 177 for tenant 29) silently drew a
-SAMPLE (10 of 177) instead of the whole population, while still stating the true full counts in
-the chip/legend/KPI text next to it - the same class of problem as the driving script (see its own
-note further down). The grid is generated deterministically, post-generation, from the real data -
-your only job is to leave the single placeholder `<div id="di-covgrid-root"></div>` exactly where
-the region/tile markup would go (see the section marked "GRID GOES HERE" below) and write
-everything else in this pane for real, using `coverage_status_counts`.
-
-**[REBUILT LIVE, 2026-09-02] This tab reproduces the REAL production reference component
-(`detailed-insights.component.html`/`.css`/`.data.ts`) exactly - not a reinterpretation. The
-reference's own 4-state taxonomy is NOT a mock invention: it is copied verbatim (same 4 names,
-even the same distribution numbers) from this repo's own `docs/PAID_TIER_SAMPLE_REFERENCE.md`
-Sec.3.4 (`status_counts: healthy 530 / under_configured 46 / has_ownerless 26 / unmapped 30`).
-Never rename these to "Healthy"/"No obligations"/"High ownerless" or drop `unmapped` - a prior
-render did both and it was a real defect, not a style choice, confirmed against the reference
-component directly.**
-
-**The 4 real states, their labels, and their ONE consistent colour each - identical across chip
-swatch, tile fill, and detail-panel pill, never different per element:**
-
-| `status` key | Label | Colour | Meaning |
-|---|---|---|---|
-| `healthy` | Mapped | `#2e9e5b` (green) | Obligations mapped, no ownerless gap |
-| `under_configured` | Under-configured | `#e0a106` (yellow) | Materially fewer obligations mapped than peer branches |
-| `has_ownerless` | Has ownerless | `#e07a1f` (orange) | Has obligations with no performer assigned |
-| `unmapped` | Unmapped | `#c0392b` (red) | Zero obligations mapped at all - invisible to every overdue report |
-
-**Why `coverage_status_counts.under_configured` is always 0 today:** that status needs a real
-obligation-COUNT peer norm (how many obligations comparable branches carry) that no procedure
-computes yet - `usp_Insights_Dimension_Location`'s only real peer comparison (`VsPeerStateNormPP`)
-is an OVERDUE-RATE peer gap, a different concept, so it is never used to decide this. The chip, its
-swatch, and the legend entry still render (the taxonomy is real and complete even though no branch
-currently qualifies) - state this plainly in the caveats footer (§ below), the same "say less,
-never fabricate" treatment as every other gated piece in this document.
+Write ONLY this, exactly, as the entire content of `<section class="di-pane" id="di-pane-3"
+aria-label="Coverage">...</section>`:
 
 ```html
 <section class="di-pane" id="di-pane-3" aria-label="Coverage">
-  <div class="di-pane__head"><span class="di-secnum" aria-hidden="true">03</span><h2 class="di-pane__title">Key indicators</h2></div>
-  <div class="di-kpigrid">
-    <article class="di-kpi di-kpi--span12">
-      <!-- same di-kpi shape as tab 2 - stores mapped / ownerless / unmapped counts, all real -->
-    </article>
-  </div>
-  <div class="di-covwrap">
-    <div class="di-covmap">
-      <div class="di-covfilter" role="toolbar" aria-label="Coverage status counts">
-        <button type="button" class="di-covchip" data-filter="all">All <b class="tnum">{coverage_status_counts.total}</b></button>
-        <button type="button" class="di-covchip" data-filter="healthy"><i class="di-covchip__sw di-covchip__sw--healthy"></i>Mapped <b class="tnum">{coverage_status_counts.healthy}</b></button>
-        <button type="button" class="di-covchip" data-filter="under_configured"><i class="di-covchip__sw di-covchip__sw--under_configured"></i>Under-configured <b class="tnum">{coverage_status_counts.under_configured}</b></button>
-        <button type="button" class="di-covchip" data-filter="has_ownerless"><i class="di-covchip__sw di-covchip__sw--has_ownerless"></i>Has ownerless <b class="tnum">{coverage_status_counts.has_ownerless}</b></button>
-        <button type="button" class="di-covchip" data-filter="unmapped"><i class="di-covchip__sw di-covchip__sw--unmapped"></i>Unmapped <b class="tnum">{coverage_status_counts.unmapped}</b></button>
-      </div>
-      <!-- ============ GRID GOES HERE ============
-           Leave EXACTLY this one placeholder div - nothing else, no di-covregion/di-covtile
-           markup of your own. CoverageGridInjector replaces it with one real di-covregion block
-           per real StateName (grouped, most-branches-first, a null/blank state grouped as
-           "Unassigned state" - never dropped) and one real di-covtile button per real leaf
-           branch, all classified from the real data the same way coverage_status_counts already
-           was, so the two can never disagree. -->
-      <div id="di-covgrid-root"></div>
-      <!-- ========================================= -->
-      <div class="di-covlegend">
-        <span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--healthy"></i>Mapped <b class="tnum">{coverage_status_counts.healthy}</b></span>
-        <span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--under_configured"></i>Under-configured <b class="tnum">{coverage_status_counts.under_configured}</b></span>
-        <span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--has_ownerless"></i>Has ownerless <b class="tnum">{coverage_status_counts.has_ownerless}</b></span>
-        <span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--unmapped"></i>Unmapped <b class="tnum">{coverage_status_counts.unmapped}</b></span>
-      </div>
-    </div>
-    <!-- Sticky detail card - starts on the FIRST tile emitted above (script fires a synthetic
-         click on load, see the script block below), then updates for real on every click. Leave
-         every value EMPTY below - the injected script fills all of it, per real reference field
-         structure (di-covdetail__metrics/__m/__ml/__mv, six fields: Mapped, Coverage, Ownerless,
-         Overdue, Performer, Peer gap). -->
-    <aside class="di-covdetail di-covdetail--side" aria-live="polite">
-      <div class="di-covdetail__head">
-        <span class="di-covdetail__pill"><span class="di-covdetail__dot"></span></span>
-        <span class="di-covdetail__ref"></span>
-      </div>
-      <h4 class="di-covdetail__title"></h4>
-      <p class="di-covdetail__summary"></p>
-      <div class="di-covdetail__metrics">
-        <div class="di-covdetail__m"><div class="di-covdetail__ml">Mapped</div><div class="di-covdetail__mv tnum"></div></div>
-        <div class="di-covdetail__m"><div class="di-covdetail__ml">Coverage</div><div class="di-covdetail__mv tnum"></div></div>
-        <div class="di-covdetail__m"><div class="di-covdetail__ml">Ownerless</div><div class="di-covdetail__mv tnum"></div></div>
-        <div class="di-covdetail__m"><div class="di-covdetail__ml">Overdue</div><div class="di-covdetail__mv tnum"></div></div>
-        <div class="di-covdetail__m"><div class="di-covdetail__ml">Performer</div><div class="di-covdetail__mv"></div></div>
-        <div class="di-covdetail__m"><div class="di-covdetail__ml">Peer gap</div><div class="di-covdetail__mv tnum"></div></div>
-      </div>
-      <div class="di-covdetail__action"><div class="di-covdetail__action-h">Recommended action</div><p></p></div>
-    </aside>
-  </div>
+  <div id="di-pane-3-body"></div>
 </section>
 ```
 
-**[CHANGED LIVE, 2026-09-02] Do NOT write a `<script>` for this pane yourself, and do not write
-the store grid tiles yourself either.** Both are generated deterministically, post-generation
-(`CoverageGridInjector` then `CoverageScriptInjector`, same treatment the self-hosted Poppins font
-already gets from `PoppinsFontInjector`) - the script reads real `data-*` attributes straight off
-the injected `di-covtile` buttons (`data-st`, `data-branch-id`, `data-state`, `data-branch-name`,
-`data-instances`, `data-overdue`, `data-ownerless`, `data-performer`; there is no
-`data-overdue-pct` or `data-peer-gap` attribute - the script computes "Coverage %" and "Peer gap"
-itself from `data-instances` and the optional `data-peer-norm`, which is never written since no
-real per-branch peer-obligation-count norm exists yet). Two real, separate failure classes were
-found live from asking the render agent to author these itself every run: the SCRIPT (DOMPurify's
-default strip, DOMPurify's defensive strip of a script whose content contained HTML-tag-shaped
-text, the render agent simply omitting it on a given attempt) and the GRID (asked to hand-write up
-to 177 individual tiles, the render agent silently sampled instead of completing the population,
-while still stating the true full counts in the chip/legend/KPI text right next to it) - both
-vanish once neither is something you have to get right. If you write either yourself anyway it
-will be ignored (both injectors are idempotent / placeholder-anchored), so there is no benefit to
-attempting it - leave `<div id="di-covgrid-root"></div>` exactly as scaffolded above and this
-pane's `<div class="di-covdetail di-covdetail--side">...</div>` markup exactly as scaffolded
-below, with its inner text/values left for the injected script to fill in at load time, and move
-on to the CSS below.
-
-**[CHANGED LIVE, 2026-09-02] You do not write the Coverage pane's CSS either.** A live render
-shipped tiles as unfilled outline boxes and a colourless detail pill because the render agent's
-own "declare these rules verbatim" copy of this CSS silently dropped or malformed the colour
-declarations - the same failure family as the grid and the script above. This CSS is 100% static
-(zero data substitution, identical every render) and is now injected automatically
-(`CoverageCssInjector`), last inside `</head>`, so there is nothing left for you to write for this
-pane's styling. It references the SAME `--c-*`/`--fs-di-*`/`--gap-*`/`--r-*` tokens every other
-tab in this document already defines in your `:root` block - as long as those exist (they already
-do if you followed the rest of this prompt), nothing Coverage-specific needs adding to your
-`<style>` block at all.
+`CoverageGridInjector` replaces `<div id="di-pane-3-body"></div>` - and everything else you might
+put in this section instead - with the real KPI card, filter chips, region-grouped store grid, and
+detail panel, generated directly from the real data. Do not write `di-kpi`, `di-covfilter`,
+`di-covgrid`, `di-covtile`, `di-covlegend`, or `di-covdetail` markup of your own anywhere in this
+pane - it will be discarded either way, so there is no benefit to attempting it. Move on to Tab 4.
 
 ## Tab 4 — Operations (`di-kpigrid`, 3 cards: Timeliness real (+ upgrades), People real (+ upgrade), Evidence BLOCKED)
 

@@ -1,5 +1,7 @@
 /*===========================================================================
   RegTrack Insights - Phase 1b, Step 3
+  Error block 51060-51069.  Convention: x0 = SCOPE DENIED,
+  x1-x4 = RECONCILIATION FAILED, x5-x9 = DICTIONARY / MASTER DATA GAP.
   RISK DIMENSION
 
   Spec reference : docs/DIMENSION_SPECS.md section 5
@@ -76,12 +78,12 @@ BEGIN
     WHERE p.Semantic = 'RiskType' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL;
 
     IF NOT EXISTS (SELECT 1 FROM #risk)
-        THROW 51062, N'DICTIONARY GAP - no RiskType values are mapped in InsightsEnumPolarity. Refusing to compute a risk dimension.', 1;
+        THROW 51065, N'DICTIONARY GAP - no RiskType values are mapped in InsightsEnumPolarity. Refusing to compute a risk dimension.', 1;
 
     DECLARE @criticalRisk INT = (SELECT TOP 1 RiskType FROM #risk WHERE RiskLabel LIKE N'Critical%');
 
     IF @criticalRisk IS NULL
-        THROW 51062, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+        THROW 51066, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
 
     /*=====================================================================
       1. SCOPED INSTANCE BASE - both scope axes
@@ -109,12 +111,23 @@ BEGIN
     /*=====================================================================
       3. OWNERSHIP - an instance with no performer is ownerless
     =====================================================================*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
     IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #owned
-    FROM ComplianceAssignment ca
-    JOIN #inst i ON i.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;      -- RoleID 3 = performer
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);      -- RoleID 3 = performer
 
     /*=====================================================================
       4. PER-LEVEL ROWS - from the dictionary member list, not the facts
@@ -131,7 +144,7 @@ BEGIN
         Instances             INT            NOT NULL,
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
-        Ownerless             INT            NOT NULL,
+        NoInstanceOwner             INT            NOT NULL,
         ImprisonmentInstances INT            NOT NULL,
         ImprisonmentOverdue   INT            NOT NULL,
         BranchesCovered       INT            NOT NULL,
@@ -140,7 +153,7 @@ BEGIN
         Flags                 VARCHAR(200)   NULL
     );
 
-    INSERT #rows (RiskType, RiskLabel, Instances, Overdue, Ownerless,
+    INSERT #rows (RiskType, RiskLabel, Instances, Overdue, NoInstanceOwner,
                   ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered)
     SELECT
         r.RiskType,
@@ -222,15 +235,15 @@ BEGIN
       zero, "more than Critical" is 0 > 0 which is false, but the guard makes
       the intent explicit rather than relying on that.
     =====================================================================*/
-    DECLARE @criticalOwnerless INT =
-        (SELECT ISNULL(MAX(Ownerless),0) FROM #rows WHERE RiskType = @criticalRisk);
+    DECLARE @criticalNoInstanceOwner INT =
+        (SELECT ISNULL(MAX(NoInstanceOwner),0) FROM #rows WHERE RiskType = @criticalRisk);
 
     UPDATE #rows SET Flags =
         STUFF(
             CASE WHEN @hasAnyObligations = 1
                   AND Instances > 0
                   AND RiskType <> @criticalRisk
-                  AND Ownerless > @criticalOwnerless
+                  AND NoInstanceOwner > @criticalNoInstanceOwner
                  THEN ',ownership_gap_below_critical' ELSE '' END
         , 1, 1, '');
 
@@ -325,11 +338,11 @@ BEGIN
     /*  FINDING 2. Ownership not following severity. Policy-gated. */
     IF (SELECT EmitMode FROM #detector WHERE Detector='ownership_gap_below_critical') = 'individual'
         INSERT #assert
-        SELECT TOP 5 'A-OWNGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY Ownerless DESC) AS VARCHAR(5)),
-               'ownerless', RiskLabel, Ownerless, NULL, NULL,
-               @criticalOwnerless, Ownerless - @criticalOwnerless, 'worse',
+        SELECT TOP 5 'A-OWNGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY NoInstanceOwner DESC) AS VARCHAR(5)),
+               'ownerless', RiskLabel, NoInstanceOwner, NULL, NULL,
+               @criticalNoInstanceOwner, NoInstanceOwner - @criticalNoInstanceOwner, 'worse',
                N'ownership_gap_below_critical: attention follows severity, ownership does not'
-        FROM #rows WHERE Flags LIKE '%ownership_gap_below_critical%' ORDER BY Ownerless DESC;
+        FROM #rows WHERE Flags LIKE '%ownership_gap_below_critical%' ORDER BY NoInstanceOwner DESC;
     ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='ownership_gap_below_critical') = 'aggregate'
         /*  ComparatorValue stays NULL. Value here is a COUNT OF RISK LEVELS; putting
             Critical's ownerless COUNT beside it puts two different units in one

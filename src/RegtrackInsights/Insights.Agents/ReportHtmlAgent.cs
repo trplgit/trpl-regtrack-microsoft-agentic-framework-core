@@ -35,6 +35,16 @@ public interface IReportHtmlAgent
     /// it silently sampled instead of completing the population). Null when Location degraded or
     /// the report type does not use it (every prompt except 05_report_html_fixed_holistic.md
     /// ignores this parameter entirely).
+    ///
+    /// <paramref name="dimensionRowsJson"/> [ADDED 2026-09-08] - only meaningful for
+    /// 05_report_html_dimension_selection.md (DimensionSelectionComposition.ReportType). Keyed by
+    /// block name (same string as composition_plan.blocks[].block), each value the REAL per-member
+    /// "Rows" JSON array for that dimension (e.g. all real NatureRow entries, not just the
+    /// top-5-capped Assertions). [BUG FOUND LIVE, 2026-09-08] Without this, the render agent was
+    /// only ever given `assertions` (curated, comparative, capped) and had no complete real row set
+    /// to build a per-member data table from - asking it to "include a table of real rows" was
+    /// asking for data it was never actually given, which is why it kept skipping that instruction,
+    /// not a prompt-wording problem. Null/empty for every other report type.
     /// </summary>
     Task<AgentCallResult<string>> RenderAsync(
         CompositionPlan plan,
@@ -44,6 +54,7 @@ public interface IReportHtmlAgent
         string reportType,
         DateTime generatedAt,
         IReadOnlyList<LocationRow>? locationRows = null,
+        IReadOnlyDictionary<string, string>? dimensionRowsJson = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -63,8 +74,16 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
         string reportType,
         DateTime generatedAt,
         IReadOnlyList<LocationRow>? locationRows = null,
+        IReadOnlyDictionary<string, string>? dimensionRowsJson = null,
         CancellationToken cancellationToken = default)
     {
+        // Each value is already a real JSON array string (extracted from the dimension's own
+        // serialized Rows) - parsed back into JsonElement so it nests as real JSON in the payload
+        // below, not as an escaped string the render agent would have to un-escape itself.
+        var dimensionRows = dimensionRowsJson?.ToDictionary(
+            kv => kv.Key,
+            kv => JsonSerializer.Deserialize<JsonElement>(kv.Value));
+
         var payload = JsonSerializer.Serialize(
             new
             {
@@ -75,6 +94,7 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
                 report_type = reportType,
                 generated_at = generatedAt,
                 coverage_status_counts = ComputeCoverageStatusCounts(locationRows),
+                dimension_rows = dimensionRows,
             },
             JsonOptions);
 

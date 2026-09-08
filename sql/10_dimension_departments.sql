@@ -46,7 +46,7 @@ BEGIN
         WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
 
     IF @criticalRisk IS NULL
-        THROW 51082, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+        THROW 51085, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
 
     /*-- 1. SCOPED INSTANCE BASE (DepartmentID lives on the instance) ----*/
     IF OBJECT_ID('tempdb..#inst') IS NOT NULL DROP TABLE #inst;
@@ -70,12 +70,23 @@ BEGIN
     JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID;
 
     /*-- 3. OWNERSHIP + PEOPLE ------------------------------------------*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
     IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #owned
-    FROM ComplianceAssignment ca
-    JOIN #inst i ON i.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);
 
     IF OBJECT_ID('tempdb..#people') IS NOT NULL DROP TABLE #people;
     SELECT i.DepartmentID, COUNT(DISTINCT ca.UserID) AS DistinctUsers
@@ -100,8 +111,8 @@ BEGIN
         Instances             INT            NOT NULL,
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
-        Ownerless             INT            NOT NULL,
-        OwnerlessPct          DECIMAL(5,1)   NULL,
+        NoInstanceOwner             INT            NOT NULL,
+        NoInstanceOwnerPct          DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
         CriticalInstances     INT            NOT NULL,
         DistinctUsers         INT            NOT NULL,
@@ -111,7 +122,7 @@ BEGIN
         Flags                 VARCHAR(200)   NULL
     );
 
-    INSERT #rows (DepartmentID, DepartmentName, Instances, Overdue, Ownerless,
+    INSERT #rows (DepartmentID, DepartmentName, Instances, Overdue, NoInstanceOwner,
                   ImprisonmentInstances, CriticalInstances, DistinctUsers, BranchesCovered)
     SELECT
         d.DepartmentID, d.DepartmentName,
@@ -145,11 +156,11 @@ BEGIN
 
     UPDATE #rows SET
         OverduePct   = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * Overdue   / Instances END,
-        OwnerlessPct = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * Ownerless / Instances END;
+        NoInstanceOwnerPct = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * NoInstanceOwner / Instances END;
 
-    DECLARE @tenantOwnerlessPct DECIMAL(5,1) =
+    DECLARE @tenantNoInstanceOwnerPct DECIMAL(5,1) =
         CASE WHEN @scopedTotal = 0 THEN 0
-             ELSE 100.0 * (SELECT ISNULL(SUM(Ownerless),0) FROM #rows) / @scopedTotal END;
+             ELSE 100.0 * (SELECT ISNULL(SUM(NoInstanceOwner),0) FROM #rows) / @scopedTotal END;
 
     /*  Materiality floor on ranking - see the trap note in sql/05. */
     DECLARE @materialityFloor INT = 50;
@@ -167,7 +178,7 @@ BEGIN
             CASE WHEN @hasAnyObligations = 1 AND Instances >= @rankFloor
                   AND OverduePct > @tenantOverduePct
                  THEN ',worst_department' ELSE '' END +
-            CASE WHEN Instances > 0 AND OwnerlessPct >= 10.0 THEN ',high_ownerless' ELSE '' END +
+            CASE WHEN Instances > 0 AND NoInstanceOwnerPct >= 10.0 THEN ',high_no_instance_owner' ELSE '' END +
             CASE WHEN Instances > 0 AND DistinctUsers <= 1  THEN ',single_user_department' ELSE '' END
         , 1, 1, '');
 
@@ -184,8 +195,9 @@ BEGIN
         (SELECT COUNT(*) FROM #rows) AS DepartmentsReported,
         (SELECT COUNT(*) FROM #rows WHERE Instances > 0) AS DepartmentsWithObligations,
         @unassigned                  AS UnassignedInstances,
-        CASE WHEN @scopedTotal = 0 THEN 0 ELSE 100.0 * @unassigned / @scopedTotal END AS UnassignedPct,
-        @tenantOwnerlessPct          AS TenantOwnerlessPct;
+        CAST(CASE WHEN @scopedTotal = 0 THEN 0
+                  ELSE 100.0 * @unassigned / @scopedTotal END AS DECIMAL(5,1)) AS UnassignedPct,
+        @tenantNoInstanceOwnerPct          AS TenantNoInstanceOwnerPct;
 
     SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;
 
@@ -201,8 +213,8 @@ BEGIN
     INSERT #detector (Detector, Eligible, Flagged)
     SELECT 'worst_department', @material,
            (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%worst_department%')
-    UNION ALL SELECT 'high_ownerless', @withObl,
-           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%high_ownerless%')
+    UNION ALL SELECT 'high_no_instance_owner', @withObl,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%high_no_instance_owner%')
     UNION ALL SELECT 'single_user_department', @withObl,
            (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%single_user_department%');
 
@@ -242,18 +254,18 @@ BEGIN
                     ELSE N'' END), N'')
     FROM #rows WHERE Instances >= @rankFloor ORDER BY OverduePct DESC, Instances DESC;
 
-    IF (SELECT EmitMode FROM #detector WHERE Detector='high_ownerless') = 'individual'
+    IF (SELECT EmitMode FROM #detector WHERE Detector='high_no_instance_owner') = 'individual'
         INSERT #assert
-        SELECT TOP 5 'A-OWN-' + CAST(ROW_NUMBER() OVER (ORDER BY Ownerless DESC) AS VARCHAR(5)),
-               'ownerless_pct', DepartmentName, OwnerlessPct, NULL, NULL,
-               @tenantOwnerlessPct, OwnerlessPct - @tenantOwnerlessPct, 'worse', NULL
-        FROM #rows WHERE Flags LIKE '%high_ownerless%' ORDER BY Ownerless DESC;
-    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='high_ownerless') = 'aggregate'
+        SELECT TOP 5 'A-OWN-' + CAST(ROW_NUMBER() OVER (ORDER BY NoInstanceOwner DESC) AS VARCHAR(5)),
+               'no_instance_owner_pct', DepartmentName, NoInstanceOwnerPct, NULL, NULL,
+               @tenantNoInstanceOwnerPct, NoInstanceOwnerPct - @tenantNoInstanceOwnerPct, 'worse', NULL
+        FROM #rows WHERE Flags LIKE '%high_no_instance_owner%' ORDER BY NoInstanceOwner DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='high_no_instance_owner') = 'aggregate'
         INSERT #assert
-        SELECT 'A-OWN-AGG','departments_high_ownerless',N'tenant',
-               Flagged, NULL, Eligible, @tenantOwnerlessPct, FlaggedPct, 'worse',
+        SELECT 'A-OWN-AGG','departments_high_no_instance_owner',N'tenant',
+               Flagged, NULL, Eligible, @tenantNoInstanceOwnerPct, FlaggedPct, 'worse',
                N'aggregate - unassigned ownership is a tenant-wide pattern'
-        FROM #detector WHERE Detector='high_ownerless';
+        FROM #detector WHERE Detector='high_no_instance_owner';
 
     IF (SELECT EmitMode FROM #detector WHERE Detector='single_user_department') = 'individual'
         INSERT #assert

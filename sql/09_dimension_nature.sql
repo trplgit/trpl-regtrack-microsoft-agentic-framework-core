@@ -65,7 +65,7 @@ BEGIN
         WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
 
     IF @criticalRisk IS NULL
-        THROW 51072, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+        THROW 51075, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
 
     /*-- 1. SCOPED INSTANCE BASE ----------------------------------------*/
     IF OBJECT_ID('tempdb..#inst') IS NOT NULL DROP TABLE #inst;
@@ -96,12 +96,23 @@ BEGIN
     JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID;
 
     /*-- 3. OWNERSHIP ----------------------------------------------------*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
     IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #owned
-    FROM ComplianceAssignment ca
-    JOIN #inst i ON i.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);
 
     /*-- 4. MEMBER LIST = the nature master, plus retired natures that still
        carry obligations. See the trap note in the header.                */
@@ -114,7 +125,7 @@ BEGIN
        OR EXISTS (SELECT 1 FROM #inst i WHERE i.NatureId = n.ID);
 
     IF NOT EXISTS (SELECT 1 FROM #nature)
-        THROW 51072, N'MASTER DATA GAP - NatureOfCompliance master is empty. Refusing to compute a nature dimension.', 1;
+        THROW 51076, N'MASTER DATA GAP - NatureOfCompliance master is empty. Refusing to compute a nature dimension.', 1;
 
     /*-- 5. ROWS ---------------------------------------------------------*/
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
@@ -125,7 +136,7 @@ BEGIN
         Instances                INT            NOT NULL,
         Overdue                  INT            NOT NULL,
         OverduePct               DECIMAL(5,1)   NULL,
-        Ownerless                INT            NOT NULL,
+        NoInstanceOwner                INT            NOT NULL,
         ImprisonmentInstances    INT            NOT NULL,
         ImprisonmentOverdue      INT            NOT NULL,
         CriticalInstances        INT            NOT NULL,
@@ -140,7 +151,7 @@ BEGIN
         Flags                    VARCHAR(200)   NULL
     );
 
-    INSERT #rows (NatureId, NatureName, IsRetired, Instances, Overdue, Ownerless,
+    INSERT #rows (NatureId, NatureName, IsRetired, Instances, Overdue, NoInstanceOwner,
                   ImprisonmentInstances, ImprisonmentOverdue, CriticalInstances,
                   BranchesCovered, PenaltyBearingInstances,
                   FinancialPenaltyInstances, ClosureRiskInstances)
@@ -174,7 +185,7 @@ BEGIN
         THROW 51071, N'NATURE DIMENSION RECONCILIATION FAILED - an instance carries a NatureOfCompliance absent from the master. This is a referential break, not a tagging gap. Refusing to publish.', 1;
 
     IF @rowSum + @untagged <> @scopedTotal
-        THROW 51071, N'NATURE DIMENSION RECONCILIATION FAILED - per-nature sums plus the untagged bucket do not tie to the scoped instance total. Refusing to publish.', 1;
+        THROW 51072, N'NATURE DIMENSION RECONCILIATION FAILED - per-nature sums plus the untagged bucket do not tie to the scoped instance total. Refusing to publish.', 1;
 
     DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
     DECLARE @tenantOverduePct DECIMAL(5,1) =

@@ -46,8 +46,21 @@ builder.Services.AddInsightsWorker();
 // Durable Task orchestrator that runs them durably (build order step 11). Must come AFTER
 // AddInsightsData and AddInsightsWorker - the orchestration's activities depend on repositories
 // registered there and reuse the same PublishGate singleton, never a duplicate.
+//
+// [TEMP - client-only mode] A real worker is already live elsewhere on this shared UAT task hub
+// (confirmed: a session from a Kubernetes pod, trpl-regtrack-dot-net-core-api-*, actively
+// dequeuing - "Duplicate execution of 'FetchDimensionsActivity' was detected!" only happens when
+// TWO workers race the same message). Running a second local worker against the SAME shared
+// vitInsightsTaskHub just adds a second competitor rather than helping. Insights:ClientOnly=true
+// registers ONLY the client half (enqueue + poll status) and skips TaskHubWorker/
+// DurableTaskHostedService entirely, so this process never dequeues or executes anything - the
+// already-running remote worker does all the work, uninterrupted. Opt-in, defaults to today's
+// existing full-worker behaviour when unset.
 builder.Services.AddInsightsPaidReportAgents(builder.Configuration);
-builder.Services.AddInsightsOrchestration(builder.Configuration);
+if (builder.Configuration.GetValue("Insights:ClientOnly", false))
+    builder.Services.AddInsightsOrchestrationClient(builder.Configuration);
+else
+    builder.Services.AddInsightsOrchestration(builder.Configuration);
 
 // The paid_batch keep-warm lane (design doc Sec.4.2-4.5) - re-runs a (scope, reportType, period)
 // key a paying tenant has generated AND actually viewed recently, staggered by

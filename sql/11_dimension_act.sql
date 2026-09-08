@@ -135,7 +135,7 @@ BEGIN
         THROW 51091, N'ACT DIMENSION RECONCILIATION FAILED - an instance carries an ActID absent from the Act master. This is a referential break, not a linkage gap. Refusing to publish.', 1;
 
     IF @rowSum + @unlinked <> @scopedTotal
-        THROW 51091, N'ACT DIMENSION RECONCILIATION FAILED - per-Act sums plus the unlinked bucket do not tie to the scoped instance total. Refusing to publish.', 1;
+        THROW 51092, N'ACT DIMENSION RECONCILIATION FAILED - per-Act sums plus the unlinked bucket do not tie to the scoped instance total. Refusing to publish.', 1;
 
     DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
     DECLARE @tenantOverduePct DECIMAL(5,1) =
@@ -209,7 +209,8 @@ BEGIN
         (SELECT COUNT(DISTINCT State) FROM #rows WHERE State IS NOT NULL) AS StatesCovered,
         (SELECT COUNT(*) FROM #spread) AS ActsSpanningMultipleStates,
         @unlinked                    AS UnlinkedInstances,
-        CASE WHEN @scopedTotal = 0 THEN 0 ELSE 100.0 * @unlinked / @scopedTotal END AS UnlinkedPct,
+        CAST(CASE WHEN @scopedTotal = 0 THEN 0
+                  ELSE 100.0 * @unlinked / @scopedTotal END AS DECIMAL(5,1)) AS UnlinkedPct,
         @topRegulatorId              AS LargestRegulatorId,
         @topRegulatorShare           AS LargestRegulatorSharePct;
 

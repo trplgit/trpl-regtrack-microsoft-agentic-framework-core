@@ -149,8 +149,40 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         render shipped tiles as unfilled outline boxes and a colourless detail pill because that
         CSS silently dropped or malformed - see CoverageCssInjector's own [BUG FOUND LIVE] note.
         A no-op on any document that never rendered a Coverage grid at all.
-        [VERIFY BEFORE DEPLOY] in-flight 2.2 instances not checked this session.                   */
-    public const string Version = "2.3";
+        [VERIFY BEFORE DEPLOY] in-flight 2.2 instances not checked this session.
+
+        Bumped 2.3 -> 2.4: the render-through-validate sequence (RenderHtmlActivity through
+        ValidateFixedHolisticStructureActivity) is now wrapped in a bounded retry loop (up to 3
+        attempts) that re-renders from scratch on a FIXED_HOLISTIC_STRUCTURE_INVALID refusal, instead
+        of failing the whole run on the first one. Load-bearing - the ScheduleTask call sequence for
+        any run that needed more than one render attempt is now longer than a 2.3 instance's history
+        could replay against. Confirmed live on tenant 29: FixedHolisticStructureGate's own [BUG
+        FOUND LIVE] Coverage-grid check (documented "found live twice" there) failed two consecutive
+        manual runs with the identical violation before this fix - a per-call rendering miss, not a
+        fixed-input defect, so a fresh render attempt is a legitimate retry here (see this loop's own
+        doc comment). [VERIFY BEFORE DEPLOY] in-flight 2.3 instances not checked this session.
+
+        Bumped 2.4 -> 2.5: new ReportType "dimension_selection" (DimensionSelectionComposition) -
+        a caller-picked subset of dimensions, one pane each, no fixed 6-tab hero, no composite
+        score. Load-bearing for that report type specifically: ComputeScoreActivity's ScheduleTask
+        call is now conditionally SKIPPED (not just given different input) when
+        ReportType == "dimension_selection", a real call-sequence change, not just a payload-shape
+        one. Zero effect on any existing "fixed_holistic" or "compliance_health" instance - both
+        keep calling ComputeScoreActivity exactly as before, so no in-flight instance of either type
+        needs checking before this deploys. [VERIFY BEFORE DEPLOY] no "dimension_selection" instance
+        could have existed before this bump (the report type did not exist), so nothing of that type
+        needs checking either - first bump of this file where a new ReportType branch adds zero
+        replay risk by construction.
+
+        Bumped 2.5 -> 2.6: RenderHtmlInput gained DimensionRowsJson - payload-shape-only change,
+        same reasoning as the 1.1->1.2 TotalTokens bump (the ScheduleTask call SEQUENCE is
+        unchanged, only the payload shape, so not strictly required by DTFx's replay check, bumped
+        anyway per that precedent). Fixes a real gap found live the same day as this fix: the render
+        agent for ReportType "dimension_selection" was only ever given `assertions` (curated,
+        top-5-capped) and never a dimension's complete real row set, so its own prompt instruction
+        to "include a table of real rows" kept getting skipped - not a wording problem, a missing-
+        data problem. [VERIFY BEFORE DEPLOY] in-flight 2.5 instances not checked this session.       */
+    public const string Version = "2.6";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
     // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
@@ -175,12 +207,18 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         // constant, not read from IConfiguration - the orchestrator body must stay deterministic
         // across replay (CLAUDE.md 6), same treatment maxReflectionIterations above already gets.
         // Matches Budget:PerRunTokenCeiling's documented default.
-        const long perRunTokenCeiling = 250_000;
+        // [TEMP OVERRIDE 2026-09-07] Raised from 250_000 to 600_000 for a one-off manual run of
+        // tenant 29 (a known token-heavy tenant per UatTestDataManualTests.
+        // MeasureRealComposeTokenUsage_Tenant29) that hit the default ceiling mid-narration.
+        // REVERT to 250_000 after this run - do not leave this raised for production traffic.
+        const long perRunTokenCeiling = 600_000;
         var runTotalTokens = 0L;
 
         void ChargeAndCheck(long tokens)
         {
             runTotalTokens += tokens;
+            // [TEMP DIAGNOSTIC 2026-09-07] remove after tenant 29 manual run is diagnosed.
+            Console.Error.WriteLine($"[DIAG] charged {tokens} tokens, running total {runTotalTokens}/{perRunTokenCeiling}.");
             if (runTotalTokens > perRunTokenCeiling)
                 throw new OrchestrationRefusedException(
                     "BUDGET_EXCEEDED",
@@ -198,40 +236,70 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
         try
         {
+            // [ADDED 2026-09-08] Fail closed rather than silently falling back to "all fourteen
+            // dimensions" if a caller requests dimension_selection without actually naming any -
+            // CLAUDE.md non-negotiable #2. Checked before Gathering, same "cheapest gate first"
+            // ordering as the token-budget/entitlement gates above.
+            if (input.ReportType == DimensionSelectionComposition.ReportType
+                && input.RequestedDimensions is not { Count: > 0 })
+            {
+                throw new OrchestrationRefusedException(
+                    "NO_DIMENSIONS_REQUESTED",
+                    "We couldn't generate this report to our accuracy standard. Our team has been notified.",
+                    internalDiagnostics: ["ReportType 'dimension_selection' requires a non-empty RequestedDimensions list."]);
+            }
+
             SetStage(InsightsRunStage.Gathering);
             var gathered = await context.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", new GatherScopeInput(input.UserId, input.TenantId));
 
             SetStage(InsightsRunStage.Validating);
-            var dimensions = await context.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", new FetchDimensionsInput(input.UserId, input.TenantId));
+            var dimensions = await context.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0",
+                new FetchDimensionsInput(input.UserId, input.TenantId, input.RequestedDimensions));
 
-            // Node 4a - deterministic (CLAUDE.md 6/CompositeScoreCalculator's own doc comment: an
-            // agent may only CITE a score, never compute one). Folded into the SAME assertions list
-            // every downstream activity already reads via `dimensions`, as ordinary typed
-            // Assertion records - no new plumbing needed on Compose/Narrate's input shape.
-            var scoreResult = await context.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0",
-                new ComputeScoreInput(dimensions.DimensionResults));
-            // Merged into BOTH: DimensionResults so ComposeActivity's own LLM input actually
-            // contains it (see ComputeScoreOutput's doc comment - this was found missing live),
-            // and Assertions so Reflect/Narrate/PublishGate see it too.
-            var dimensionResultsWithScore = new Dictionary<string, string>(dimensions.DimensionResults) { ["Score"] = scoreResult.ScoreDimensionResultJson };
-            dimensions = dimensions with
+            // [ADDED 2026-09-08] The composite score is a whole-tenant, fixed-holistic concept
+            // (CompositeScoreCalculator throws if literally no component can be computed at all) -
+            // not something that means anything for an arbitrary caller-picked subset of
+            // dimensions, and a subset that happens to map to zero scoring components would refuse
+            // the whole run over a score nobody asked to see. Skipped entirely for
+            // dimension_selection, same "skip what this report type does not need" precedent
+            // FixedHolisticComposition's own branch below already sets for ComposeActivity.
+            if (input.ReportType != DimensionSelectionComposition.ReportType)
             {
-                DimensionResults = dimensionResultsWithScore,
-                Assertions = dimensions.Assertions.Concat(scoreResult.Assertions).ToList(),
-            };
+                // Node 4a - deterministic (CLAUDE.md 6/CompositeScoreCalculator's own doc comment: an
+                // agent may only CITE a score, never compute one). Folded into the SAME assertions list
+                // every downstream activity already reads via `dimensions`, as ordinary typed
+                // Assertion records - no new plumbing needed on Compose/Narrate's input shape.
+                var scoreResult = await context.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0",
+                    new ComputeScoreInput(dimensions.DimensionResults));
+                // Merged into BOTH: DimensionResults so ComposeActivity's own LLM input actually
+                // contains it (see ComputeScoreOutput's doc comment - this was found missing live),
+                // and Assertions so Reflect/Narrate/PublishGate see it too.
+                var dimensionResultsWithScore = new Dictionary<string, string>(dimensions.DimensionResults) { ["Score"] = scoreResult.ScoreDimensionResultJson };
+                dimensions = dimensions with
+                {
+                    DimensionResults = dimensionResultsWithScore,
+                    Assertions = dimensions.Assertions.Concat(scoreResult.Assertions).ToList(),
+                };
+            }
 
             SetStage(InsightsRunStage.Composing);
-            // Fixed Holistic (ReportType "fixed_holistic") skips this entirely - structure is
-            // deterministic C# (FixedHolisticComposition.Build), not an LLM decision, by design
-            // (see that class's own doc comment: "more strictly than CLAUDE.md's non-negotiable #1
-            // already requires... there is no judgement call to make at all"). Pure function, no
-            // I/O/clock/randomness of its own - safe directly in the orchestrator body, same as
-            // PartialDimensionPlaceholder elsewhere in this file. Zero tokens spent on composition
-            // for this path - nothing to ChargeAndCheck.
+            // Fixed Holistic (ReportType "fixed_holistic") and DimensionSelection (ReportType
+            // "dimension_selection") both skip real composition - structure is deterministic C#
+            // (FixedHolisticComposition.Build / DimensionSelectionComposition.Build), not an LLM
+            // decision, by design (see either class's own doc comment: there is no judgement call
+            // to make once either "always these six tabs" or "exactly the dimensions the caller
+            // named" is already decided). Pure functions, no I/O/clock/randomness of their own -
+            // safe directly in the orchestrator body, same as PartialDimensionPlaceholder elsewhere
+            // in this file. Zero tokens spent on composition for either path - nothing to
+            // ChargeAndCheck.
             CompositionPlan plan;
             if (input.ReportType == FixedHolisticComposition.ReportType)
             {
                 plan = FixedHolisticComposition.Build();
+            }
+            else if (input.ReportType == DimensionSelectionComposition.ReportType)
+            {
+                plan = DimensionSelectionComposition.Build(input.RequestedDimensions!);
             }
             else
             {
@@ -289,100 +357,182 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson)?.Rows
                 : null;
 
+            // [ADDED 2026-09-08] Only meaningful for DimensionSelectionComposition.ReportType - the
+            // render agent's own payload only ever carried `assertions` (curated, top-5-capped
+            // comparative facts), never a dimension's full per-member row set, so asking it to
+            // render "a table of all real rows" for a dimension_selection report was asking for
+            // data it was never actually given (see IReportHtmlAgent.RenderAsync's own doc comment
+            // on this parameter - found live the same day as this fix, tenant 29, Nature). Generic
+            // JSON extraction, not dimension-shape-specific: every dimension's own serialized
+            // DimensionResult already carries a "Rows" property (PascalCase - FetchDimensionsActivity's
+            // own plain JsonSerializer.Serialize call, no naming policy applied), pulled out here as
+            // a raw JSON array string per requested dimension. Pure JSON parsing of already-fetched
+            // activity output, no I/O of its own - same "safe directly in the orchestrator body"
+            // reasoning as locationRows immediately above.
+            IReadOnlyDictionary<string, string>? dimensionRowsJson = input.ReportType == DimensionSelectionComposition.ReportType
+                ? dimensions.DimensionResults
+                    .Where(kv => input.RequestedDimensions!.Contains(kv.Key))
+                    .ToDictionary(
+                        kv => kv.Key,
+                        kv => System.Text.Json.JsonDocument.Parse(kv.Value).RootElement.GetProperty("Rows").GetRawText())
+                : null;
+
             SetStage(InsightsRunStage.Rendering);
-            // [BUG FOUND LIVE, 2026-09-01] Render is the one call in this whole pipeline with two
-            // real reasons to legitimately fail on a good input: a transient network/timeout blip
-            // to the LLM provider, and a one-off malformed/truncated response (MafReportHtmlAgent.
-            // RenderAsync now throws InvalidOperationException on that, BEFORE returning, per its
-            // own [BUG FOUND LIVE] note - specifically so it surfaces HERE, inside this retry, not
-            // one activity later where a retry can no longer reach it). ScheduleWithRetry is DTFx's
-            // own durable retry primitive - durable because it survives a worker crash/restart
-            // mid-retry, unlike a hand-rolled loop; "durable" is also why this is safe to do in an
-            // orchestrator body at all (CLAUDE.md 6 - no real I/O of its own, just re-scheduling
-            // the same activity). Handle excludes OrchestrationRefusedException on purpose: that is
-            // a DETERMINISTIC refusal (Normalize/Sanitize/Structure/PublishGate) - same input
-            // always fails the same way, so retrying it would only burn real LLM tokens chasing a
-            // result that cannot change. RenderHtmlActivity itself never throws that today; this
-            // filter is what keeps it true if that ever changes.
-            var renderResult = await context.ScheduleWithRetry<RenderHtmlOutput>(
-                typeof(RenderHtmlActivity).Name, "1.0",
-                new RetryOptions(TimeSpan.FromSeconds(3), maxNumberOfAttempts: 3)
+
+            // [FIX 2026-09-07] FixedHolisticStructureGate's own doc comment (item 3) documents this
+            // exact failure "found live twice": the render agent sometimes ignores the Coverage
+            // pane's scaffold instruction and writes a plain summary card instead of leaving
+            // `di-covgrid-root` in place - a prose-instruction miss, same failure family as its
+            // item 1 (score-component count), NOT a fixed-input structural defect. Confirmed live a
+            // third time on tenant 29 (two consecutive runs, identical violation). The prior
+            // ScheduleWithRetry comment below claims every OrchestrationRefusedException past this
+            // point is "a DETERMINISTIC refusal - same input always fails the same way" - that is
+            // true for NOT_NORMALIZABLE/POST_SANITIZE_VIOLATION/GATE_REFUSED (those check the
+            // document's real data/safety shape), but FALSE for FIXED_HOLISTIC_STRUCTURE_INVALID's
+            // Coverage-grid check specifically: its input (the render agent's own free-form output)
+            // is exactly what a fresh render attempt can plausibly change. Retrying the WHOLE
+            // render-through-validate chain (not just RenderHtmlActivity, since a fresh render needs
+            // fresh font/coverage injection and re-normalization too) up to maxRenderAttempts times
+            // gives the render agent additional real chances to follow the scaffold before this
+            // becomes a genuine refusal. Every attempt bills real tokens via ChargeAndCheck, same as
+            // the narrate/compose reflection loops - this is not a free retry.
+            const int maxRenderAttempts = 3;
+            ValidateFixedHolisticStructureOutput? structureChecked = null;
+
+            for (var renderAttempt = 1; renderAttempt <= maxRenderAttempts; renderAttempt++)
+            {
+                // [BUG FOUND LIVE, 2026-09-01] Render is the one call in this whole pipeline with
+                // two real reasons to legitimately fail on a good input: a transient network/timeout
+                // blip to the LLM provider, and a one-off malformed/truncated response
+                // (MafReportHtmlAgent.RenderAsync now throws InvalidOperationException on that,
+                // BEFORE returning, per its own [BUG FOUND LIVE] note - specifically so it surfaces
+                // HERE, inside this retry, not one activity later where a retry can no longer reach
+                // it). ScheduleWithRetry is DTFx's own durable retry primitive - durable because it
+                // survives a worker crash/restart mid-retry, unlike a hand-rolled loop; "durable" is
+                // also why this is safe to do in an orchestrator body at all (CLAUDE.md 6 - no real
+                // I/O of its own, just re-scheduling the same activity). Handle excludes
+                // OrchestrationRefusedException on purpose - RenderHtmlActivity itself never throws
+                // that today; this filter is what keeps it true if that ever changes. The OUTER
+                // renderAttempt loop above is the mechanism for the structure-gate retry described
+                // above; this INNER ScheduleWithRetry is unchanged and still only ever sees
+                // RenderHtmlActivity's own transient/malformed-response failures.
+                var renderResult = await context.ScheduleWithRetry<RenderHtmlOutput>(
+                    typeof(RenderHtmlActivity).Name, "1.0",
+                    new RetryOptions(TimeSpan.FromSeconds(3), maxNumberOfAttempts: 3)
+                    {
+                        BackoffCoefficient = 2.0,
+                        Handle = ex => ex is not OrchestrationRefusedException,
+                    },
+                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson));
+                ChargeAndCheck(renderResult.TotalTokens);
+
+                // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
+                // for each dimension FetchDimensionsActivity had to skip. Pure string transform on
+                // activity OUTPUT, no I/O/clock/randomness of its own - safe directly in the
+                // orchestrator body (CLAUDE.md 6). Runs BEFORE Normalize/Sanitize deliberately, so
+                // the placeholder markup is validated by the exact same safety pipeline as the rest
+                // of the document.
+                var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Html, dimensions.FailedDimensions);
+
+                // Node 8a - embeds the REAL vendored Poppins font (vendor/README.md) as a self-hosted
+                // @font-face, deterministically, after the LLM but before anything validates or ships
+                // the document. Runs BEFORE Normalize on purpose, same reasoning as the placeholder
+                // insertion above: the injected markup goes through the exact same safety pipeline as
+                // everything else, not a carve-out. See PoppinsFontInjector's doc comment for why this
+                // can't be the render agent's own job.
+                var fonted = await context.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", new InjectFontInput(html));
+
+                // Node 8b - same deterministic-injection treatment as the font above. CoverageGridInjector's
+                // own [BUG FOUND LIVE] note: the render agent was asked to hand-author one tile per real
+                // leaf branch (up to 177 for tenant 29) and silently sampled instead of completing the
+                // population while still stating the true full counts elsewhere in the same document -
+                // removed from the render agent's job entirely, generated deterministically from the
+                // real locationRows this orchestrator already deserialized above. No-op (returns input
+                // unchanged) when the render agent's own `di-covgrid-root` placeholder is missing, or
+                // when Location degraded - never forces a grid in. [FIX 2026-09-07] That "no-op when
+                // missing" behaviour is exactly the gap the outer renderAttempt loop now closes: a
+                // missing placeholder used to reach ValidateFixedHolisticStructureActivity and refuse
+                // the whole run; now it triggers a fresh render attempt instead, up to the cap above.
+                var coverageGridded = await context.ScheduleTask<InjectCoverageGridOutput>(
+                    typeof(InjectCoverageGridActivity).Name, "1.0", new InjectCoverageGridInput(fonted.Html, locationRows));
+
+                // Node 8c - same deterministic-injection treatment. CoverageCssInjector's own [BUG
+                // FOUND LIVE] note: tiles rendered as unfilled outline boxes and the detail pill had
+                // no colour at all because the render agent's own "declare these rules verbatim" CSS
+                // silently dropped or malformed the colour declarations - this CSS is 100% static, no
+                // reason to gamble on it being copied correctly every run. Inserted last inside
+                // </head> so it wins any cascade conflict with whatever the render agent's own
+                // <style> block still contains.
+                var coverageStyled = await context.ScheduleTask<InjectCoverageCssOutput>(
+                    typeof(InjectCoverageCssActivity).Name, "1.0", new InjectCoverageCssInput(coverageGridded.Html));
+
+                // Node 8d - same deterministic-injection treatment, for the exact same reason:
+                // CoverageScriptInjector's own [BUG FOUND LIVE] note documents three real ways the
+                // render agent authoring this itself went wrong (DOMPurify's default script strip,
+                // DOMPurify's tag-shaped-content strip, and simply omitting it on a given attempt) -
+                // the script's logic never varies by tenant, only the data-* attributes on the tiles
+                // it reads (now themselves deterministically injected by node 8b, immediately above).
+                // No-op when no Coverage grid was rendered at all - never forces this in.
+                var coverageScripted = await context.ScheduleTask<InjectCoverageScriptOutput>(
+                    typeof(InjectCoverageScriptActivity).Name, "1.0", new InjectCoverageScriptInput(coverageStyled.Html));
+
+                var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(coverageScripted.Html));
+                var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
+                // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
+                // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.
+                var reNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(sanitized.Html));
+
+                // Structural invariant gate (CLAUDE.md Sec.11), not cosmetic QA - throws
+                // OrchestrationRefusedException on the actual persisted HTML if the score-component
+                // count or a blocked-tab badge is wrong (FixedHolisticStructureGate's own doc comment
+                // names the two live bugs this closes). Runs BEFORE PlaywrightQa deliberately: unlike
+                // PlaywrightQa's advisory-only result, a violation here must refuse publish, not just
+                // get logged for later.
+                //
+                // [BUG FOUND LIVE, 2026-09-07] The catch below used to filter on
+                // `catch (OrchestrationRefusedException ex) when (ex.ReasonCode == "...")` - that
+                // NEVER matched. DurableTask.Core's plain `ScheduleTask<T>` (unlike ScheduleWithRetry,
+                // whose own `Handle` callback DOES receive the original exception) rethrows activity
+                // failures as `TaskFailedException` once replayed from persisted history - which
+                // happens on every orchestrator replay pass, confirmed live via this exact bug: the
+                // custom `OrchestrationRefusedException` type, and with it `ReasonCode`/
+                // `InternalDiagnostics`, never survives that boundary, so the filtered catch silently
+                // never fired and every run still failed after exactly one render attempt despite this
+                // loop's cap being 3. Catching plain `Exception` instead - scoped to ONLY this one
+                // ScheduleTask call, so any exception escaping it is by construction this activity's
+                // own refusal, without needing to identify its original type - fixes this without
+                // depending on anything DTFx does or does not preserve across replay.
+                try
                 {
-                    BackoffCoefficient = 2.0,
-                    Handle = ex => ex is not OrchestrationRefusedException,
-                },
-                new RenderHtmlInput(plan, narrative, dimensions.Assertions, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows));
-            ChargeAndCheck(renderResult.TotalTokens);
+                    structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
+                        typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html));
+                    break;
+                }
+                catch (Exception ex) when (renderAttempt < maxRenderAttempts)
+                {
+                    // [TEMP DIAGNOSTIC 2026-09-07] remove once tenant 29 manual runs are confirmed clean.
+                    Console.Error.WriteLine($"[DIAG] render attempt {renderAttempt}/{maxRenderAttempts}: structure gate REFUSED - {ex.Message}");
+                    // Re-render-able per this loop's own doc comment above - fall through to the next
+                    // iteration for a fresh render attempt rather than refusing the whole run on what
+                    // is really a per-call sampling miss, not a fixed-input defect. On the LAST attempt
+                    // the `when` guard above is false, so the exception is NOT caught here at all and
+                    // propagates normally - same terminal behaviour as before this loop existed.
+                }
+            }
 
-            // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder for
-            // each dimension FetchDimensionsActivity had to skip. Pure string transform on activity
-            // OUTPUT, no I/O/clock/randomness of its own - safe directly in the orchestrator body
-            // (CLAUDE.md 6). Runs BEFORE Normalize/Sanitize deliberately, so the placeholder markup is
-            // validated by the exact same safety pipeline as the rest of the document.
-            var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Html, dimensions.FailedDimensions);
-
-            // Node 8a - embeds the REAL vendored Poppins font (vendor/README.md) as a self-hosted
-            // @font-face, deterministically, after the LLM but before anything validates or ships
-            // the document. Runs BEFORE Normalize on purpose, same reasoning as the placeholder
-            // insertion above: the injected markup goes through the exact same safety pipeline as
-            // everything else, not a carve-out. See PoppinsFontInjector's doc comment for why this
-            // can't be the render agent's own job.
-            var fonted = await context.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", new InjectFontInput(html));
-
-            // Node 8b - same deterministic-injection treatment as the font above. CoverageGridInjector's
-            // own [BUG FOUND LIVE] note: the render agent was asked to hand-author one tile per real
-            // leaf branch (up to 177 for tenant 29) and silently sampled instead of completing the
-            // population while still stating the true full counts elsewhere in the same document -
-            // removed from the render agent's job entirely, generated deterministically from the
-            // real locationRows this orchestrator already deserialized above. No-op (returns input
-            // unchanged) when the render agent's own `di-covgrid-root` placeholder is missing, or
-            // when Location degraded - never forces a grid in.
-            var coverageGridded = await context.ScheduleTask<InjectCoverageGridOutput>(
-                typeof(InjectCoverageGridActivity).Name, "1.0", new InjectCoverageGridInput(fonted.Html, locationRows));
-
-            // Node 8c - same deterministic-injection treatment. CoverageCssInjector's own [BUG
-            // FOUND LIVE] note: tiles rendered as unfilled outline boxes and the detail pill had
-            // no colour at all because the render agent's own "declare these rules verbatim" CSS
-            // silently dropped or malformed the colour declarations - this CSS is 100% static, no
-            // reason to gamble on it being copied correctly every run. Inserted last inside
-            // </head> so it wins any cascade conflict with whatever the render agent's own
-            // <style> block still contains.
-            var coverageStyled = await context.ScheduleTask<InjectCoverageCssOutput>(
-                typeof(InjectCoverageCssActivity).Name, "1.0", new InjectCoverageCssInput(coverageGridded.Html));
-
-            // Node 8d - same deterministic-injection treatment, for the exact same reason:
-            // CoverageScriptInjector's own [BUG FOUND LIVE] note documents three real ways the
-            // render agent authoring this itself went wrong (DOMPurify's default script strip,
-            // DOMPurify's tag-shaped-content strip, and simply omitting it on a given attempt) -
-            // the script's logic never varies by tenant, only the data-* attributes on the tiles
-            // it reads (now themselves deterministically injected by node 8b, immediately above).
-            // No-op when no Coverage grid was rendered at all - never forces this in.
-            var coverageScripted = await context.ScheduleTask<InjectCoverageScriptOutput>(
-                typeof(InjectCoverageScriptActivity).Name, "1.0", new InjectCoverageScriptInput(coverageStyled.Html));
-
-            var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(coverageScripted.Html));
-            var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
-            // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
-            // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.
-            var reNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(sanitized.Html));
-
-            // Structural invariant gate (CLAUDE.md Sec.11), not cosmetic QA - throws
-            // OrchestrationRefusedException on the actual persisted HTML if the score-component
-            // count or a blocked-tab badge is wrong (FixedHolisticStructureGate's own doc comment
-            // names the two live bugs this closes). Runs BEFORE PlaywrightQa deliberately: unlike
-            // PlaywrightQa's advisory-only result, a violation here must refuse publish, not just
-            // get logged for later.
-            var structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
-                typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html));
+            // Unreachable with structureChecked null: the loop above either breaks with a value, or
+            // its last iteration's catch guard (renderAttempt < maxRenderAttempts) is false, so the
+            // exception on that final attempt propagates out of the loop instead of being caught.
+            var finalStructureChecked = structureChecked!;
 
             // Advisory only - result intentionally unused for any branching decision (spec/CLAUDE.md
             // [TRAP]: Playwright is cosmetic QA, never a security control). Item 17 (cost/observability,
             // not this slice) is where this result gets logged/alerted on instead of discarded.
-            _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", new PlaywrightQaInput(structureChecked.Html));
+            _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", new PlaywrightQaInput(finalStructureChecked.Html));
 
             SetStage(InsightsRunStage.Complete, final: true);
             return await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
-                new PersistInput(structureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId));
+                new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId));
         }
         finally
         {

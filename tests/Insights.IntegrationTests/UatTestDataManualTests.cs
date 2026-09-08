@@ -1,6 +1,8 @@
 using System.Data;
 using System.Diagnostics.Tracing;
 using Azure.Storage.Blobs;
+using Dapper;
+using Insights.Data;
 using Insights.Worker;
 using Microsoft.Azure.KeyVault;
 using Microsoft.Azure.KeyVault.WebKey;
@@ -136,6 +138,175 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
             output.WriteLine($"{reader.GetString(0)}.{reader.GetString(1)}");
     }
 
+    /// <summary>
+    /// THROWAWAY - "Ambiguous column name 'VsPeerStateNormPP'" surfaced live from
+    /// dbo.usp_Insights_Dimension_Location. The local sql/05_dimension_location.sql shows as
+    /// modified-but-uncommitted in git, so before touching anything READ the version actually
+    /// installed on UAT and save it locally for a byte-for-byte diff against the working copy -
+    /// never assume which one is live. Read-only (OBJECT_DEFINITION), changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task DumpDeployedLocationProcDefinition()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.usp_Insights_Dimension_Location'));", connection);
+        var definition = (string?)await command.ExecuteScalarAsync();
+        if (definition is null)
+        {
+            output.WriteLine("Procedure not found in this database.");
+            return;
+        }
+
+        const string outPath = @"C:\Users\tanvig\Desktop\deployed_usp_Insights_Dimension_Location.sql";
+        await File.WriteAllTextAsync(outPath, definition);
+        output.WriteLine($"Wrote {definition.Length} chars -> {outPath}");
+    }
+
+    /// <summary>
+    /// THROWAWAY - the isolated repro of usp_Insights_Dimension_Location SUCCEEDED with no error,
+    /// so the ambiguous-column failure FetchDimensionsActivity hit is NOT this procedure. It calls
+    /// FOURTEEN dimension procedures per run; searching only the LOCAL sql/ files for this column
+    /// name found just Location, but that's the wrong source of truth given Location's own deployed
+    /// definition already proved to differ from the local file. Pull every deployed dimension
+    /// procedure's real definition and search THOSE instead of guessing from disk.
+    /// </summary>
+    [Fact]
+    public async Task SearchAllDeployedDimensionProcsForColumn()
+    {
+        var procNames = new[]
+        {
+            "usp_Insights_Dimension_Location", "usp_Insights_Dimension_Entity", "usp_Insights_Dimension_Risk",
+            "usp_Insights_Dimension_Nature", "usp_Insights_Dimension_Departments", "usp_Insights_Dimension_Act",
+            "usp_Insights_Dimension_Users", "usp_Insights_Dimension_Internal", "usp_Insights_Dimension_Event",
+            "usp_Insights_Dimension_Licence", "usp_Insights_Dimension_BacklogAging", "usp_Insights_Dimension_TimelinessFY",
+            "usp_Insights_Dimension_ForwardPipeline", "usp_Insights_Dimension_EvidenceIntegrity",
+        };
+
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        foreach (var procName in procNames)
+        {
+            await using var command = new SqlCommand(
+                $"SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.{procName}'));", connection);
+            var definition = (string?)await command.ExecuteScalarAsync();
+            if (definition is null)
+            {
+                output.WriteLine($"{procName}: NOT FOUND");
+                continue;
+            }
+
+            var hits = definition.Split('\n')
+                .Select((line, i) => (line, i))
+                .Where(x => x.line.Contains("VsPeerStateNormPP", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            output.WriteLine(hits.Count == 0
+                ? $"{procName}: no match ({definition.Length} chars)"
+                : $"{procName}: {hits.Count} match(es) - lines {string.Join(",", hits.Select(h => h.i + 1))}");
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY - reproduces the "Ambiguous column name 'VsPeerStateNormPP'" error directly
+    /// against the deployed procedure (read-only invocation, not a schema change - same call shape
+    /// FetchDimensionsActivity already makes) to see SQL Server's exact error with full context,
+    /// rather than only the message string InsightsRunOnceWorker's refusal path already showed.
+    /// </summary>
+    [Fact]
+    public async Task ReproduceLocationProcAmbiguousColumnError()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand("dbo.usp_Insights_Dimension_Location", connection)
+        {
+            CommandType = System.Data.CommandType.StoredProcedure,
+            CommandTimeout = 120,
+        };
+        command.Parameters.AddWithValue("@UserID", 38);
+        command.Parameters.AddWithValue("@CustomerID", 29);
+
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync();
+            output.WriteLine("Succeeded (raw ADO.NET, 2 params) - no error.");
+        }
+        catch (SqlException ex)
+        {
+            foreach (SqlError error in ex.Errors)
+                output.WriteLine($"[raw ADO.NET] Number={error.Number} Line={error.LineNumber} Procedure={error.Procedure} Message={error.Message}");
+        }
+
+        // Exact call shape SqlDimensionRepository.GetLocationAsync actually uses.
+        try
+        {
+            using var multi = await connection.QueryMultipleAsync(
+                new Dapper.CommandDefinition(
+                    "dbo.usp_Insights_Dimension_Location",
+                    new { UserID = 38, CustomerID = 29, AsOf = (DateTime?)null },
+                    commandType: System.Data.CommandType.StoredProcedure,
+                    commandTimeout: 120));
+            var controlTotals = await multi.ReadSingleAsync<dynamic>();
+            output.WriteLine($"Succeeded (Dapper QueryMultiple, 3 params) - control totals: {controlTotals}");
+        }
+        catch (SqlException ex)
+        {
+            foreach (SqlError error in ex.Errors)
+                output.WriteLine($"[Dapper QueryMultiple] Number={error.Number} Line={error.LineNumber} Procedure={error.Procedure} Message={error.Message}");
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY - two isolated manual reproductions of usp_Insights_Dimension_Location both
+    /// succeeded, yet FetchDimensionsActivity fails on it consistently in every real pipeline run
+    /// today regardless of concurrency settings or which worker executes it. Eliminates any subtle
+    /// difference between my manual test and the real app by resolving IDimensionRepository from
+    /// the SAME DI registration Program.cs uses (AddInsightsData) and calling the exact same
+    /// GetLocationAsync the real activity calls - not a hand-rolled SqlCommand/Dapper call.
+    /// </summary>
+    [Fact]
+    public async Task ReproduceLocationViaRealDimensionRepository()
+    {
+        var configBuilder = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:RegTrack"] = ConnectionString,
+            });
+        var configuration = configBuilder.Build();
+
+        var services = new ServiceCollection();
+        services.AddInsightsData(configuration);
+        var provider = services.BuildServiceProvider();
+
+        var repository = provider.GetRequiredService<Insights.Data.IDimensionRepository>();
+        try
+        {
+            var result = await repository.GetLocationAsync(38, 29, cancellationToken: CancellationToken.None);
+            output.WriteLine($"Succeeded via real DI repository - {result.Rows.Count} rows, reconciled control totals.");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"FAILED via real DI repository: {ex.GetType().Name}: {ex.Message}");
+            if (ex.InnerException is not null)
+                output.WriteLine($"  Inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+        }
+    }
+
+    /// <summary>THROWAWAY - real billed tokens for the most recent tenant-29 run, to confirm/measure the per-run budget ceiling refusal.</summary>
+    [Fact]
+    public async Task InspectRecentTenantTokenUsage()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT TOP 5 CustomerID, RunId, TotalTokens, RecordedAtUtc FROM dbo.InsightsTenantTokenUsage ORDER BY RecordedAtUtc DESC;", connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            output.WriteLine($"CustomerID={reader.GetInt32(0)} RunId={reader.GetString(1)} TotalTokens={reader.GetInt64(2)} RecordedAtUtc={reader.GetDateTime(3):o}");
+    }
+
     /// <summary>Real GeneratedReport rows - independent verification that item 14's write path actually persisted something, not just that a test asserted it did.</summary>
     [Fact]
     public async Task InspectMostRecentGeneratedReport()
@@ -214,7 +385,11 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
             await cryptoStream.WriteAsync(ciphertext);
 
         var html = System.Text.Encoding.UTF8.GetString(plaintextStream.ToArray());
-        const string outPath = @"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\decrypted-report-tenant29.html";
+        // [PATH FIXED 2026-09-07] was hardcoded to a different machine's D:\ drive - this repo's
+        // actual checkout is under C:\Users\tanvig\... on this machine.
+        var outPath = Path.Combine(
+            @"C:\Users\tanvig\Desktop\RegInsights\trpl-regtrack-microsoft-agentic-framework-core",
+            "decrypted-report-tenant29.html");
         await File.WriteAllTextAsync(outPath, html);
         output.WriteLine($"Decrypted {html.Length} chars -> {outPath}");
     }
@@ -228,6 +403,121 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
         await using var connection = new SqlConnection(taskHubConnectionString);
         await connection.OpenAsync();
         await using var command = new SqlCommand("SELECT * FROM dt.vInstances ORDER BY CreatedTime DESC;", connection) { CommandTimeout = 60 };
+        await using var reader = await command.ExecuteReaderAsync();
+        var columnNames = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+        output.WriteLine(string.Join(" | ", columnNames));
+        while (await reader.ReadAsync())
+        {
+            var values = Enumerable.Range(0, reader.FieldCount).Select(i => reader.IsDBNull(i) ? "-" : reader.GetValue(i)?.ToString() ?? "-");
+            output.WriteLine(string.Join(" | ", values));
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY - a new orchestration instance sat Pending for several minutes with a live worker
+    /// process running against it, no exception logged. Checks whether an earlier crashed/killed
+    /// process (network failure, duplicate-instance exception, a forcibly-stopped drain worker)
+    /// left a blocking session/lock on the task-hub tables that a live worker's dequeue query is
+    /// waiting behind rather than actually being idle.
+    /// </summary>
+    [Fact]
+    public async Task CheckForBlockingSessionsOnTaskHub()
+    {
+        var taskHubConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DurableTaskHub")
+            ?? throw new InvalidOperationException("Set ConnectionStrings__DurableTaskHub before running this test.");
+        await using var connection = new SqlConnection(taskHubConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            @"SELECT r.session_id, r.blocking_session_id, r.wait_type, r.wait_time, r.status,
+                     r.command, s.login_time, s.program_name, s.last_request_start_time,
+                     SUBSTRING(t.text, 1, 200) AS query_text
+              FROM sys.dm_exec_requests r
+              JOIN sys.dm_exec_sessions s ON s.session_id = r.session_id
+              OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t
+              WHERE r.session_id <> @@SPID
+              ORDER BY r.blocking_session_id DESC, r.session_id;", connection) { CommandTimeout = 30 };
+        await using var reader = await command.ExecuteReaderAsync();
+        var columnNames = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+        output.WriteLine(string.Join(" | ", columnNames));
+        while (await reader.ReadAsync())
+        {
+            var values = Enumerable.Range(0, reader.FieldCount).Select(i => reader.IsDBNull(i) ? "-" : reader.GetValue(i)?.ToString() ?? "-");
+            output.WriteLine(string.Join(" | ", values));
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY - CheckForBlockingSessionsOnTaskHub found no blocker, yet the instance stayed
+    /// Pending for 5+ minutes with a live worker process attached. Checks whether a work item was
+    /// ever actually enqueued into dt.NewTasks/dt.NewEvents for it in the first place - if this
+    /// comes back empty, CreateOrchestrationInstanceAsync wrote the Instances row but never queued
+    /// dispatchable work, which is a different bug than "worker isn't polling".
+    /// </summary>
+    [Fact]
+    public async Task InspectNewTaskQueueForInstance()
+    {
+        var taskHubConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DurableTaskHub")
+            ?? throw new InvalidOperationException("Set ConnectionStrings__DurableTaskHub before running this test.");
+        await using var connection = new SqlConnection(taskHubConnectionString);
+        await connection.OpenAsync();
+
+        async Task DumpAsync(string label, string sql)
+        {
+            output.WriteLine($"--- {label} ---");
+            await using var command = new SqlCommand(sql, connection) { CommandTimeout = 30 };
+            await using var reader = await command.ExecuteReaderAsync();
+            var columnNames = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+            output.WriteLine(string.Join(" | ", columnNames));
+            while (await reader.ReadAsync())
+            {
+                var values = Enumerable.Range(0, reader.FieldCount).Select(i => reader.IsDBNull(i) ? "-" : reader.GetValue(i)?.ToString() ?? "-");
+                output.WriteLine(string.Join(" | ", values));
+            }
+        }
+
+        const string instanceId = "insights-29-C44449C9F0306A5527CFB9EB4FECB60FEC704BEA2620FDEDF12242BCBEC01CA3";
+        await DumpAsync("dt.NewEvents for this instance",
+            $"SELECT * FROM dt.NewEvents WHERE InstanceID = '{instanceId}';");
+        await DumpAsync("dt.NewTasks for this instance",
+            $"SELECT * FROM dt.NewTasks WHERE InstanceID = '{instanceId}';");
+        await DumpAsync("dt.NewTasks total row count (all instances)",
+            "SELECT COUNT(*) AS TotalNewTasks FROM dt.NewTasks;");
+        await DumpAsync("dt.NewEvents total row count (all instances)",
+            "SELECT COUNT(*) AS TotalNewEvents FROM dt.NewEvents;");
+        await DumpAsync("dt.History for this instance",
+            $"SELECT * FROM dt.History WHERE InstanceID = '{instanceId}' ORDER BY SequenceNumber;");
+        await DumpAsync("dt.NewEvents - ALL rows, any instance",
+            "SELECT SequenceNumber, Timestamp, VisibleTime, DequeueCount, InstanceID, EventType, RuntimeStatus FROM dt.NewEvents ORDER BY SequenceNumber;");
+        await DumpAsync("sys.databases health (this server)",
+            "SELECT name, state_desc, recovery_model_desc, is_in_standby, is_read_only FROM sys.databases;");
+        await DumpAsync("SQL Server uptime / last restart",
+            "SELECT sqlserver_start_time, cpu_count, physical_memory_kb FROM sys.dm_os_sys_info;");
+        await DumpAsync("Active Always-On AG state (if any)",
+            "SELECT ars.replica_server_name, ars.role_desc, ars.connected_state_desc, ars.synchronization_health_desc FROM sys.dm_hadr_availability_replica_states ars;");
+    }
+
+    /// <summary>
+    /// THROWAWAY - a queued ExecutionStarted event sat at DequeueCount 0 for 5+ minutes with a
+    /// live CLI worker process confirmed running (StartAsync succeeded, no exception) and no
+    /// blocking session found in sys.dm_exec_requests. sys.dm_exec_requests only shows ACTIVE
+    /// requests, so an idle-but-connected polling loop wouldn't show up there either way - this
+    /// checks sys.dm_exec_sessions (ALL open connections, idle or not) for anything actually
+    /// connected to this database at all, to tell "not polling" apart from "polling but idle
+    /// between ticks".
+    /// </summary>
+    [Fact]
+    public async Task ListAllSessionsOnTaskHub()
+    {
+        var taskHubConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__DurableTaskHub")
+            ?? throw new InvalidOperationException("Set ConnectionStrings__DurableTaskHub before running this test.");
+        await using var connection = new SqlConnection(taskHubConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            @"SELECT session_id, login_time, host_name, program_name, login_name, status,
+                     last_request_start_time, last_request_end_time
+              FROM sys.dm_exec_sessions
+              WHERE session_id <> @@SPID AND is_user_process = 1
+              ORDER BY login_time DESC;", connection) { CommandTimeout = 30 };
         await using var reader = await command.ExecuteReaderAsync();
         var columnNames = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
         output.WriteLine(string.Join(" | ", columnNames));

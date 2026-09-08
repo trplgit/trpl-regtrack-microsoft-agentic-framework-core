@@ -188,9 +188,26 @@ public static class WorkerRegistration
     {
         var taskHubConnectionString = Require(configuration, "ConnectionStrings:DurableTaskHub");
 
-        services.TryAddSingleton(_ =>
+        services.TryAddSingleton(sp =>
         {
-            var settings = new SqlOrchestrationServiceSettings(taskHubConnectionString);
+            var settings = new SqlOrchestrationServiceSettings(taskHubConnectionString)
+            {
+                // [DIAG - temporary] SqlOrchestrationServiceSettings.LoggerFactory routes the
+                // library's own internal dispatch/poll diagnostics through this app's real
+                // ILoggerFactory instead of nowhere - added to find out why the orchestration
+                // dispatcher stops making progress after its first successful activity completion,
+                // confirmed reproducible across multiple fresh instances/processes today.
+                LoggerFactory = sp.GetRequiredService<ILoggerFactory>(),
+                // [FIX - found live] "Duplicate execution of 'FetchDimensionsActivity' was
+                // detected!" fired even for a run this same single process created and processed
+                // alone (no other worker involved) - the default concurrency settings run several
+                // internal dispatch loops in parallel within ONE process, and a lock-renewal race
+                // between two of THIS process's own loops let two of them grab the same work item.
+                // Forcing single-item concurrency removes the race entirely; this is a pure local
+                // setting with no effect on the shared database or any other worker.
+                MaxConcurrentActivities = 1,
+                MaxActiveOrchestrations = 1,
+            };
             var service = new SqlOrchestrationService(settings);
             service.CreateIfNotExistsAsync().GetAwaiter().GetResult();
             return service;
@@ -265,16 +282,48 @@ public static class WorkerRegistration
         services.TryAddSingleton<IReportBlobReader>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
     }
 
-    /// <summary>TryAdd - both the worker's write path and AddInsightsReportContentService's read path need this, and a combined host calls both.</summary>
+    /// <summary>
+    /// TryAdd - both the worker's write path and AddInsightsReportContentService's read path need
+    /// this, and a combined host calls both.
+    ///
+    /// [TEMP OVERRIDE 2026-09-08] ConnectionStrings:RegTrackReportsWrite, when set, overrides just
+    /// this DbContext's target - added for a one-off manual run reading tenant data from a
+    /// READ-ONLY production credential (ConnectionStrings:RegTrack) while still persisting the
+    /// generated report to a writable database (UAT). Falls back to the normal shared connection
+    /// string when unset, so every other caller of this method is unaffected. Remove once prod
+    /// read-only testing is done, or promote to a permanent documented setting if this becomes a
+    /// real recurring need.
+    /// </summary>
     private static void RegisterReportsDbContext(IServiceCollection services, IConfiguration configuration)
     {
-        var regTrackConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
-        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(regTrackConnectionString));
+        var writeConnectionString = configuration["ConnectionStrings:RegTrackReportsWrite"]
+            ?? Require(configuration, "ConnectionStrings:RegTrack");
+        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(writeConnectionString));
     }
 
+    /// <summary>
+    /// [FIX - found live] `sp` here is the ROOT provider (captured once inside the TaskHubWorker
+    /// singleton factory above), but every repository an activity depends on is registered
+    /// AddScoped (IScopeRepository, IDimensionRepository, ITenantTokenBudgetRepository, PublishGate,
+    /// etc. - this is every activity in the pipeline, not just one). Resolving a scoped service
+    /// straight from the root provider throws InvalidOperationException, and DurableTask.Core's
+    /// SQL dispatcher does not convert that construction-time failure into a TaskFailed history
+    /// event - it just abandons the work item, which reappears after its lock expires and retries
+    /// forever with no error ever visible in history or in this app's own logs. Confirmed live:
+    /// CheckTenantTokenBudgetActivity sat at DequeueCount 20+ with zero TaskFailed/TaskCompleted
+    /// events. Creating a fresh scope per activity resolution - and disposing it once the instance
+    /// is constructed - is the standard fix for consuming scoped services outside a request/scope
+    /// context; every current repository is a thin, stateless connectionString wrapper that opens
+    /// its own connection per call (confirmed against SqlTenantTokenBudgetRepository), so nothing
+    /// is lost by not keeping the scope alive for the activity's lifetime.
+    /// </summary>
     private static DelegateActivityCreator<TActivity> ActivityCreator<TActivity>(IServiceProvider sp)
         where TActivity : TaskActivity =>
-        new(() => sp.GetRequiredService<TActivity>());
+        new(() =>
+        {
+            using var scope = sp.CreateScope();
+            return scope.ServiceProvider.GetRequiredService<TActivity>();
+        });
 
     /// <summary>
     /// NameValueObjectCreator&lt;T&gt; (DurableTask.Core) only supports Type-based (Activator.

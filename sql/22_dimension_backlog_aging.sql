@@ -1,51 +1,14 @@
 /*===========================================================================
-  RegTrack Insights - Phase 1d (paid engine upgrade path)
-  BACKLOG AGING - overdue schedules bucketed by the FY they fell due in
+  RegTrack Insights - Phase 1b (extension)
+  BACKLOG AGING DIMENSION - overdue by the fiscal year it fell due in
 
-  Spec reference : docs/PAID_TIER_SAMPLE_REFERENCE.md Sec.3.2 (`backlog`)
-  Real UI target : the fixed-holistic Coverage/Risk & licences tab's "Overdue /
-                   backlog" aging bar - see prompts/05_report_html_fixed_holistic.md's
-                   own Tab 2 note (di-agebar), currently gated pending this file.
+  Authored by Claude Code; deployed to production 2026-09-03. Pulled from
+  sys.sql_modules and committed here so the repo matches what is running.
+  No code changes: it reads overdue through tvfInsightsOverdueSchedules, so
+  the 2026-09-04 view fix in sql/01 repairs its production timeout with no
+  change to this file.
 
-  [STATUS, 2026-09-02] DRAFT, UNTESTED - written entirely from static evidence
-  (tvfInsightsOverdueSchedules's own real definition in sql/01, the same
-  ScheduleOn-bucketing pattern already proven correct for other dimensions) -
-  sqlserver MCP was unreachable (network timeout to the DB host, not a config
-  problem) when this was written, so CLAUDE.md Sec.11's own testing discipline
-  has NOT been applied yet: "fourteen defects were found building this, every
-  single one passed on the first tenant checked... static review cannot find
-  contract, encoding, or cross-component defects - run the code." DO NOT DEPLOY
-  until run against >=5 tenants of different profile (Sec.11's own table:
-  1490, 1403, 29, 522, 2480 at minimum) and the golden regression passes.
-
-  Grain: ONE ROW PER AGE BUCKET, always exactly 3 - `current_fy` / `previous_fy`
-  / `older`, bucketed by the FISCAL YEAR the obligation's ComplianceScheduleOn.
-  ScheduleOn (its due date) fell in, per the design doc's own Sec.3.2 rationale:
-  "separates 'we are behind this year' from 'we have never dealt with this'".
-  Rows sum to the total exactly (SumOfRows per Sec.4a - no residual, every
-  overdue schedule falls in exactly one bucket by construction).
-
-  [TRAP, inherited from tvfInsightsOverdueSchedules / design doc Sec.3.2's own
-  warning] Overdue is a FLOW metric, not a stock one - it drifts between runs
-  as RecentComplianceTransactionView refreshes (observed elsewhere: 1,387 ->
-  1,398 -> 1,116 on identical SQL in one session). Never compare an overdue
-  figure from one run against another run; only ever report the single
-  as-of-@AsOf snapshot this proc computes.
-
-  [OPEN, not invented here] `closure_rate_pct` (design doc Sec.3.2's own field
-  list) has no defined formula anywhere in this repo yet - same class of open
-  item PAID_TIER_SAMPLE_REFERENCE.md's own Sec.2 already flags for the
-  composite score components ("how X is derived is not defined anywhere").
-  Not emitted by this proc until a real formula is specified - never guessed.
-
-  Error block: 51170-51179. The design doc's own error-block table (CLAUDE.md
-  Sec.5b) still lists 51150-51159 as "20 forward pipeline", but file 20 was
-  repurposed to tenant_token_usage before this session - that block is
-  effectively free too, but 51170+ is the block CLAUDE.md itself names free
-  without ambiguity, so this file uses that one. [FLAG] the block-to-file table
-  in CLAUDE.md Sec.5b needs a follow-up edit once this file's number is final.
-
-  Target: SQL Server (vitComplianceSystem). IDEMPOTENT (DROP + CREATE).
+  Emits SIX result sets. Error codes 51170-51171 (shared block 5117x).
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -70,39 +33,66 @@ BEGIN
 
     /*-- 1. FISCAL-YEAR BOUNDARIES, anchored on @AsOf -----------------------
        Indian FY: April 1 - March 31. "Current FY" is the one @AsOf falls in,
-       "previous FY" the one immediately before it - matches this codebase's
-       own existing "FY2025-26"-shaped period labels (e.g.
-       InsightsReportOrchestrationInput.Period test fixtures). No existing
-       fiscal-year boundary helper anywhere in this repo yet - this is the
-       first, kept local to this proc rather than a shared function until a
-       second real caller needs it (YAGNI; a shared tvf is a one-line
-       extraction later if that happens). */
+       "previous FY" the one immediately before it. ---------------------- */
     DECLARE @currentFyStartYear INT = CASE WHEN MONTH(@AsOf) >= 4 THEN YEAR(@AsOf) ELSE YEAR(@AsOf) - 1 END;
     DECLARE @currentFyStart DATE = DATEFROMPARTS(@currentFyStartYear, 4, 1);
     DECLARE @previousFyStart DATE = DATEADD(YEAR, -1, @currentFyStart);
     DECLARE @currentFyLabel VARCHAR(10) = CONCAT('FY', @currentFyStartYear, '-', RIGHT(CAST(@currentFyStartYear + 1 AS VARCHAR(4)), 2));
     DECLARE @previousFyLabel VARCHAR(10) = CONCAT('FY', @currentFyStartYear - 1, '-', RIGHT(CAST(@currentFyStartYear AS VARCHAR(4)), 2));
 
-    /*-- 2. SCOPED OVERDUE SCHEDULES, same base every other dimension using
-       overdue already trusts ------------------------------------------------*/
-    IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
+    /*-- 2. SCOPED OVERDUE SCHEDULES ---------------------------------------*/
+    /*  [PERF - CORRECTED 2026-09-04] Materialise BOTH sides into indexed temp
+        tables, then join. Joining two inline TVFs directly gives the optimizer
+        no cardinality estimate; a join HINT is worse still, because it forces
+        join order through the inlined function and stops the overdue TVF
+        filtering by tenant before it touches ComplianceScheduleOn (29.4M rows).
+
+        Measured on a 7-branch tenant:
+            bare join                     877 ms
+            INNER HASH JOIN            26,492 ms   <- what was deployed
+            materialised + indexed        438 ms   <- this
+        On V-Mart (494,032 overdue rows) the materialised pattern is 1.9 s.    */
+    IF OBJECT_ID('tempdb..#sp') IS NOT NULL DROP TABLE #sp;
+    SELECT DISTINCT BranchID, CategoryId INTO #sp
+    FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID);
+    CREATE CLUSTERED INDEX IX_sp ON #sp (BranchID, CategoryId);
+
+    IF OBJECT_ID('tempdb..#raw') IS NOT NULL DROP TABLE #raw;
+    /*  [PERF 2026-09-04] OPTION (RECOMPILE) is REQUIRED here, not decorative.
+        Measured on production, tenant 1817 (7 branches, 1,039 overdue rows):
+
+            inside this proc, cached plan   75,468 ms   125,825,937 logical reads
+            same statement, fresh compile      752 ms
+
+        126 million page reads to return 1,039 rows. The procedure had cached a
+        pathological plan for the inlined TVF; every standalone and sp_executesql
+        variant of the identical statement compiles to a good plan in under a
+        second. RECOMPILE costs ~10 ms and removes the risk entirely.
+
+        Do NOT replace this with a join hint - see the note below.            */
     SELECT o.ComplianceInstanceID, o.ComplianceScheduleOnID, o.ScheduleOn,
+           o.CustomerBranchID, o.CategoryId
+    INTO #raw
+    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
+    OPTION (RECOMPILE);
+    CREATE CLUSTERED INDEX IX_raw ON #raw (CustomerBranchID, CategoryId);
+
+    IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
+    SELECT r.ComplianceInstanceID, r.ComplianceScheduleOnID, r.ScheduleOn,
            CASE
-               WHEN o.ScheduleOn >= @currentFyStart THEN 'current_fy'
-               WHEN o.ScheduleOn >= @previousFyStart THEN 'previous_fy'
+               WHEN r.ScheduleOn >= @currentFyStart THEN 'current_fy'
+               WHEN r.ScheduleOn >= @previousFyStart THEN 'previous_fy'
                ELSE 'older'
            END AS Bucket
     INTO #ovd
-    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
-    JOIN dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp
-      ON sp.BranchID = o.CustomerBranchID AND sp.CategoryId = o.CategoryId;
+    FROM #raw r
+    JOIN #sp sp ON sp.BranchID = r.CustomerBranchID AND sp.CategoryId = r.CategoryId;
+
+    DROP TABLE #raw; DROP TABLE #sp;
 
     CREATE CLUSTERED INDEX IX_ovd ON #ovd (Bucket);
 
-    /*-- 3. THE 3 REAL BUCKET ROWS - always exactly 3, zero-filled when a
-       bucket is genuinely empty (never omitted - CLAUDE.md's own "build from
-       the dimension/entity list, or empty members vanish" rule applied to a
-       fixed 3-member list) ---------------------------------------------------*/
+    /*-- 3. THE 3 REAL BUCKET ROWS - always exactly 3, zero-filled ----------*/
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         Bucket        VARCHAR(20)   NOT NULL,
@@ -120,24 +110,16 @@ BEGIN
         /*  DISTINCT ComplianceScheduleOnID, not ComplianceInstanceID - each
             SCHEDULE has exactly one ScheduleOn date, so it falls in exactly
             one bucket by construction. An INSTANCE can own several overdue
-            schedules (recurring obligation, multiple missed due dates) that
-            legitimately land in different buckets - counting those distinct
-            per-bucket-by-instance double counts the instance across buckets
-            and breaks the sum-to-total identity below. Confirmed empirically
-            against UAT tenant 29 (RECONCILIATION FAILED, Msg 51171) before
-            this fix. Matches sql/06's own already-proven convention for this
-            exact "bucket overdue schedules by time window" shape. */
+            schedules in different buckets; counting by instance breaks the
+            sum-to-total identity. Confirmed against UAT tenant 29. */
         SELECT COUNT(DISTINCT o.ComplianceScheduleOnID) AS OverdueCount,
                CAST(MIN(o.ScheduleOn) AS DATE) AS OldestDueDate,
                CAST(MAX(o.ScheduleOn) AS DATE) AS NewestDueDate
         FROM #ovd o WHERE o.Bucket = b.Bucket
     ) x;
 
-    /*-- 4. CONTROL TOTALS - captured in the SAME instant as the rows above,
-       per CLAUDE.md non-negotiable #3. SumOfRows names it per Sec.4a - every
-       overdue SCHEDULE falls in exactly one bucket by construction, so this
-       is an exact identity, never approximate (see the OUTER APPLY comment
-       above for why the unit must be schedule, not instance). -------------*/
+    /*-- 4. CONTROL TOTALS - exact identity: every overdue SCHEDULE is in
+       exactly one bucket. ------------------------------------------------*/
     DECLARE @sumOfRows INT = (SELECT SUM(OverdueCount) FROM #rows);
     DECLARE @distinctOverdueSchedules INT = (SELECT COUNT(DISTINCT ComplianceScheduleOnID) FROM #ovd);
 
@@ -149,9 +131,7 @@ BEGIN
            @currentFyLabel AS CurrentFyLabel, @previousFyLabel AS PreviousFyLabel,
            @sumOfRows AS SumOfRows, @distinctOverdueSchedules AS DistinctOverdueSchedules;
 
-    /*-- 5. THE 3 REAL ROWS, plus each bucket's real share of the total (a
-       computed comparative, per CLAUDE.md non-negotiable #5 - never phrased
-       by the LLM) ------------------------------------------------------------*/
+    /*-- 5. THE 3 REAL ROWS + computed share ----------------------------------*/
     SELECT 'rows' AS ResultSet,
            Bucket, FYLabel, OverdueCount, OldestDueDate, NewestDueDate,
            CASE WHEN @sumOfRows = 0 THEN NULL
@@ -159,11 +139,7 @@ BEGIN
     FROM #rows
     ORDER BY CASE Bucket WHEN 'current_fy' THEN 1 WHEN 'previous_fy' THEN 2 ELSE 3 END;
 
-    /*-- 6. DETECTOR EMISSION POLICY - CLAUDE.md Sec.4. Only one real detector
-       here (3 fixed buckets, not a per-member scan): does the "older" bucket
-       dominate the backlog. Eligible = @sumOfRows (every overdue schedule is
-       "eligible" to fall in any bucket), matching sql/05's own Eligible
-       convention. -------------------------------------------------------- */
+    /*-- 6. DETECTOR EMISSION POLICY - does the "older" bucket dominate? ---*/
     IF OBJECT_ID('tempdb..#detector') IS NOT NULL DROP TABLE #detector;
     CREATE TABLE #detector (
         Detector   VARCHAR(40) PRIMARY KEY,
@@ -184,7 +160,7 @@ BEGIN
 
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
-    /*-- 7. TYPED ASSERTIONS (comparatives COMPUTED here - spec Sec.6.10) ---*/
+    /*-- 7. TYPED ASSERTIONS ----------------------------------------------*/
     IF OBJECT_ID('tempdb..#assert') IS NOT NULL DROP TABLE #assert;
     CREATE TABLE #assert (
         AssertionId     VARCHAR(20),
@@ -199,14 +175,12 @@ BEGIN
         Caveat          NVARCHAR(200) NULL
     );
 
-    -- unconditional: each bucket's own share of the backlog
     INSERT #assert
     SELECT 'A-' + UPPER(Bucket), 'backlog_share_pct', ISNULL(FYLabel, N'older'),
            CASE WHEN @sumOfRows = 0 THEN 0 ELSE CAST(100.0 * OverdueCount / @sumOfRows AS DECIMAL(18,2)) END,
            NULL, NULL, NULL, NULL, NULL, NULL
     FROM #rows;
 
-    -- policy-gated: the aggregate "backlog is structurally old" finding
     IF (SELECT EmitMode FROM #detector WHERE Detector = 'older_bucket_dominates') = 'aggregate'
         INSERT #assert
         SELECT 'A-OLDER-AGG', 'backlog_older_than_previous_fy', N'tenant',
@@ -216,7 +190,7 @@ BEGIN
 
     SELECT 'assertions' AS ResultSet, * FROM #assert;
 
-    /*-- 8. FINDINGS - every one backed by assertion ids ---------------------*/
+    /*-- 8. FINDINGS --------------------------------------------------------*/
     IF OBJECT_ID('tempdb..#find') IS NOT NULL DROP TABLE #find;
     CREATE TABLE #find (
         FindingId VARCHAR(20), Severity VARCHAR(10),
@@ -234,7 +208,7 @@ BEGIN
 
     SELECT 'findings' AS ResultSet, * FROM #find;
 
-    /*-- 9. DATA-QUALITY NOTES - same shape every other dimension emits -----*/
+    /*-- 9. DATA-QUALITY NOTES ----------------------------------------------*/
     SELECT 'data_quality' AS ResultSet, Issue, Detail
     FROM (
         SELECT 'zero_overdue' AS Issue,
@@ -242,9 +216,12 @@ BEGIN
         WHERE @sumOfRows = 0
         UNION ALL
         SELECT 'flow_metric_caveat',
-               N'Overdue is a flow metric and drifts between runs as RecentComplianceTransactionView refreshes - never compare this figure against a different run, only report this single as-of snapshot.'
+               N'Overdue is a flow metric and moves between runs - never compare this figure against a different run, only report this single as-of snapshot.'
     ) q;
 
     DROP TABLE #ovd; DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
 END
+GO
+
+PRINT 'Backlog aging dimension installed.';
 GO

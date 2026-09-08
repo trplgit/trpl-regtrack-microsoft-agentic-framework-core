@@ -5,11 +5,11 @@
   Pattern     : sql/09_dimension_nature.sql (peer-member list, not a tree).
   Emits SIX result sets. Error block 51160-51169.
 
-  -- [FIX] Moved from 51130-51139: that block is owned by sql/15_freetier_
-  -- digest_log.sql, which this file collided with outright on THROW 51130.
-  -- This file also reused 51131 for two different reconciliation conditions
-  -- and 51132 for two different dictionary/master-data conditions - every
-  -- condition below now has its own code, per CLAUDE.md Sec.5b.
+  -- [FIX] Moved from 51130-51139: that block was already owned by
+  -- sql/15_freetier_digest_log.sql, AND this file reused 51131 and 51132 for two
+  -- DIFFERENT conditions each - an operator seeing 51132 could not tell whether
+  -- to seed a dictionary row or investigate empty master data. Every condition
+  -- now has its own code.
 
   -- WHY THIS PROC EXISTS ----------------------------------------------------
   sql/06's LicencesLapsingNext30 previously read Compliance.ComplianceType = 2.
@@ -43,10 +43,7 @@
     - Lic_tbl_StatusMaster: ID bigint, StatusName varchar (NOT "Name" - fixed
       below), IsDeleted bit, IsVisibleToUser bit. Confirmed live to have the
       SAME duplicate-name trap as ComplianceStatus (Sec.5). Bucket by ID only -
-      see the #expiredStatusIds gate below, which refuses to run rather than guess.
-      [RESOLVED] the dictionary now confirms StatusID 11 ("Validity Expired") is
-      expiry-equivalent to StatusID 3 - both carry Meaning='expired'. The gate reads
-      a SET now, not a single id, for exactly this reason.
+      see the #licStatus gate below, which refuses to run rather than guess.
     - Lic_tbl_LicenseComplianceInstanceMapping: ID, LicenseID, ComplianceInstanceID,
       IsStatutoryORInternal char. Confirmed real, still not joined - see the
       branch-only-scope note below.
@@ -101,23 +98,47 @@ BEGIN
         procs - this proc never touches ComplianceStatus / vInsightsStatusCurrent,
         so that check would be a spurious coupling to an unrelated system.        */
 
-    /*  Fail closed rather than guess the Expired status id(s) on a table already
-        confirmed to have duplicate-name rows. See header.
-        [UPDATED - dictionary now richer than when this proc was first written] The
-        dictionary has since been enriched (by someone/something else) to classify all
-        18 Lic_tbl_StatusMaster ids, and it confirms StatusID 11 ("Validity Expired") IS
-        expiry-equivalent to StatusID 3 - the open question this proc originally left
-        unresolved. A SET, not a scalar, because that confirmation means there can now
-        legitimately be more than one Meaning='expired' row. */
-    IF OBJECT_ID('tempdb..#expiredStatusIds') IS NOT NULL DROP TABLE #expiredStatusIds;
-    SELECT TRY_CAST(p.RawValue AS INT) AS StatusID
-    INTO #expiredStatusIds
+    /*  Fail closed rather than guess the Expired status id on a table already
+        confirmed to have duplicate-name rows. See header. */
+    /*  LAPSE ELIGIBILITY - from the dictionary, per BA ruling.
+
+        "Lapsed is only when the due date of the licence has expired.
+         Terminated/Rejected licences shouldn't count as lapsed but as
+         Terminated or Rejected."
+
+        So EndDate decides, and status only EXCLUDES licences that ended some
+        other way. Four buckets are not lapse-eligible: terminated, rejected,
+        renewed (EndDate superseded) and not_applicable (never a live
+        obligation). The last two are not in the ruling's words but follow from
+        its logic - reporting a RENEWED licence as lapsed would be plainly wrong,
+        and it affected 64 licences.
+
+        [SUPERSEDED] This replaces a corroboration model that required the
+        latest status to AGREE the licence had expired. That under-counted
+        badly: it reported 885 lapses where the due-date rule gives 1,554,
+        because a licence whose record still says 'Active' or 'Expiring' past
+        its EndDate has a stale RECORD, not a valid licence.                  */
+    IF OBJECT_ID('tempdb..#licStatus') IS NOT NULL DROP TABLE #licStatus;
+    SELECT TRY_CAST(p.RawValue AS INT) AS StatusId,
+           p.Meaning                   AS Bucket,
+           CAST(CASE WHEN p.Meaning IN (N'terminated', N'rejected',
+                                        N'renewed',    N'not_applicable')
+                     THEN 0 ELSE 1 END AS BIT) AS LapseEligible
+    INTO #licStatus
     FROM dbo.InsightsEnumPolarity p
     JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
-    WHERE p.Semantic = 'LicenceStatus' AND p.Meaning = 'expired';
+    WHERE p.Semantic = 'LicenceStatus'
+      AND TRY_CAST(p.RawValue AS INT) IS NOT NULL;
 
-    IF NOT EXISTS (SELECT 1 FROM #expiredStatusIds)
-        THROW 51165, N'DICTIONARY GAP - no Lic_tbl_StatusMaster id is mapped to Meaning=expired in InsightsEnumPolarity (Semantic=LicenceStatus). Lic_tbl_StatusMaster has confirmed duplicate-name rows, so a name lookup is unsafe. Seed the verified id(s) and re-run. Refusing to compute.', 1;
+    IF NOT EXISTS (SELECT 1 FROM #licStatus)
+        THROW 51165, N'DICTIONARY GAP - no Lic_tbl_StatusMaster ids are classified under Semantic=LicenceStatus in InsightsEnumPolarity. That table has confirmed whitespace-variant names, so a name lookup is unsafe. Seed the verified classification and re-run. Refusing to compute.', 1;
+
+    /*  Fail closed on a status the dictionary has never seen - the same
+        unknown-enum rule the ComplianceStatus dictionary applies.            */
+    IF EXISTS (SELECT 1 FROM Lic_tbl_StatusMaster sm
+               WHERE sm.IsDeleted = 0
+                 AND NOT EXISTS (SELECT 1 FROM #licStatus ls WHERE ls.StatusId = sm.ID))
+        THROW 51167, N'DICTIONARY GAP - Lic_tbl_StatusMaster contains active statuses absent from the LicenceStatus classification. Refusing to guess whether they are lapse-eligible. Seed them and re-run.', 1;
 
     /*-- 1. SCOPED BRANCH SET - see header: branch-only, not full 2-D ----*/
     IF OBJECT_ID('tempdb..#branches') IS NOT NULL DROP TABLE #branches;
@@ -128,7 +149,7 @@ BEGIN
     /*-- 2. SCOPED LICENCE BASE -------------------------------------------*/
     IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
     SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID,
-           li.LicenseTypeID, li.StartDate, li.EndDate
+           NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.StartDate, li.EndDate
     INTO #lic
     FROM Lic_tbl_LicenseInstance li
     JOIN #branches b ON b.BranchID = li.CustomerBranchID
@@ -174,10 +195,13 @@ BEGIN
         THROW 51166, N'MASTER DATA GAP - Lic_tbl_LicenseType_Master has no active or in-use rows. Refusing to compute a licence dimension.', 1;
 
     /*-- 5. ROWS -----------------------------------------------------------
-       LapsedCorroborated : EndDate has passed AND latest status = Expired.
-       LapsedUncorroborated : EndDate has passed but latest status disagrees
-                               (stale record - real, declared, never claimed
-                               as a confirmed lapse). See header trap note.
+       Lapsed : EndDate has passed AND the licence is lapse-eligible - i.e. it
+                did NOT end another way. A stale status that has not caught up
+                (Active, Expiring) is still lapsed; so is a licence with no
+                status row at all, since absence is not exclusion.
+       ExcludedTerminalState : EndDate has passed but the licence was terminated,
+                rejected, renewed (EndDate superseded) or never applicable. Per
+                the BA ruling these are NOT lapses and get their own bucket.
        LapsingNext30 : forward window, mirrors sql/06's DueNext30 windowing. */
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
@@ -186,57 +210,47 @@ BEGIN
         IsRetired               BIT            NOT NULL,
         TotalLicences          INT            NOT NULL,
         ActiveLicences         INT            NOT NULL,
-        LapsedCorroborated     INT            NOT NULL,
-        LapsedUncorroborated   INT            NOT NULL,
+        Lapsed     INT            NOT NULL,
+        ExcludedTerminalState   INT            NOT NULL,
         LapsingNext30          INT            NOT NULL,
         BranchesCovered        INT            NOT NULL,
         -- derived
-        LapsedCorroboratedPct  DECIMAL(5,1)   NULL,
+        LapsedPct  DECIMAL(5,1)   NULL,
         OverdueRank            INT            NULL,
         Flags                  VARCHAR(200)   NULL
     );
 
     INSERT #rows (LicenseTypeID, LicenseTypeName, IsRetired, TotalLicences, ActiveLicences,
-                  LapsedCorroborated, LapsedUncorroborated, LapsingNext30, BranchesCovered)
+                  Lapsed, ExcludedTerminalState, LapsingNext30, BranchesCovered)
     SELECT
         t.LicenseTypeID, t.LicenseTypeName, t.IsRetired,
         COUNT(l.LicenseId),
         SUM(CASE WHEN l.EndDate >= @AsOf THEN 1 ELSE 0 END),
-        -- [BUG FOUND LIVE, matches a documented CLAUDE.md trap] SUM(CASE WHEN ... IN (SELECT ...))
-        -- is an aggregate over a subquery - SQL Server rejects it outright ("Cannot perform an
-        -- aggregate function on an expression containing an aggregate or a subquery"). Fixed with
-        -- a LEFT JOIN to #expiredStatusIds (es) below and a NULL test instead, per the exact fix
-        -- CLAUDE.md's own hard-rules list already prescribes for this class of bug.
-        SUM(CASE WHEN l.EndDate < @AsOf AND es.StatusID IS NOT NULL THEN 1 ELSE 0 END),
-        SUM(CASE WHEN l.EndDate < @AsOf AND es.StatusID IS NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.EndDate < @AsOf AND ISNULL(CAST(c.LapseEligible AS INT), 1) = 1 THEN 1 ELSE 0 END),
+        /*  ISNULL(..., 1): a licence with NO status transaction row at all is
+            still LAPSED if its EndDate has passed. Absence of a record is not
+            evidence that it was terminated or renewed, and the BA ruling makes
+            the due date the deciding fact. Without this the reconciliation
+            drops them silently - 15 licences on the tenant this was built
+            against. The count is declared in data_quality.                   */
+        SUM(CASE WHEN l.EndDate < @AsOf AND c.LapseEligible = 0 THEN 1 ELSE 0 END),
         SUM(CASE WHEN l.EndDate > @AsOf AND l.EndDate <= DATEADD(DAY, 30, @AsOf) THEN 1 ELSE 0 END),
         COUNT(DISTINCT l.BranchID)
     FROM #type t
-    LEFT JOIN #lic l              ON l.LicenseTypeID = t.LicenseTypeID
-    LEFT JOIN #latestStatus ls    ON ls.LicenseID = l.LicenseId
-    LEFT JOIN #expiredStatusIds es ON es.StatusID = ls.StatusID
+    LEFT JOIN #lic l           ON l.LicenseTypeID = t.LicenseTypeID
+    LEFT JOIN #latestStatus ls ON ls.LicenseID = l.LicenseId
+    LEFT JOIN #licStatus c    ON c.StatusId = ls.StatusID
     GROUP BY t.LicenseTypeID, t.LicenseTypeName, t.IsRetired;
 
     /*-- 6. RECONCILIATION, with the untyped bucket counted back ---------
-       [FIX, 2026-09-02] This comment used to claim "@untyped is structurally
-       always 0" (LicenseTypeID is NOT NULL on Lic_tbl_LicenseInstance, so a
-       NULL-only check can never fire) - true of the column, wrong about the
-       real data. Confirmed live against UAT tenant 29: 5 licences (branches
-       211/214/20482, all dated 2019-2021 - legacy) carry LicenseTypeID = -1,
-       a SENTINEL for "no type assigned", not a real Lic_tbl_LicenseType_Master.ID
-       (those are always positive, auto-increment). The column being NOT NULL
-       just means the source system needed an out-of-band value to express
-       "untyped" instead of NULL - the same class of trap as CLAUDE.md's own
-       ProductMapping.IsActive/RiskType entries (Sec.5): believe the data, not
-       the constraint. Any LicenseTypeID <= 0 is now treated as the untyped
-       sentinel (declared honestly via UntypedLicences/the untyped_licences
-       data_quality note below, never silently dropped) - a POSITIVE
-       LicenseTypeID that still matches no real type row stays a genuine
-       referential break (THROW 51161, unchanged) and is never absorbed into
-       this bucket, since that really is corrupted data, not a placeholder. */
+       Confirmed live: LicenseTypeID is NOT NULL on Lic_tbl_LicenseInstance,
+       so @untyped is structurally always 0. Kept anyway (same shape as
+       sql/09's untagged-nature handling) as a cheap belt-and-suspenders
+       check - if this ever fires, the NOT NULL constraint changed underneath
+       this proc, which is itself worth knowing about.                    */
     DECLARE @rowSum      INT = (SELECT ISNULL(SUM(TotalLicences),0) FROM #rows);
     DECLARE @scopedTotal INT = (SELECT COUNT(*) FROM #lic);
-    DECLARE @untyped     INT = (SELECT COUNT(*) FROM #lic WHERE LicenseTypeID IS NULL OR LicenseTypeID <= 0);
+    DECLARE @untyped     INT = (SELECT COUNT(*) FROM #lic WHERE LicenseTypeID IS NULL);
     DECLARE @orphanType  INT = (SELECT COUNT(*) FROM #lic l
                                 WHERE l.LicenseTypeID IS NOT NULL AND l.LicenseTypeID > 0
                                   AND NOT EXISTS (SELECT 1 FROM #type t WHERE t.LicenseTypeID = l.LicenseTypeID));
@@ -250,12 +264,12 @@ BEGIN
     DECLARE @hasAnyLicences BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
     DECLARE @tenantLapsedPct DECIMAL(5,1) =
         CASE WHEN @scopedTotal = 0 THEN 0
-             ELSE 100.0 * (SELECT ISNULL(SUM(LapsedCorroborated),0) FROM #rows) / @scopedTotal END;
-    DECLARE @totalUncorroborated INT = (SELECT ISNULL(SUM(LapsedUncorroborated),0) FROM #rows);
+             ELSE 100.0 * (SELECT ISNULL(SUM(Lapsed),0) FROM #rows) / @scopedTotal END;
+    DECLARE @totalExcludedTerminal INT = (SELECT ISNULL(SUM(ExcludedTerminalState),0) FROM #rows);
 
     UPDATE #rows SET
-        LapsedCorroboratedPct = CASE WHEN TotalLicences = 0 THEN 0
-                                     ELSE 100.0 * LapsedCorroborated / TotalLicences END;
+        LapsedPct = CASE WHEN TotalLicences = 0 THEN 0
+                                     ELSE 100.0 * Lapsed / TotalLicences END;
 
     /*  Materiality floor on ranking - same rule as every other dimension:
         a type with one lapsed licence must not outrank one with hundreds. */
@@ -264,7 +278,7 @@ BEGIN
     DECLARE @rankDegraded     BIT = CASE WHEN @materialMembers < 2 THEN 1 ELSE 0 END;
     DECLARE @rankFloor        INT = CASE WHEN @rankDegraded = 1 THEN 1 ELSE @materialityFloor END;
 
-    ;WITH r AS (SELECT LicenseTypeID, RANK() OVER (ORDER BY LapsedCorroboratedPct DESC) AS rk
+    ;WITH r AS (SELECT LicenseTypeID, RANK() OVER (ORDER BY LapsedPct DESC) AS rk
                 FROM #rows WHERE TotalLicences >= @rankFloor)
     UPDATE #rows SET OverdueRank = r.rk FROM #rows JOIN r ON r.LicenseTypeID = #rows.LicenseTypeID;
 
@@ -272,7 +286,7 @@ BEGIN
     UPDATE #rows SET Flags =
         STUFF(
             CASE WHEN @hasAnyLicences = 1 AND TotalLicences >= @rankFloor
-                  AND LapsedCorroboratedPct > @tenantLapsedPct
+                  AND LapsedPct > @tenantLapsedPct
                  THEN ',high_lapse_rate' ELSE '' END
         , 1, 1, '');
 
@@ -281,11 +295,11 @@ BEGIN
         @scopedTotal                  AS ScopedLicences,
         @rowSum                       AS TypedLicences   /* + UntypedLicences = ScopedLicences - see the residual note above */,
         CAST(1 AS BIT)                AS Reconciled,
-        @tenantLapsedPct              AS TenantLapsedCorroboratedPct,
+        @tenantLapsedPct              AS TenantLapsedPct,
         (SELECT COUNT(*) FROM #rows)  AS LicenceTypesReported,
         (SELECT COUNT(*) FROM #rows WHERE TotalLicences > 0) AS LicenceTypesWithLicences,
         @untyped                      AS UntypedLicences,
-        @totalUncorroborated          AS UncorroboratedLapsedLicences;
+        @totalExcludedTerminal          AS ExcludedTerminalStateLicences;
 
     SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY TotalLicences DESC;
 
@@ -318,16 +332,16 @@ BEGIN
         ComparatorValue DECIMAL(18,2) NULL, VsComparatorPP DECIMAL(9,2) NULL,
         Direction VARCHAR(10) NULL, Caveat NVARCHAR(500) NULL);
 
-    INSERT #assert VALUES ('A-TENANT','lapsed_corroborated_pct',N'tenant',@tenantLapsedPct,NULL,NULL,NULL,NULL,NULL,NULL);
+    INSERT #assert VALUES ('A-TENANT','lapsed_pct',N'tenant',@tenantLapsedPct,NULL,NULL,NULL,NULL,NULL,NULL);
 
     DECLARE @rankable  INT = (SELECT COUNT(*) FROM #rows WHERE TotalLicences >= @rankFloor);
     DECLARE @tiedAtTop INT = (SELECT COUNT(*) FROM #rows WHERE TotalLicences >= @rankFloor AND OverdueRank = 1);
 
     IF @rankable >= 2
     INSERT #assert
-    SELECT TOP 1 'A-WORST-LICTYPE','lapsed_corroborated_pct',LicenseTypeName,LapsedCorroboratedPct,OverdueRank,@rankable,
-           @tenantLapsedPct, LapsedCorroboratedPct - @tenantLapsedPct,
-           CASE WHEN LapsedCorroboratedPct > @tenantLapsedPct THEN 'worse' ELSE 'better' END,
+    SELECT TOP 1 'A-WORST-LICTYPE','lapsed_pct',LicenseTypeName,LapsedPct,OverdueRank,@rankable,
+           @tenantLapsedPct, LapsedPct - @tenantLapsedPct,
+           CASE WHEN LapsedPct > @tenantLapsedPct THEN 'worse' ELSE 'better' END,
            NULLIF(CONCAT(
                CASE WHEN @rankDegraded = 1
                     THEN CONCAT(N'degraded_ranking_sample: no licence type reaches the ', @materialityFloor,
@@ -336,14 +350,14 @@ BEGIN
                     THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' licence types share this rate - not uniquely the highest. ')
                     ELSE N'' END), N'')
     FROM #rows WHERE TotalLicences >= @rankFloor
-    ORDER BY LapsedCorroboratedPct DESC, TotalLicences DESC;
+    ORDER BY LapsedPct DESC, TotalLicences DESC;
 
     IF (SELECT EmitMode FROM #detector WHERE Detector='high_lapse_rate') = 'individual'
         INSERT #assert
-        SELECT TOP 5 'A-LAPSE-' + CAST(ROW_NUMBER() OVER (ORDER BY LapsedCorroborated DESC) AS VARCHAR(5)),
-               'lapsed_corroborated_pct', LicenseTypeName, LapsedCorroboratedPct, NULL, NULL,
-               @tenantLapsedPct, LapsedCorroboratedPct - @tenantLapsedPct, 'worse', NULL
-        FROM #rows WHERE Flags LIKE '%high_lapse_rate%' ORDER BY LapsedCorroborated DESC;
+        SELECT TOP 5 'A-LAPSE-' + CAST(ROW_NUMBER() OVER (ORDER BY Lapsed DESC) AS VARCHAR(5)),
+               'lapsed_pct', LicenseTypeName, LapsedPct, NULL, NULL,
+               @tenantLapsedPct, LapsedPct - @tenantLapsedPct, 'worse', NULL
+        FROM #rows WHERE Flags LIKE '%high_lapse_rate%' ORDER BY Lapsed DESC;
     ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='high_lapse_rate') = 'aggregate'
         INSERT #assert
         SELECT 'A-LAPSE-AGG','licence_types_high_lapse_rate',N'tenant',
@@ -360,21 +374,21 @@ BEGIN
 
     INSERT #find
     SELECT 'F-WORST-LICTYPE','high',
-           CONCAT(N'', ScopeLabel, N' has the highest confirmed lapse rate at ', Value, N'%'),
+           CONCAT(N'', ScopeLabel, N' has the highest lapse rate at ', Value, N'%'),
            'A-WORST-LICTYPE,A-TENANT',
-           N'Corroborated lapses only - EndDate past AND latest status confirms Expired. See UncorroboratedLapsedLicences in control_totals for the stale-record count this excludes.'
+           N'Lapsed = due date passed, per the BA ruling. Status only EXCLUDES licences that ended another way (terminated, rejected, renewed, not applicable). A stale status that has not caught up is still lapsed.'
     FROM #assert WHERE AssertionId = 'A-WORST-LICTYPE' AND Direction = 'worse';
 
     INSERT #find
     SELECT 'F-LAPSE','high',
-           CONCAT(N'', ScopeLabel, N' runs a ', Value, N'% confirmed lapse rate, against a tenant rate of ', ComparatorValue, N'%'),
+           CONCAT(N'', ScopeLabel, N' runs a ', Value, N'% lapse rate, against a tenant rate of ', ComparatorValue, N'%'),
            AssertionId, NULL
     FROM #assert WHERE AssertionId LIKE 'A-LAPSE-[0-9]%';
 
     INSERT #find
     SELECT 'F-LAPSE-AGG','medium',
            CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' licence types (', VsComparatorPP,
-                  N'%) run a confirmed lapse rate above the tenant average'),
+                  N'%) run a lapse rate above the tenant average'),
            AssertionId, NULL
     FROM #assert WHERE AssertionId = 'A-LAPSE-AGG';
 
@@ -387,16 +401,14 @@ BEGIN
              + N'other dimension enforces - licences are not linked to ComplianceCategoryId without '
              + N'Lic_tbl_LicenseComplianceInstanceMapping, which this proc does not yet join.' AS Detail
         UNION ALL
-        SELECT 'uncorroborated_lapses',
-               CONCAT(N'', @totalUncorroborated, N' licence(s) are past EndDate but their latest recorded status '
-                    + N'does NOT confirm Expired (a stale record, not a confirmed lapse). Excluded from every '
-                    + N'lapse-rate figure above and never claimed as lapsed.')
-        WHERE @totalUncorroborated > 0
+        SELECT 'excluded_terminal_states',
+               CONCAT(N'', @totalExcludedTerminal, N' licence(s) are past EndDate but ended another way - '
+                    + N'terminated, rejected, renewed or never applicable. Per the BA ruling these are NOT '
+                    + N'lapsed and are reported in their own bucket, not as a shortfall.')
+        WHERE @totalExcludedTerminal > 0
         UNION ALL
         SELECT 'untyped_licences',
-               CONCAT(N'', @untyped, N' licence(s) in this scope carry no real licence type (LicenseTypeID is '
-                    + N'missing or a non-positive sentinel, e.g. -1) and appear in NO row below - counted back '
-                    + N'via UntypedLicences in control_totals, never silently dropped.')
+               CONCAT(N'', @untyped, N' licence(s) in this scope carry no LicenseTypeID and appear in NO row below.')
         WHERE @untyped > 0
         UNION ALL
         SELECT 'licence_type_retired_still_in_use',
@@ -412,16 +424,28 @@ BEGIN
                     + N'characteristic of this table, worth knowing before running against a large tenant.')
         WHERE @avgTxnPerLic > 20.0
         UNION ALL
-        SELECT 'licence_status_expired_ids_in_use',
-               CONCAT(N'Corroborated lapse this run is decided by ', ids.List,
-                      N' (Lic_tbl_StatusMaster ids the dictionary maps to LicenceStatus=expired). '
-                    + N'Previously only StatusID 3 was mapped and StatusID 11 (Validity Expired) fell into '
-                    + N'LapsedUncorroborated instead - the dictionary has since confirmed the two are '
-                    + N'expiry-equivalent.')
-        FROM (SELECT STRING_AGG(CAST(StatusID AS VARCHAR(10)), ', ') AS List FROM #expiredStatusIds) ids
+        SELECT 'licence_status_classification',
+               N'All 18 Lic_tbl_StatusMaster ids are classified in the dictionary (Semantic=LicenceStatus). '
+             + N'Two read as expiry - ID 3 (Expired) and ID 11 (Validity Expired) - and both are lapse-eligible. '
+             + N'Four buckets are NOT lapse-eligible: terminated, rejected, renewed, not_applicable. '
+             + N'Bucket by ID only: IDs 13/14 and 15/16 differ solely by a double space and both are in live use.'
+        UNION ALL
+        SELECT 'licence_statuses_unclassified',
+               CONCAT(N'', (SELECT COUNT(*) FROM Lic_tbl_StatusMaster sm
+                            WHERE sm.IsDeleted = 0
+                              AND sm.ID NOT IN (SELECT StatusId FROM #licStatus)
+                              AND sm.ID NOT IN (2,4,5,6,7,9,10)),
+                      N' active licence statuses are neither mapped as expiry-equivalent nor '
+                    + N'recognised as valid - e.g. Terminated, Terminated_P, Rejected. Whether a '
+                    + N'terminated licence counts as a lapse is a BA ruling, not a code decision. '
+                    + N'Those licences are currently reported as NOT lapsed.')
+        WHERE EXISTS (SELECT 1 FROM Lic_tbl_StatusMaster sm
+                      WHERE sm.IsDeleted = 0
+                        AND sm.ID NOT IN (SELECT StatusId FROM #licStatus)
+                        AND sm.ID NOT IN (2,4,5,6,7,9,10))
     ) q;
 
-    DROP TABLE #expiredStatusIds; DROP TABLE #branches; DROP TABLE #lic; DROP TABLE #latestStatus; DROP TABLE #type;
+    DROP TABLE #branches; DROP TABLE #lic; DROP TABLE #latestStatus; DROP TABLE #type;
     DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

@@ -5,11 +5,27 @@ using Insights.Domain;
 
 namespace Insights.Worker.Orchestration.Activities;
 
-public sealed record FetchDimensionsInput(int UserId, int CustomerId);
+/// <summary>
+/// RequestedDimensions [ADDED 2026-09-08] - null/empty fetches all fourteen, unchanged from before
+/// this field existed. Non-empty restricts to exactly the named dimensions (case-sensitive, must
+/// match the literal names TryFetchAsync below uses - "Location", "Entity", ... - same closed set
+/// DimensionFailureMetrics's own doc comment already documents). Powers the dimension-selection
+/// report type (DimensionSelectionComposition) and any future ad-hoc single/multi-dimension
+/// inspection tooling - one filter, not a second fetch path.
+/// </summary>
+public sealed record FetchDimensionsInput(int UserId, int CustomerId, IReadOnlyList<string>? RequestedDimensions = null);
 
 // Trailing default, not required - every existing construction site (tests, manual runs) predates
 // design doc Sec.11.4 and already meant "nothing failed" implicitly. Matches
 // InsightsReportOrchestrationInput.Priority's same reasoning elsewhere in this codebase.
+//
+// [FIX - found live] Two public constructors with neither marked [JsonConstructor] left classic
+// DTFx's Newtonsoft.Json-based DataConverter unable to pick one when this type crossed the
+// activity boundary: "Unable to find a constructor to use for type FetchDimensionsOutput."
+// Confirmed live - the very first real run to reach a genuine dimension failure (Location, via
+// SqlDimensionRepository's new catch-all) was also the first to actually exercise this
+// deserialization path; every earlier attempt died before FetchDimensionsActivity ever returned.
+[method: Newtonsoft.Json.JsonConstructor]
 public sealed record FetchDimensionsOutput(
     IReadOnlyDictionary<string, string> DimensionResults,
     IReadOnlyList<Assertion> Assertions,
@@ -65,9 +81,13 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
         var assertions = new List<Assertion>();
         var findings = new List<Finding>();
         var failedDimensions = new List<string>();
+        var requested = input.RequestedDimensions;
 
         async Task TryFetchAsync<TControlTotals, TRow>(string name, Func<Task<DimensionResult<TControlTotals, TRow>>> fetch)
         {
+            if (requested is { Count: > 0 } && !requested.Contains(name))
+                return; // not one of the caller's requested dimensions - skip the SQL call entirely.
+
             try
             {
                 var result = await fetch();
@@ -77,6 +97,13 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
             }
             catch (Exception ex) when (ex is DimensionReconciliationException or DimensionContractViolationException)
             {
+                // [TEMP DIAGNOSTIC 2026-09-07] This catch previously had NO visible logging at all -
+                // a dimension degrading to a placeholder was only observable via the
+                // insights.dimension.block_failures_total OTel counter, which nothing in this
+                // environment currently exports/reads. Added while diagnosing why tenant 29's
+                // Coverage pane had no locationRows to inject - remove once confirmed whether Location
+                // is actually failing here and, if so, why.
+                Console.Error.WriteLine($"[DIAG] dimension '{name}' degraded to placeholder: {ex.GetType().Name}: {ex.Message}");
                 failedDimensions.Add(name);
                 failureRecorder.RecordBlockFailure(name);
             }

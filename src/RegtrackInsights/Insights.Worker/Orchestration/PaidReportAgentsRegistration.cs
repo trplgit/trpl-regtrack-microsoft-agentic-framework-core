@@ -89,9 +89,35 @@ public static class PaidReportAgentsRegistration
         // A second IFixedHolisticReportHtmlAgent registration briefly existed alongside this one
         // (so RenderHtmlActivity could pick between two agents by report type) - removed the same
         // session once the plain path it existed to distinguish from was gone; back to one agent.
-        services.AddSingleton<IReportHtmlAgent>(sp => new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
-            endpoint, model, apiKey, "ReportHtmlAgent", "Renders the fixed 6-tab Holistic Insights report as self-contained HTML.",
-            LoadPromptSync(sp, "05_report_html_fixed_holistic.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+        //
+        // [REINTRODUCED 2026-09-08] Two agents again, for a genuinely new reason (not the removed
+        // one above): DimensionSelectionComposition.ReportType ("dimension_selection") needs its
+        // own render prompt with no fixed 6-tab hero. Registered as a plain
+        // Dictionary<string,IReportHtmlAgent> keyed by ReportType, not two separate IReportHtmlAgent
+        // registrations (DI would only resolve the last one) and not .NET keyed-DI attributes (this
+        // codebase has not exercised that feature anywhere else - a plain dictionary is one thing
+        // fewer to get wrong under time pressure). RenderHtmlActivity throws on an unrecognised
+        // ReportType rather than silently picking one - CLAUDE.md non-negotiable #2.
+        services.AddSingleton<IReadOnlyDictionary<string, IReportHtmlAgent>>(sp =>
+        {
+            var usage = sp.GetRequiredService<ILlmUsageRecorder>();
+            var gate = sp.GetService<LlmConcurrencyGate>();
+
+            IReportHtmlAgent Build(string name, string description, string promptFile) =>
+                new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
+                    endpoint, model, apiKey, name, description,
+                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate));
+
+            return new Dictionary<string, IReportHtmlAgent>
+            {
+                ["fixed_holistic"] = Build(
+                    "ReportHtmlAgent", "Renders the fixed 6-tab Holistic Insights report as self-contained HTML.",
+                    "05_report_html_fixed_holistic.md"),
+                ["dimension_selection"] = Build(
+                    "DimensionSelectionReportHtmlAgent", "Renders a caller-selected subset of dimensions as self-contained HTML, no fixed tabs.",
+                    "05_report_html_dimension_selection.md"),
+            };
+        });
 
         // Headless Chromium, launched once at startup, shared by both DomPurifySanitizer and
         // PlaywrightReportQa - launching per-activity-call would be a multi-hundred-millisecond

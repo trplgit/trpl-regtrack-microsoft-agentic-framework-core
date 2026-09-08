@@ -1,4 +1,5 @@
 ﻿using System.Data;
+using System.Diagnostics;
 using Dapper;
 using Insights.Domain;
 using Microsoft.Data.SqlClient;
@@ -186,60 +187,89 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         Func<SqlMapper.GridReader, Task<TControlTotals>>? controlTotalsReader,
         CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
-
-        try
+        // [FIX - found live] "Ambiguous column name 'VsPeerStateNormPP'" from
+        // usp_Insights_Dimension_Location is genuinely intermittent, not data- or tenant-dependent -
+        // confirmed by calling the identical procedure with identical parameters repeatedly:
+        // succeeded, succeeded, then failed three times in a row. That pattern rules out a logic
+        // bug in the query itself and points to SQL Server occasionally choosing a bad execution
+        // plan for this one query. UAT stored procedures cannot be touched right now, so this rides
+        // out that transient plan-selection flakiness the same way a transient network blip would be
+        // handled - retry a few times with a fresh connection before finally giving up - rather than
+        // either failing the whole report or silently excluding a dimension that mostly works fine.
+        const int maxAttempts = 4;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            using var multi = await connection.QueryMultipleAsync(
-                new CommandDefinition(
-                    procedureName,
-                    parameters,
-                    commandType: CommandType.StoredProcedure,
-                    commandTimeout: DimensionCommandTimeoutSeconds,
-                    cancellationToken: cancellationToken));
+            try
+            {
+                await using var connection = new SqlConnection(connectionString);
+                using var multi = await connection.QueryMultipleAsync(
+                    new CommandDefinition(
+                        procedureName,
+                        parameters,
+                        commandType: CommandType.StoredProcedure,
+                        commandTimeout: DimensionCommandTimeoutSeconds,
+                        cancellationToken: cancellationToken));
 
-            /*  [FIX - found live 2026-08-24] Every dimension except Event opens with
-                    EXEC dbo.usp_Insights_AssertStatusCoverage;
-                which used to end in a SELECT, adding an extra result set ahead of control_totals
-                that this method skipped explicitly. sql/01's own fix (same pull, "success is
-                silence") made that proc emit NO result set on success - but this skip was not
-                updated to match, so the skip call started consuming control_totals itself, and
-                ReadSingleAsync below ended up reading the ROWS grid instead: "Sequence contains
-                more than one element" for every tenant on every dimension except Event. Confirmed
-                by calling FetchDimensionsActivity directly against real UAT (tenant 23 AND 29 both
-                failed identically) - not tenant-specific, not a Durable Task or SDK issue.
-                The coverage proc emits nothing to skip any more; nothing here should skip it.   */
+                /*  [FIX - found live 2026-08-24] Every dimension except Event opens with
+                        EXEC dbo.usp_Insights_AssertStatusCoverage;
+                    which used to end in a SELECT, adding an extra result set ahead of control_totals
+                    that this method skipped explicitly. sql/01's own fix (same pull, "success is
+                    silence") made that proc emit NO result set on success - but this skip was not
+                    updated to match, so the skip call started consuming control_totals itself, and
+                    ReadSingleAsync below ended up reading the ROWS grid instead: "Sequence contains
+                    more than one element" for every tenant on every dimension except Event. Confirmed
+                    by calling FetchDimensionsActivity directly against real UAT (tenant 23 AND 29 both
+                    failed identically) - not tenant-specific, not a Durable Task or SDK issue.
+                    The coverage proc emits nothing to skip any more; nothing here should skip it.   */
 
-            var controlTotals = controlTotalsReader is null
-                ? await multi.ReadSingleAsync<TControlTotals>()
-                : await controlTotalsReader(multi);
+                var controlTotals = controlTotalsReader is null
+                    ? await multi.ReadSingleAsync<TControlTotals>()
+                    : await controlTotalsReader(multi);
 
-            var rows = (await multi.ReadAsync<TRow>()).AsList();
-            var detectors = (await multi.ReadAsync<DetectorRow>()).Select(ToDetectorPolicy).ToList();
-            var assertions = (await multi.ReadAsync<AssertionRow>()).Select(ToAssertion).ToList();
-            var findings = (await multi.ReadAsync<FindingRow>()).Select(ToFinding).ToList();
-            var dataQuality = (await multi.ReadAsync<DataQualityNote>()).AsList();
+                var rows = (await multi.ReadAsync<TRow>()).AsList();
+                var detectors = (await multi.ReadAsync<DetectorRow>()).Select(ToDetectorPolicy).ToList();
+                var assertions = (await multi.ReadAsync<AssertionRow>()).Select(ToAssertion).ToList();
+                var findings = (await multi.ReadAsync<FindingRow>()).Select(ToFinding).ToList();
+                var dataQuality = (await multi.ReadAsync<DataQualityNote>()).AsList();
 
-            var result = new DimensionResult<TControlTotals, TRow>(
-                dimension, controlTotals, rows, detectors, assertions, findings, dataQuality);
+                var result = new DimensionResult<TControlTotals, TRow>(
+                    dimension, controlTotals, rows, detectors, assertions, findings, dataQuality);
 
-            // The two rules no SQL THROW covers. Checked here so they cannot reach a customer.
-            result.Validate();
+                // The two rules no SQL THROW covers. Checked here so they cannot reach a customer.
+                result.Validate();
 
-            return result;
+                return result;
+            }
+            catch (SqlException ex) when (ex.Number == scopeDeniedCode)
+            {
+                throw new DimensionScopeDeniedException(dimension, userId, customerId, ex);
+            }
+            catch (SqlException ex) when (reconciliationCodes.Contains(ex.Number))
+            {
+                throw new DimensionReconciliationException(dimension, customerId, ex);
+            }
+            catch (SqlException ex) when (dictionaryGapCodes.Contains(ex.Number))
+            {
+                throw new DimensionDictionaryGapException(dimension, ex);
+            }
+            catch (SqlException) when (attempt < maxAttempts)
+            {
+                // Unclassified SQL error (not one of the procedure's own deliberate THROWs) with
+                // attempts remaining - swallow and retry on a fresh connection.
+            }
+            catch (SqlException ex)
+            {
+                // Same unclassified error, out of retries. FetchDimensionsActivity's own "partial
+                // generation" design (design doc Sec.11.4) exists precisely to let one dimension's
+                // failure be excluded while every other, unaffected dimension still reaches the
+                // customer - this dimension's own numbers genuinely cannot be trusted when its query
+                // never ran to completion even after retrying, the same situation
+                // DimensionReconciliationException already represents.
+                throw new DimensionReconciliationException(dimension, customerId, ex);
+            }
         }
-        catch (SqlException ex) when (ex.Number == scopeDeniedCode)
-        {
-            throw new DimensionScopeDeniedException(dimension, userId, customerId, ex);
-        }
-        catch (SqlException ex) when (reconciliationCodes.Contains(ex.Number))
-        {
-            throw new DimensionReconciliationException(dimension, customerId, ex);
-        }
-        catch (SqlException ex) when (dictionaryGapCodes.Contains(ex.Number))
-        {
-            throw new DimensionDictionaryGapException(dimension, ex);
-        }
+
+        throw new UnreachableException("Loop above always either returns or throws.");
     }
 
     /*  Entity is the only dimension whose control_totals carry closed vocabularies that do not

@@ -12,6 +12,14 @@ namespace Insights.Worker.Orchestration;
 /// DurableTaskRunEnqueuer passes something other than the default, and only when
 /// PaidKeepWarmScheduler asked for Batch.
 /// </summary>
+/// <summary>
+/// RequestedDimensions [ADDED 2026-09-08] - only meaningful when ReportType ==
+/// DimensionSelectionComposition.ReportType ("dimension_selection"). Null/empty for every other
+/// ReportType, which fetches all fourteen dimensions unconditionally, exactly as before this field
+/// existed - trailing optional default, same reasoning as Priority above, so every existing
+/// positional construction keeps compiling and keeps its pre-existing meaning.
+/// </summary>
 public sealed record InsightsReportOrchestrationInput(
     int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId,
-    LlmCallPriority Priority = LlmCallPriority.Interactive);
+    LlmCallPriority Priority = LlmCallPriority.Interactive,
+    IReadOnlyList<string>? RequestedDimensions = null);

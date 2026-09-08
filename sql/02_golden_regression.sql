@@ -1,5 +1,7 @@
 /*===========================================================================
   RegTrack Insights - Phase 1a, Step 2
+  Error block 51000-51009.  Convention: x0 = SCOPE DENIED,
+  x1-x4 = RECONCILIATION FAILED, x5-x9 = DICTIONARY / MASTER DATA GAP.
   GOLDEN-DATASET REGRESSION SUITE
 
   Spec reference : RegTrack_Insights_System_Design_v1.md Sec.6.6
@@ -71,27 +73,38 @@ BEGIN
     /*-- G-2  overdue definition invariant ---------------------------------
         new = old - pastdue(7,9) - pastdue(17) + pastdue(18)
         Drift-proof: every term is measured in the same instant.            */
-    DECLARE @old INT,@new INT,@c79 INT,@c17 INT,@c18 INT;
-    SELECT @old = SUM(CASE WHEN rct.ComplianceStatusID NOT IN (4,5,15,18) THEN 1 ELSE 0 END),
-           @new = SUM(CASE WHEN d.OverdueEligible=1 THEN 1 ELSE 0 END),
-           @c79 = SUM(CASE WHEN rct.ComplianceStatusID IN (7,9) THEN 1 ELSE 0 END),
-           @c17 = SUM(CASE WHEN rct.ComplianceStatusID=17 THEN 1 ELSE 0 END),
-           @c18 = SUM(CASE WHEN rct.ComplianceStatusID=18 THEN 1 ELSE 0 END)
-    FROM ComplianceScheduleOn cso
-    JOIN ComplianceInstance i ON i.ID=cso.ComplianceInstanceID
-    JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID
-    JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID=cso.ID
-    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId=rct.ComplianceStatusID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1 AND i.IsDeleted=0
-      AND cso.IsActive=1 AND cso.IsUpcomingNotDeleted=1 AND cso.ScheduleOn<=@AsOf;
+    /*  [PERF] Latest status is resolved ONCE into #latest and reused by G-2,
+        G-3 and G-9. Three separate joins to RecentComplianceTransactionView
+        timed out in production (45.7M-row non-indexed view; tenant filter not
+        pushed through). The explicit function runs in ~0.6 s for 52K schedules. */
+    IF OBJECT_ID('tempdb..#latest') IS NOT NULL DROP TABLE #latest;
+    SELECT ls.ComplianceScheduleOnID, ls.ComplianceInstanceID, ls.StatusId, ls.ScheduleOn,
+           ls.LatestTransactionId, d.OverdueEligible, d.ClosureClass
+    INTO #latest
+    FROM dbo.tvfInsightsLatestStatus(@CustomerID, @AsOf) ls
+    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = ls.StatusId;
+
+    /*  Overdue now has two sources (see tvfInsightsOverdueSchedules):
+          (a) overdue-eligible latest status   - the identity below holds for these
+          (b) no transaction at all            - BA ruling; added as a separate term
+        The identity is checked over (a) only, then (b) is added to both sides,
+        so it stays an exact algebraic check rather than being loosened.       */
+    DECLARE @old INT,@new INT,@c79 INT,@c17 INT,@c18 INT,@never INT;
+    SELECT @old = SUM(CASE WHEN StatusId NOT IN (4,5,15,18) THEN 1 ELSE 0 END),
+           @new = SUM(CASE WHEN OverdueEligible=1 THEN 1 ELSE 0 END),
+           @c79 = SUM(CASE WHEN StatusId IN (7,9) THEN 1 ELSE 0 END),
+           @c17 = SUM(CASE WHEN StatusId=17 THEN 1 ELSE 0 END),
+           @c18 = SUM(CASE WHEN StatusId=18 THEN 1 ELSE 0 END)
+    FROM #latest WHERE StatusId IS NOT NULL;
+    SET @never = (SELECT COUNT(*) FROM #latest WHERE LatestTransactionId IS NULL);
     INSERT @results VALUES ('G-2', N'Overdue definition invariant (old to new reconciles)',
         CASE WHEN ISNULL(@new,0)=ISNULL(@old,0)-ISNULL(@c79,0)-ISNULL(@c17,0)+ISNULL(@c18,0) THEN 1 ELSE 0 END,
         CONCAT(N'new=',ISNULL(@new,0),N' old=',ISNULL(@old,0),N' pastdue(7,9)=',ISNULL(@c79,0),
-               N' pastdue(17)=',ISNULL(@c17,0),N' pastdue(18)=',ISNULL(@c18,0)));
+               N' pastdue(17)=',ISNULL(@c17,0),N' pastdue(18)=',ISNULL(@c18,0),
+               N' | plus ',ISNULL(@never,0),N' never-touched schedules also overdue (BA ruling)'));
 
     /*-- G-3  completed items are never overdue ----------------------------*/
-    DECLARE @compOvd INT = (SELECT COUNT(*) FROM dbo.tvfInsightsOverdueSchedules(@CustomerID,@AsOf) o
-        JOIN dbo.vInsightsStatusCurrent d ON d.StatusId=o.StatusId WHERE d.ClosureClass='completed');
+    DECLARE @compOvd INT = (SELECT COUNT(*) FROM #latest WHERE OverdueEligible=1 AND ClosureClass='completed');
     INSERT @results VALUES ('G-3', N'No completed item is counted overdue',
         CASE WHEN @compOvd=0 THEN 1 ELSE 0 END,
         CONCAT(N'Completed-but-overdue rows = ',@compOvd,N' (must be 0)'));
@@ -115,7 +128,7 @@ BEGIN
     FROM ComplianceInstance i
     JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID
     JOIN Compliance c ON c.ID=i.ComplianceID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1 AND i.IsDeleted=0 AND c.IsDeleted=0;
+    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1 AND i.IsDeleted=0 AND c.IsDeleted=0;
 
     ;WITH tree AS (SELECT BranchID FROM dbo.tvfInsightsEntityTree(@CustomerID))
     SELECT @rollup=COUNT(i.ID)
@@ -142,7 +155,7 @@ BEGIN
     SELECT @scopeRows=COUNT(*),
            @scopeNoCat=SUM(CASE WHEN ea.ComplianceCatagoryID IS NULL OR ea.ComplianceCatagoryID=0 THEN 1 ELSE 0 END)
     FROM EntitiesAssignment ea JOIN CustomerBranch cb ON cb.ID=ea.BranchID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1;
+    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1;
     INSERT @results VALUES ('G-7', N'All scope rows are category-specific (2-D)',
         CASE WHEN ISNULL(@scopeRows,0)=0 OR ISNULL(@scopeNoCat,0)=0 THEN 1 ELSE 0 END,
         CONCAT(N'scope rows=',ISNULL(@scopeRows,0),N' without category=',ISNULL(@scopeNoCat,0)));
@@ -152,11 +165,11 @@ BEGIN
     ;WITH pairs AS (
         SELECT DISTINCT ea.BranchID, ea.ComplianceCatagoryID AS CategoryId
         FROM EntitiesAssignment ea JOIN CustomerBranch cb ON cb.ID=ea.BranchID
-        WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1),
+        WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1),
     inst AS (
         SELECT i.ID, i.CustomerBranchID AS BranchID, a.ComplianceCategoryId AS CategoryId
         FROM ComplianceInstance i
-        JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID AND cb.IsDeleted=0 AND cb.Status=1
+        JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID AND cb.IsDeleted = 0 AND cb.Status = 1
         JOIN Compliance c ON c.ID=i.ComplianceID AND c.IsDeleted=0
         JOIN Act a ON a.ID=c.ActID
         WHERE cb.CustomerID=@CustomerID AND i.IsDeleted=0)
@@ -170,17 +183,19 @@ BEGIN
                N' | branch-only would leak ',ISNULL(@sbr,0)-ISNULL(@s2d,0),N' instances'));
 
     /*-- G-9  unknown-status volume is immaterial --------------------------*/
+    /*  G-9 measures UNKNOWN status among schedules that HAVE a transaction. A
+        schedule with no transaction at all is an absence, not an unknown, and
+        is declared by usp_Insights_StatusDataQuality instead. Conflating the
+        two made this invariant fail on 115 bulk-created, never-touched
+        schedules that the old view had silently hidden.                     */
     DECLARE @pdAll INT,@nullSt INT;
-    SELECT @pdAll=COUNT(*), @nullSt=SUM(CASE WHEN rct.ComplianceStatusID IS NULL THEN 1 ELSE 0 END)
-    FROM ComplianceScheduleOn cso
-    JOIN ComplianceInstance i ON i.ID=cso.ComplianceInstanceID
-    JOIN CustomerBranch cb ON cb.ID=i.CustomerBranchID
-    JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID=cso.ID
-    WHERE cb.CustomerID=@CustomerID AND cb.IsDeleted=0 AND cb.Status=1 AND i.IsDeleted=0
-      AND cso.IsActive=1 AND cso.IsUpcomingNotDeleted=1 AND cso.ScheduleOn<=@AsOf;
+    SELECT @pdAll=COUNT(*), @nullSt=SUM(CASE WHEN StatusId IS NULL THEN 1 ELSE 0 END)
+    FROM #latest WHERE LatestTransactionId IS NOT NULL;
     INSERT @results VALUES ('G-9', N'Unknown-status volume is immaterial and declared',
         CASE WHEN ISNULL(@pdAll,0)=0 OR ISNULL(@nullSt,0)*100.0/@pdAll<=0.10 THEN 1 ELSE 0 END,
         CONCAT(N'NULL-status past-due rows = ',ISNULL(@nullSt,0),N' of ',ISNULL(@pdAll,0)));
+
+    DROP TABLE #latest;
 
     SELECT TestId, TestName,
            CASE WHEN Passed=1 THEN 'PASS' ELSE '*** FAIL ***' END AS Result, Detail

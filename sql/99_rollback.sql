@@ -1,6 +1,6 @@
 /*===========================================================================
   RegTrack Insights - ROLLBACK
-  Cleanly removes every object created by sql/01 - sql/06.
+  Cleanly removes every object created by sql/01 - sql/27.
 
   SAFETY: this script touches ONLY objects created by the Insights scripts.
           It does NOT reference, alter, or delete any existing RegTrack table
@@ -28,7 +28,6 @@ GO
 /*-- 1. Stored procedures ---------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Location',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Location;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestAggregates', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestAggregates;
-IF OBJECT_ID('dbo.usp_Insights_EligibleTenants',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_EligibleTenants;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestGate',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestGate;
 IF OBJECT_ID('dbo.usp_Insights_EvaluateGate',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_EvaluateGate;
 IF OBJECT_ID('dbo.usp_Insights_TenantShape',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_TenantShape;
@@ -41,12 +40,14 @@ IF OBJECT_ID('dbo.usp_Insights_StatusDataQuality',    'P') IS NOT NULL DROP PROC
 IF OBJECT_ID('dbo.usp_Insights_AssertStatusCoverage', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_AssertStatusCoverage;
 GO
 
-/*   Dimension procedures (sql/05, 07-14, 21, 22, 23, 24, 25)  */
+/*   Dimension procedures (sql/05, 07-14, 21-27)  */
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Licence',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Licence;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_CoverageGaps',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_CoverageGaps;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_ForwardRisk',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_ForwardRisk;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_EvidenceIntegrity', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_EvidenceIntegrity;
-IF OBJECT_ID('dbo.usp_Insights_Dimension_ForwardPipeline', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_ForwardPipeline;
-IF OBJECT_ID('dbo.usp_Insights_Dimension_TimelinessFY', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_TimelinessFY;
-IF OBJECT_ID('dbo.usp_Insights_Dimension_BacklogAging', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_BacklogAging;
-IF OBJECT_ID('dbo.usp_Insights_Dimension_Licence',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Licence;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_ForwardPipeline',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_ForwardPipeline;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_TimelinessFY',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_TimelinessFY;
+IF OBJECT_ID('dbo.usp_Insights_Dimension_BacklogAging',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_BacklogAging;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Users',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Users;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Internal',    'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Internal;
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Event',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Event;
@@ -64,6 +65,7 @@ IF OBJECT_ID('dbo.usp_Insights_FreeDigestClaimSend',     'P') IS NOT NULL DROP P
 IF OBJECT_ID('dbo.usp_Insights_DigestSuppressionList',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppressionList;
 IF OBJECT_ID('dbo.usp_Insights_DigestUnsuppress',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestUnsuppress;
 IF OBJECT_ID('dbo.usp_Insights_DigestSuppress',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppress;
+IF OBJECT_ID('dbo.usp_Insights_EligibleTenants',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_EligibleTenants;
 GO
 
 /*-- 2. Functions (dropped after the procs that call them) ------------------*/
@@ -71,6 +73,8 @@ IF OBJECT_ID('dbo.tvfInsightsScopedInstances',   'IF') IS NOT NULL DROP FUNCTION
 IF OBJECT_ID('dbo.tvfInsightsScopePairs',        'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsScopePairs;
 IF OBJECT_ID('dbo.tvfInsightsEntityTree',        'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsEntityTree;
 IF OBJECT_ID('dbo.tvfInsightsOverdueSchedules',  'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsOverdueSchedules;
+IF OBJECT_ID('dbo.tvfInsightsLatestStatus',      'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsLatestStatus;
+IF OBJECT_ID('dbo.tvfInsightsOwnership',         'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsOwnership;
 IF OBJECT_ID('dbo.tvfInsightsForwardPipelineSchedules', 'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsForwardPipelineSchedules;
 GO
 
@@ -82,18 +86,13 @@ GO
 /*   Free-tier tables (sql/15, 16). No FKs, so order is irrelevant.
      NOTE: dropping InsightsFreeDigestLog discards the weekly-once guarantee.
      Re-running a digest after a rollback can re-send email to real recipients. */
+/*  Operational / diagnostic tables that are NOT part of the product but DO
+    match the '%Insights%' pattern the verification step below uses. Left in
+    place they make the rollback report itself incomplete.                   */
+IF OBJECT_ID('dbo.InsightsObjectBackup_20260904','U') IS NOT NULL DROP TABLE dbo.InsightsObjectBackup_20260904;  -- pre-deployment definition snapshot, UAT only
+IF OBJECT_ID('dbo.InsightsTenantTokenUsage',  'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;   -- created by the .NET layer's cost instrumentation; DDL not in this repo
 IF OBJECT_ID('dbo.InsightsFreeDigestLog',     'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestLog;
 IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.InsightsDigestSuppression;
-
-/*   GeneratedReport (sql/18). No FKs, so order is irrelevant.
-     NOTE: dropping this orphans every already-persisted encrypted blob - the blob has no
-     other index pointing at it once this row is gone.                                    */
-IF OBJECT_ID('dbo.GeneratedReport', 'U') IS NOT NULL DROP TABLE dbo.GeneratedReport;
-
-/*   InsightsTenantTokenUsage (sql/20). No FKs, so order is irrelevant.
-     NOTE: dropping this discards the per-tenant monthly spend history the circuit breaker
-     (Sec.12.3) reads - a fresh install's first month has no idea what any tenant already spent.*/
-IF OBJECT_ID('dbo.InsightsTenantTokenUsage', 'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;
 
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;

@@ -24,10 +24,11 @@ Two products, already present in `Product` table of `vitComplianceSystem`:
 | Document | Use it for |
 |---|---|
 | `docs/RegTrack_Insights_System_Design_v1.md` | **The spec.** Every decision + rationale. Section refs below point here. |
-| `docs/DIMENSION_SPECS.md` | Contracts for all 9 dimensions |
+| `docs/DIMENSION_SPECS.md` | Contracts for the 9 core dimensions (`22`-`27` documented in their headers) |
 | `docs/METRIC_CALCULATION_REFERENCE.md` | **Every data point: definition, derivation, traps, QA checks** |
 | `docs/PAID_TIER_SAMPLE_REFERENCE.md` | The target report shape, block by block, and what is not yet built |
-| `docs/LEGAL_BRIEF_peer_comparison.md` | **[OPEN]** Counsel question gating the coverage-gaps dimension |
+| `docs/LEGAL_BRIEF_peer_comparison.md` | Original counsel brief - **answered by research, see addendum** |
+| `docs/LEGAL_BRIEF_research_addendum.md` | Research findings: state is a defensible primary key but insufficient alone; add headcount band |
 | `samples/` | Reconciled real-data report samples (anonymised) |
 | `docs/RegTrack_Classification_Dictionary_v1.xlsx` | BA-signed status/enum semantics |
 | `PHASE_1A_BUILD_BRIEF.md` | Phase 1a tasks, acceptance criteria, validation findings |
@@ -99,6 +100,11 @@ Violating any of these is a build-breaking error, not a style preference.
   that character. Always `COLLATE Latin1_General_BIN2`, or enumerate code points
   with `UNICODE()`.
 - Name a field `SumOfRows` when the rows do not sum to the total. (See §4a.)
+- Write a detector whose Flagged predicate can match rows outside its Eligible population. `Flagged` and `Eligible` MUST come from the same set. sql/05 flagged `single_point_of_failure` with no `Instances > 0` guard, so all 78 zero-obligation branches flagged too - **120 flagged of 99 eligible, 121.2%**. Every zero-work row will look like a single point of failure, because it has no people on work it does not have. Check every detector: can the flag fire on a row the Eligible count excludes?
+- Leave a temp table unaliased when an inline subquery in the same statement reads it too. `SELECT ... (SELECT COUNT(*) FROM #rows ...) ... FROM #rows ORDER BY col` raises **"Ambiguous column name"** - and it fails at RUN TIME, after earlier result sets have already been emitted, so a caller reading only the first result set never sees it. Alias both.
+- Join `RecentComplianceTransactionView` directly - go through `tvfInsightsLatestStatus`. (See §5.)
+- Drop a past-due schedule because it has no transaction. **BA ruling: never-touched = overdue.**
+  `tvfInsightsOverdueSchedules` includes them with `NeverTouched = 1`.
 - Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
   over a subquery. Use a `LEFT JOIN` and test for `NULL`.
 
@@ -188,52 +194,21 @@ On one tenant that was a phantom 3,946-instance gap.
 | `CustomerBranch.ParentID` | Active branch may sit under a **soft-deleted** parent. Apex-only recursion loses the whole subtree — measured at **89% of one tenant's estate**, and 3 tenants would have received a 100% EMPTY report |
 | Category join | **Only** via `ComplianceInstance → Compliance → Act.ComplianceCategoryId` |
 | `UserCustomerMapping` | **NOT** a reliable user↔tenant link — many users have zero rows |
-| `RecentComplianceTransactionView` | Actively refreshed; flow metrics drift. ~10 rows have NULL status |
+| Join hints on TVFs | **NEVER use `INNER HASH JOIN` (or any join hint) on a query involving an inline TVF.** A join hint also forces join ORDER for the WHOLE statement, *including inside the inlined function* - so `tvfInsightsOverdueSchedules` could no longer filter by tenant before touching `ComplianceScheduleOn` (29.4M rows). Measured on a **7-branch** tenant: bare join 877 ms, hinted 26,492 ms, materialised-and-indexed 438 ms. Instead: **materialise each side into a temp table with a clustered index, then join** - real cardinality without constraining order |
+| Scope FIRST, then reach | Put `tvfInsightsScopedInstances` into an indexed temp table before joining `ComplianceScheduleOn` / `ComplianceTransaction`. With the tenant filter three joins deep neither can be seeked: TimelinessFY was **183,502 ms**, scope-first is **157 ms** for identical output |
+| `RecentComplianceTransactionView` | **Do not join it.** Non-indexed view over 45.7M `ComplianceTransaction` rows; a tenant filter three joins away is not pushed through, so it computes for ALL rows first. `GoldenInvariants` and `BacklogAging` timed out (>4 min) on production. Use `tvfInsightsLatestStatus` - explicit `TOP 1` seek per schedule on `IX_CT_CSO_Dated_ID`, 611 ms for 52K schedules, verified identical on 400 samples. Its inner join also HID schedules with no transaction at all |
 | `ComplianceTransaction.Penalty` | Essentially empty (~₹300 total). Report **exposure**, never *incurred* |
 | `NatureOfCompliance` | ~49% "Others" on the reference tenant — declare the gap |
 | `Compliance.Frequency` | ~28.5% NULL |
+| **Ownership has TWO mechanisms** | `ComplianceAssignment` (RoleID=3, instance-level) AND `ComplianceScheduleOn.Performerid` (schedule-level, populated on **99.8%** of schedules). Reading only the first overstates "ownerless" by **181x** - 44,480 reported vs 245 actually unowned on one tenant. Seven deployed dimensions have this defect; see `docs/SQL_CHANGES_REQUIRED.md`. The two-way split is genuinely predictive (16.3% vs 64.9% overdue) - keep the distinction, fix the label |
 | `CustomerBranch.Status` | **A SECOND active flag.** `Status = 0` = deactivated: obligations remain but are frozen - not reported, no schedules or alerts. Filter `IsDeleted = 0 AND Status = 1` everywhere. Omitting it overstated overdue by **28%** on one tenant |
+| `CustomerBranch.Type` | **Kind of location**, lookup `dbo.NodeType` (15 rows). 77% are the generic `Branch`; `Store` is rare and carries an identical profile - treat as one class. 17 orphan values exist (23-75) not in `NodeType`; classify as `unknown`, exclude, declare |
+| `CustomerBranch.ComType` | **Legal entity type** (Public/Private/Listed/LLP...), NOT location type. Its ID range overlaps `LocationType.ID` by coincidence; a join on it produces plausible garbage. **No FK references `LocationType` from anywhere** - verify relationships in `sys.foreign_keys`, never from overlapping IDs |
 | `ComplianceInstance.IsAvantis` | **OBSOLETE - ignore it.** Set on 97.6% of instances (3,580,854 of 3,670,054), so it discriminates nothing, and 1.9M of those are NOT Labour. The canonical view `vw_ci_ActiveInstance` maps `IsAvantis -> Labour`; that mapping is **stale**. Use `Act.ComplianceCategoryId` for category |
 | Pre-flight procs | A helper that `SELECT`s shifts the caller's result-set contract by one — and only for callers that invoke it, so offsets differ per procedure |
 | `Compliance.IsDeleted` | Instances can reference a **soft-deleted** Compliance master (70 on one tenant). Omitting the filter makes the control total disagree with every dimension |
 | SQL file encoding | The deployment path is **not** UTF-8 aware. It corrupted a pre-existing RegTrack proc (`USP_GetEscalationCounts_Mobile_Statutory`) as well as ours |
 | Character detection | Default collation is accent-insensitive; `LIKE` gives false positives when detecting non-ASCII |
-| `Lic_tbl_LicenseInstance.LicenseTypeID` | NOT NULL, but real data still needs to express "no type assigned" - some rows use **-1** as a sentinel instead. Confirmed live (UAT tenant 29): 5 legacy licences (2019-2021). Treat any `LicenseTypeID <= 0` as untyped, never as a broken reference - a *positive* id with no matching type row is the real referential break |
-
----
-
-## 5b. Error code allocation
-
-Every `THROW` code is unique across the whole codebase, and each file owns a
-block of ten. Within a block:
-
-```
-x0        SCOPE DENIED
-x1 - x4   RECONCILIATION FAILED
-x5 - x9   DICTIONARY / MASTER DATA GAP
-```
-
-| Block | File | Block | File |
-|---|---|---|---|
-| 51000-51009 | `01`, `02` | 51100-51109 | `12` users |
-| 51010-51019 | `03` scope | 51110-51119 | `13` internal |
-| 51020-51029 | `04` entity/entitlement | 51120-51129 | `14` event |
-| 51030-51039 | `05` location | 51130-51139 | `15` digest log |
-| 51050-51059 | `07` entity | 51140-51149 | `16` suppression |
-| 51060-51069 | `08` risk | 51150-51159 | `20` forward pipeline |
-| 51070-51079 | `09` nature | 51160-51169 | `21` licence |
-| 51080-51089 | `10` departments | 51040-51049, 51170+ | **free** |
-| 51090-51099 | `11` act | | |
-
-> **[TRAP] One code per CONDITION, never per category of condition.** Seven files
-> originally reused a single code for two or three different failures - one used
-> 51101 for three distinct reconciliation errors. An operator seeing the code
-> could not tell which check failed without reading the message text, and two
-> files had also collided on 51130 outright. A code that does not identify a
-> condition is not doing its job.
-
-**Adding a new file:** take the next free block, declare it in the header
-comment (`Error block NNNNN-NNNNN`), and follow the x0/x1-x4/x5-x9 convention.
 
 ---
 
@@ -264,6 +239,49 @@ WHERE o.name LIKE '%Insights%'
 
 `COLLATE Latin1_General_BIN2` is required — without it the check silently passes.
 
+
+## 5b. Error code allocation
+
+Every `THROW` code is unique across the whole codebase, and each file owns a
+block of ten. Within a block:
+
+```
+x0        SCOPE DENIED
+x1 - x4   RECONCILIATION FAILED
+x5 - x9   DICTIONARY / MASTER DATA GAP
+```
+
+| Block | File | Block | File |
+|---|---|---|---|
+| 51000-51009 | `01`, `02` | 51120-51129 | `14` event |
+| 51010-51019 | `03` scope | 51130-51139 | `15` digest log |
+| 51020-51029 | `04` entity/entitlement | 51140-51149 | `16` suppression |
+| 51030-51039 | `05` location | 51160-51169 | `21` licence |
+| 51050-51059 | `07` entity | 51170-51176 | `22`-`25` **shared** (see note) |
+| 51060-51069 | `08` risk | 51190-51199 | `26` forward risk |
+| 51070-51079 | `09` nature | 51200-51209 | `27` coverage gaps |
+| 51080-51089 | `10` departments | 51040-51049, 51150-51159, 51177-51189, 51210+ | **free** |
+| 51090-51099 | `11` act | | |
+| 51100-51109 | `12` users | | |
+| 51110-51119 | `13` internal | | |
+
+> **Note on 5117x.** Files `22`-`25` (BacklogAging 70-71, TimelinessFY 72,
+> ForwardPipeline 73-74, EvidenceIntegrity 75-76) share one block. That
+> breaks the one-block-per-file convention, but they were deployed to
+> production before the convention was enforced and each code is still
+> unique across the codebase - so they stay. New files take a fresh block.
+
+> **[TRAP] One code per CONDITION, never per category of condition.** Seven files
+> originally reused a single code for two or three different failures - one used
+> 51101 for three distinct reconciliation errors. An operator seeing the code
+> could not tell which check failed without reading the message text, and two
+> files had also collided on 51130 outright. A code that does not identify a
+> condition is not doing its job.
+
+**Adding a new file:** take the next free block, declare it in the header
+comment (`Error block NNNNN-NNNNN`), and follow the x0/x1-x4/x5-x9 convention.
+
+---
 
 ## 6. Architecture
 
