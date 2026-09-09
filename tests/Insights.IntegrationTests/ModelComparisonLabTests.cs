@@ -402,7 +402,12 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             ? JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson, SnapshotJsonOptions)?.Rows
             : null;
 
-        var htmlAgent = sp.GetRequiredService<IReportHtmlAgent>();
+        // [FIX] PaidReportAgentsRegistration no longer registers a plain IReportHtmlAgent
+        // directly - since the "dimension_selection" report type needs its own render agent,
+        // both are registered as one IReadOnlyDictionary<string, IReportHtmlAgent> keyed by
+        // ReportType (see RenderHtmlActivity, the real production call site, already updated
+        // to match). This lab test predates that change; resolve the same way.
+        var htmlAgent = sp.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>()[FixedHolisticComposition.ReportType];
         var injectFontActivity = sp.GetRequiredService<InjectFontActivity>();
         var injectCoverageGridActivity = sp.GetRequiredService<InjectCoverageGridActivity>();
         var injectCoverageCssActivity = sp.GetRequiredService<InjectCoverageCssActivity>();
