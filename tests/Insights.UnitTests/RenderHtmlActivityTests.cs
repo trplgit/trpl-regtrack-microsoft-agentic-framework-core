@@ -17,10 +17,10 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
 
         IReadOnlyList<Assertion> assertions = [];
-        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100));
 
-        var activity = new RenderHtmlActivity(agent.Object);
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { ["compliance_health"] = agent.Object });
         var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt));
 
         Assert.Equal("<!DOCTYPE html><html></html>", result.Html);
@@ -43,10 +43,10 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
 
         IReadOnlyList<Assertion> assertions = [];
-        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", FixedHolisticComposition.ReportType, generatedAt, null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", FixedHolisticComposition.ReportType, generatedAt, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html>fixed holistic</html>", 4200));
 
-        var activity = new RenderHtmlActivity(agent.Object);
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [FixedHolisticComposition.ReportType] = agent.Object });
         var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", FixedHolisticComposition.ReportType, generatedAt));
 
         Assert.Equal("<!DOCTYPE html><html>fixed holistic</html>", result.Html);

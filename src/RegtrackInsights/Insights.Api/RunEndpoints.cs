@@ -43,6 +43,7 @@ public static class RunEndpoints
             [FromServices] IInsightsCaller caller,
             [FromServices] ITenantDirectoryRepository tenants,
             [FromServices] IScopeRepository scope,
+            [FromServices] ICooldownRepository cooldown,
             [FromServices] IInsightsRunEnqueuer enqueuer,
             CancellationToken cancellationToken) =>
         {
@@ -62,18 +63,32 @@ public static class RunEndpoints
                 return InsightsResults.Error(InsightsErrorCode.ScopeDenied, "No entities are currently in your Insights scope.");
             }
 
-            /*  [KNOWN LIMITATION] API_CONTRACTS.md §3 step 3 - check cooldown for
-                (scope, reportType, period); closed => 409 COOLDOWN_ACTIVE - is not implemented.
-                It is spec'd against GeneratedReport (build order item 14: blob + SQL index), which
-                does not exist yet - item 14 is paused pending the DocAI envelope-encryption pattern.
-                There is no persisted report history to check a cooldown against, so this step is
-                skipped rather than faked. Revisit once item 14 lands.                             */
+            // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - folds
+            // RequestedDimensions into the period used for BOTH the cooldown check and the
+            // enqueue below, so a dimension_selection request for Nature and one for Entity
+            // against the identical caller-supplied period are treated as separate keys. This is
+            // a stand-in for the real fix (a GeneratedReport.RequestedDimensions column,
+            // sql/28_generated_report_dimension_key.sql, not yet deployed) - no-op for every
+            // report type except dimension_selection.
+            var effectivePeriod = ReportDimensionKey.ForCooldownAndRunId(request.Period, request.RequestedDimensions);
+
+            // Step 3 (design doc Sec.2.4's 30-day cooldown) - keyed to (scope, reportType, period),
+            // NOT to this caller, so a colleague at the same scope who generated it yesterday locks
+            // this call too. [IMPLEMENTED 2026-09-08 - was a KNOWN LIMITATION pending build order
+            // item 14 (GeneratedReport persistence); item 14 shipped, so there is now a real report
+            // history to check this against.]
+            var cooldownResult = await cooldown.CheckAsync(
+                request.TenantId, request.ReportType, request.Scope.ToDescriptor(), effectivePeriod, cancellationToken);
+            if (!cooldownResult.IsOpen)
+                return InsightsResults.CooldownActive(cooldownResult.NextAvailableUtc!.Value);
 
             // Step 4 (the one-active-run-per-key lock) is free: EnqueueAsync derives the run id
             // from (tenant, scope, reportType, period), so a second call for the same key attaches
-            // to the already-running instance instead of starting a duplicate.
+            // to the already-running instance instead of starting a duplicate. effectivePeriod
+            // (not request.Period) is what makes that key correctly per-dimension - see above.
             var runId = await enqueuer.EnqueueAsync(
-                request.TenantId, request.ReportType, request.Scope, request.Period, caller.UserId, cancellationToken);
+                request.TenantId, request.ReportType, request.Scope, effectivePeriod, caller.UserId, cancellationToken,
+                requestedDimensions: request.RequestedDimensions);
 
             var streamUrl = $"/api/insights/runs/{runId}/stream";
             return Results.Accepted(streamUrl, new { runId, status = "queued", streamUrl });
@@ -239,5 +254,17 @@ public static class RunEndpoints
     }
 }
 
-/// <summary>The wire shape of API_CONTRACTS.md §3's POST body.</summary>
-public sealed record GenerateReportRequest(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period);
+/// <summary>
+/// The wire shape of API_CONTRACTS.md §3's POST body.
+///
+/// <paramref name="RequestedDimensions"/> [ADDED 2026-09-09] - trailing optional, same reasoning
+/// as every other RequestedDimensions plumbing point in this codebase (InsightsRunOnceWorker's
+/// CLI flag, InsightsReportOrchestrationInput): null/omitted for every ReportType except
+/// "dimension_selection" (Insights.Domain.DimensionSelectionComposition.ReportType), where it
+/// names exactly which of the fourteen dimensions this run scopes to. This is the API-side half
+/// of the multi-dimension report feature - previously only reachable via
+/// InsightsRunOnceWorker's --Insights:Dimensions CLI flag.
+/// </summary>
+public sealed record GenerateReportRequest(
+    int TenantId, string ReportType, InsightsScopeRequest Scope, string Period,
+    IReadOnlyList<string>? RequestedDimensions = null);

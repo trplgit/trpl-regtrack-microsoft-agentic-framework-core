@@ -30,8 +30,16 @@ public interface IInsightsRunEnqueuer
     /// positional 6th argument; inserting a new optional parameter ahead of it would silently
     /// rebind those positional CancellationToken arguments onto this one instead (both optional,
     /// so the compiler would accept it - it just would not mean what the call site wrote).
+    ///
+    /// <paramref name="requestedDimensions"/> [ADDED 2026-09-09] - same trailing-optional
+    /// reasoning as <paramref name="priority"/>, placed last so no existing positional call site
+    /// shifts meaning. Only meaningful when <paramref name="reportType"/> is
+    /// <c>DimensionSelectionComposition.ReportType</c> ("dimension_selection") - forwarded
+    /// verbatim into <c>InsightsReportOrchestrationInput.RequestedDimensions</c>, null for every
+    /// other report type exactly as before this parameter existed.
     /// </summary>
     Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
-        CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive);
+        CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
+        IReadOnlyList<string>? requestedDimensions = null);
 }

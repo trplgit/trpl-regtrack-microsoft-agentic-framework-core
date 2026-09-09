@@ -21,11 +21,7 @@ public sealed class NormalizeActivity : AsyncTaskActivity<NormalizeInput, Normal
     {
         var result = ReportEmitNormalizer.Evaluate(input.Html);
         if (!result.Approved)
-        {
-            // [TEMP DIAGNOSTIC 2026-09-07] remove after tenant 29 manual run is diagnosed.
-            Console.Error.WriteLine($"[DIAG] NOT_NORMALIZABLE violations: {string.Join(" | ", result.Violations)}");
             throw new OrchestrationRefusedException("NOT_NORMALIZABLE", "We couldn't generate this report to our accuracy standard. Our team has been notified.", result.Violations);
-        }
 
         return Task.FromResult(new NormalizeOutput(input.Html));
     }

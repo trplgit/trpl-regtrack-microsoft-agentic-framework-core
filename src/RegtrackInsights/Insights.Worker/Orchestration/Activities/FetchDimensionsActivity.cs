@@ -97,13 +97,11 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
             }
             catch (Exception ex) when (ex is DimensionReconciliationException or DimensionContractViolationException)
             {
-                // [TEMP DIAGNOSTIC 2026-09-07] This catch previously had NO visible logging at all -
-                // a dimension degrading to a placeholder was only observable via the
-                // insights.dimension.block_failures_total OTel counter, which nothing in this
-                // environment currently exports/reads. Added while diagnosing why tenant 29's
-                // Coverage pane had no locationRows to inject - remove once confirmed whether Location
-                // is actually failing here and, if so, why.
-                Console.Error.WriteLine($"[DIAG] dimension '{name}' degraded to placeholder: {ex.GetType().Name}: {ex.Message}");
+                // [KNOWN GAP] A dimension degrading to a placeholder here is only observable via the
+                // insights.dimension.block_failures_total OTel counter (failureRecorder below) -
+                // nothing in this environment currently exports/reads that counter, so this failure
+                // is otherwise silent. Real fix is proper structured logging (this activity has no
+                // ILogger today) or wiring up the OTel exporter - not done here.
                 failedDimensions.Add(name);
                 failureRecorder.RecordBlockFailure(name);
             }

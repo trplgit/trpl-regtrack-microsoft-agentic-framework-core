@@ -45,21 +45,13 @@ public static partial class CoverageGridInjector
 {
     public static string Inject(string html, IReadOnlyList<LocationRow>? locationRows)
     {
-        // [TEMP DIAGNOSTIC 2026-09-07] remove once tenant 29 manual runs are confirmed clean.
         if (!PaneOpenToken().IsMatch(html))
-        {
-            Console.Error.WriteLine("[DIAG] CoverageGridInjector: no-op - di-pane-3 open tag not found in html.");
             return html; // not a fixed-holistic-shaped document, or Coverage pane genuinely not present - nothing to do.
-        }
 
         if (PaneBlockedToken().IsMatch(html))
-        {
-            Console.Error.WriteLine("[DIAG] CoverageGridInjector: no-op - di-pane-3 is marked data-blocked=\"true\".");
             return html; // defensive only - Coverage always has real data in practice, never legitimately blocked.
-        }
 
         var leafRows = locationRows?.Where(r => r.NodeType == EntityNodeType.Leaf).ToList() ?? [];
-        Console.Error.WriteLine($"[DIAG] CoverageGridInjector: locationRows={(locationRows is null ? "null" : locationRows.Count.ToString())}, leafRows={leafRows.Count}.");
         if (leafRows.Count == 0)
             return html; // Location degraded, or no leaf branches - never inject an empty/fabricated grid.
 
@@ -68,11 +60,7 @@ public static partial class CoverageGridInjector
 
         var match = PaneContentToken().Match(html);
         if (!match.Success)
-        {
-            Console.Error.WriteLine("[DIAG] CoverageGridInjector: no-op - PaneContentToken failed to match despite PaneOpenToken matching (malformed section?).");
             return html; // malformed document shape - ReportEmitNormalizer's own rule 1 catches that, not this injector.
-        }
-        Console.Error.WriteLine($"[DIAG] CoverageGridInjector: injecting {paneBody.Length} chars of deterministic pane body.");
 
         // Index-based splice, not Regex.Replace/string.Replace with the new body as a replacement
         // string - both treat certain characters specially ('$' as a backreference, or a search

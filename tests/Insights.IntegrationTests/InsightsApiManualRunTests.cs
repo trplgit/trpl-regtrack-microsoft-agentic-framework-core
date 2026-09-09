@@ -130,6 +130,10 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
                 ["Azure:BlobContainer"] = "insights-reports-temp",
                 // Item 14 read path (design doc Sec.9.3) - the SAS lifetime for GET .../content.
                 ["Reports:SasLifetimeMinutes"] = "10",
+                // Cooldown gate (design doc Sec.2.4) - required by AddInsightsReportContentService
+                // since ICooldownRepository was wired in there. Override via INSIGHTS_COOLDOWN_DAYS
+                // to test the cooldown re-opening quickly (e.g. "0") instead of waiting 30 real days.
+                ["Reports:CooldownDays"] = Environment.GetEnvironmentVariable("INSIGHTS_COOLDOWN_DAYS") ?? "30",
             })
             .Build();
 

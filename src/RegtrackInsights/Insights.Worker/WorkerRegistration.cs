@@ -255,6 +255,21 @@ public static class WorkerRegistration
             sasLifetime,
             sp.GetRequiredService<ILogger<ReportContentService>>()));
 
+        // API_CONTRACTS.md Sec.3 step 3 (design doc Sec.2.4's 30-day cooldown) - RunEndpoints
+        // needs this on the SAME host that generates reports, and it depends on
+        // InsightsReportsDbContext exactly like IReportContentService above, so it is registered
+        // here rather than a separate composition method a caller could forget to invoke.
+        //
+        // Required, same "no guessed default for a locked spec value" reasoning as
+        // Reports:SasLifetimeMinutes above.
+        var cooldownDays = configuration.GetValue<int?>("Reports:CooldownDays")
+            ?? throw new InvalidOperationException("Reports:CooldownDays is not configured.");
+
+        // SCOPED - same captive-dependency reasoning as IReportContentService: it holds a scoped
+        // InsightsReportsDbContext, so it cannot be a singleton.
+        services.AddScoped<ICooldownRepository>(sp =>
+            new EfCooldownRepository(sp.GetRequiredService<InsightsReportsDbContext>(), cooldownDays));
+
         return services;
     }
 
