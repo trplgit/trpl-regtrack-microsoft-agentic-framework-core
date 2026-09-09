@@ -22,10 +22,27 @@ FROM ComplianceInstance i
 JOIN CustomerBranch cb ON cb.ID = i.CustomerBranchID
 JOIN Compliance     c  ON c.ID = i.ComplianceID
 WHERE cb.CustomerID = @CustomerID
-  AND cb.IsDeleted  = 0     -- branch is active
+  AND cb.IsDeleted  = 0     -- branch not deleted
+  AND cb.Status     = 1     -- branch OPERATING (see below)
   AND i.IsDeleted   = 0     -- instance is active
   AND c.IsDeleted   = 0     -- MASTER compliance is active
 ```
+
+**`CustomerBranch.Status` is a SECOND active flag, separate from `IsDeleted`.**
+BA ruling: `Status = 0` means the location is **deactivated**. Its obligations
+remain tagged to it, but they are **not reported to users**, and no schedules,
+notifications, alerts or escalations are generated for them.
+
+So they are not live obligations, and an "overdue" item on a deactivated
+location **is not overdue** - nobody is being asked to do it. Every metric must
+exclude them.
+
+> Measured impact on one test tenant: branches 200 -> 177, estate 4,814 -> 3,737,
+> and **overdue 30,738 -> 22,117 - 28% of the reported overdue was on deactivated
+> locations.** That is a very large phantom number to put in front of a CCO.
+
+> **Report the count as data quality, not as silence:** "23 deactivated locations
+> still carry 1,077 obligations" is a useful configuration-drift finding.
 
 **Why the third filter matters.** An instance can point at a soft-deleted
 `Compliance` master — an obligation whose definition was retired. It is not a
@@ -64,8 +81,15 @@ one tenant, and **31,659 to a single user** on another.
 overdue  <=>  ScheduleOn <= @AsOf
               AND cso.IsActive = 1
               AND cso.IsUpcomingNotDeleted = 1
-              AND status.OverdueEligible = 1     -- from the dictionary
+              AND (  status.OverdueEligible = 1          -- (a) from the dictionary
+                  OR LatestTransactionId IS NULL )       -- (b) never touched - BA ruling
 ```
+
+**Two sources of overdue.** (a) is dictionary-driven. (b) is the BA ruling of
+4 Sep 2026: *"a past-due schedule with no transaction is to be considered
+overdue."* Nobody has ever touched it - the purest form. `NeverTouched` on the
+overdue function distinguishes them. Unknown statuses are still **excluded**
+(neither a nor b), so a dictionary gap still surfaces through reconciliation.
 
 Open (overdue-eligible) statuses: `1,2,3,6,8,10,11,12,13,14,16,18,19,20,21,22,23`.
 
@@ -74,11 +98,38 @@ it counted **completed** items (7, 9) as overdue, and it defaulted any *unknown*
 status to overdue. Measured error on real tenants: **overstated by up to 1,886**
 and **understated by up to 1,571**, depending on the tenant's status mix.
 
+**Latest status is resolved by `tvfInsightsLatestStatus`, never by joining the
+view.** `RecentComplianceTransactionView` is non-indexed over 45.7M rows and the
+tenant filter is not pushed through it; the function filters to the tenant's
+schedules first, then seeks the latest transaction per schedule. Production:
+> 4 minutes via the view, **611 ms** via the function, identical results.
+
+> **[FOUND] Schedules with no transaction at all.** The view's inner join hid
+> them; the function surfaces them with `LatestTransactionId = NULL`. On the
+> reference tenant all 22 shared a single 2023 timestamp - a bulk-creation
+> artifact. **BA ruling: they count as overdue.** Declared separately in
+> `StatusDataQuality.SchedulesWithNoTransaction` so the count stays visible.
+
 The join to the dictionary is an **INNER** join deliberately: an unmapped status
 produces no row, so reconciliation fails loudly instead of silently mis-bucketing.
 
 > **Test:** `overdue_new = overdue_old - pastdue(7,9) - pastdue(17) + pastdue(18)`
 > must hold exactly, on several tenants. It is an algebraic identity.
+
+---
+
+### 1.4 Product / category - and one flag to ignore
+
+Category resolves **only** via `ComplianceInstance -> Compliance -> Act.ComplianceCategoryId`
+(2 = Labour, 15 = EHS, 5 = Finance & Taxation, 20 = Secretarial, ...).
+
+> **[TRAP] `ComplianceInstance.IsAvantis` is obsolete - ignore it.** It is set on
+> **97.6%** of active instances, so it separates nothing, and 1.9M of those are
+> not Labour. The canonical view `vw_ci_ActiveInstance` documents
+> `IsAvantis -> Labour`; that mapping is stale and will mislead anyone who
+> trusts it. A peer-gap figure of 613 in earlier analysis was produced with it
+> and does not reproduce under a correct category join - the true figure on the
+> same tenant is 380.
 
 ---
 
@@ -349,6 +400,21 @@ have produced **247 findings**; it now produces 7.
 
 > **Test:** no dimension may emit more than 5 findings per detector, on any
 > tenant, ever.
+
+---
+
+## 5.4 Performance patterns that are not optional
+
+Two shapes make procedures time out on production-sized tenants:
+
+1. **Joining `RecentComplianceTransactionView`** - non-indexed view over 45.7M
+   rows, tenant filter not pushed through. Use `tvfInsightsLatestStatus`.
+2. **Joining two inline TVFs** - no cardinality estimate, so the optimizer may
+   pick nested loops. On one tenant that was 22,070 x 4,758 rows and the
+   procedure never returned. Force `INNER HASH JOIN`, or materialise each side
+   into an indexed temp table (377 ms measured).
+
+Both were found by running against production, not by reading the code.
 
 ---
 
