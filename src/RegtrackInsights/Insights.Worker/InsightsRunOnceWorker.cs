@@ -49,6 +49,13 @@ public sealed class InsightsRunOnceWorker(
                 ? dimensionsCsv.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                 : null;
 
+            // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - no-op for
+            // every ReportType except dimension_selection. Same fix RunEndpoints.cs applies on the
+            // API path, so a CLI run for --Insights:Dimensions=Nature and one for
+            // --Insights:Dimensions=Entity no longer collide on the same run id just because they
+            // share a --Insights:Period value.
+            period = ReportDimensionKey.ForCooldownAndRunId(period, requestedDimensions);
+
             var input = new InsightsReportOrchestrationInput(
                 tenantId, reportType, new InsightsScopeRequest("tenant", null), period, userId,
                 RequestedDimensions: requestedDimensions);

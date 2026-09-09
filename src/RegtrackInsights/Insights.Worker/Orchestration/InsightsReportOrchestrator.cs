@@ -207,18 +207,12 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         // constant, not read from IConfiguration - the orchestrator body must stay deterministic
         // across replay (CLAUDE.md 6), same treatment maxReflectionIterations above already gets.
         // Matches Budget:PerRunTokenCeiling's documented default.
-        // [TEMP OVERRIDE 2026-09-07] Raised from 250_000 to 600_000 for a one-off manual run of
-        // tenant 29 (a known token-heavy tenant per UatTestDataManualTests.
-        // MeasureRealComposeTokenUsage_Tenant29) that hit the default ceiling mid-narration.
-        // REVERT to 250_000 after this run - do not leave this raised for production traffic.
-        const long perRunTokenCeiling = 600_000;
+        const long perRunTokenCeiling = 250_000;
         var runTotalTokens = 0L;
 
         void ChargeAndCheck(long tokens)
         {
             runTotalTokens += tokens;
-            // [TEMP DIAGNOSTIC 2026-09-07] remove after tenant 29 manual run is diagnosed.
-            Console.Error.WriteLine($"[DIAG] charged {tokens} tokens, running total {runTotalTokens}/{perRunTokenCeiling}.");
             if (runTotalTokens > perRunTokenCeiling)
                 throw new OrchestrationRefusedException(
                     "BUDGET_EXCEEDED",
@@ -508,10 +502,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html));
                     break;
                 }
-                catch (Exception ex) when (renderAttempt < maxRenderAttempts)
+                catch (Exception) when (renderAttempt < maxRenderAttempts)
                 {
-                    // [TEMP DIAGNOSTIC 2026-09-07] remove once tenant 29 manual runs are confirmed clean.
-                    Console.Error.WriteLine($"[DIAG] render attempt {renderAttempt}/{maxRenderAttempts}: structure gate REFUSED - {ex.Message}");
                     // Re-render-able per this loop's own doc comment above - fall through to the next
                     // iteration for a fresh render attempt rather than refusing the whole run on what
                     // is really a per-call sampling miss, not a fixed-input defect. On the LAST attempt

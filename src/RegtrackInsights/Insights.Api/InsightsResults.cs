@@ -24,4 +24,18 @@ internal static class InsightsResults
     /// </summary>
     public static IResult TenantNotEligible() =>
         Error(InsightsErrorCode.TenantNotEligible, "You do not have access to Insights for this tenant.");
+
+    /// <summary>
+    /// API_CONTRACTS.md §2/§3 - COOLDOWN_ACTIVE carries an extra <c>nextAvailableUtc</c> field the
+    /// standard error envelope has no room for, so this builds the JSON body directly rather than
+    /// going through <see cref="Error"/>.
+    /// </summary>
+    public static IResult CooldownActive(DateTime nextAvailableUtc) =>
+        Results.Json(
+            new
+            {
+                error = new { code = InsightsApiError.ToWireName(InsightsErrorCode.CooldownActive), message = "This report was generated recently. Try again after the cooldown window." },
+                nextAvailableUtc,
+            },
+            statusCode: InsightsApiError.ToStatusCode(InsightsErrorCode.CooldownActive));
 }

@@ -2,6 +2,7 @@ using Insights.Data;
 using Insights.Domain;
 using Insights.Worker.Orchestration.Activities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
 
@@ -13,6 +14,20 @@ public class PersistActivityTests
         new(new DbContextOptionsBuilder<InsightsReportsDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
+
+    /// <summary>
+    /// PersistActivity now takes IServiceScopeFactory rather than InsightsReportsDbContext
+    /// directly (fixes the "Cannot access a disposed context instance" bug where ActivityCreator's
+    /// own scope disposed the context before RunAsync could use it). The fake factory hands back
+    /// the SAME db instance every time, matching a real scoped registration closely enough for
+    /// these tests, which only ever create one scope per RunAsync call.
+    /// </summary>
+    private static IServiceScopeFactory ScopeFactoryFor(InsightsReportsDbContext db)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(db);
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
 
     private static EncryptedReportEnvelope Envelope() =>
         new(
@@ -33,7 +48,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "abc123.dat"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, db);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
 
         var result = await activity.RunAsync(new PersistInput(
             "<html></html>", TenantId: 29, ReportType: "compliance_health", Period: "FY2025-26",
@@ -70,7 +85,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "abc123.dat"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, db);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
 
         await activity.RunAsync(new PersistInput(
             "<html>real tenant data</html>", 29, "compliance_health", "FY2025-26", "tenant", 38));

@@ -31,14 +31,10 @@ public sealed class ValidateFixedHolisticStructureActivity : AsyncTaskActivity<V
     {
         var result = FixedHolisticStructureGate.Evaluate(input.Html);
         if (!result.Approved)
-        {
-            // [TEMP DIAGNOSTIC 2026-09-07] remove after tenant 29 manual run is diagnosed.
-            Console.Error.WriteLine($"[DIAG] FIXED_HOLISTIC_STRUCTURE_INVALID violations: {string.Join(" | ", result.Violations)}");
             throw new OrchestrationRefusedException(
                 "FIXED_HOLISTIC_STRUCTURE_INVALID",
                 "We couldn't generate this report to our accuracy standard. Our team has been notified.",
                 result.Violations);
-        }
 
         return Task.FromResult(new ValidateFixedHolisticStructureOutput(input.Html));
     }

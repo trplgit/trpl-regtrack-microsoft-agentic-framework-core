@@ -26,7 +26,8 @@ internal static class InsightsApiTestHost
         IRunStatusReader? runs = null,
         IScopeRepository? scope = null,
         IInsightsRunEnqueuer? enqueuer = null,
-        IReportContentService? content = null)
+        IReportContentService? content = null,
+        ICooldownRepository? cooldown = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -44,6 +45,8 @@ internal static class InsightsApiTestHost
                     services.AddSingleton(enqueuer);
                 if (content is not null)
                     services.AddSingleton(content);
+                if (cooldown is not null)
+                    services.AddSingleton(cooldown);
             });
             web.Configure(app =>
             {
@@ -136,16 +139,31 @@ internal sealed class FakeReportContentService(ReportContentResult? result) : IR
     }
 }
 
+/// <summary>Answers with a fixed CooldownResult, and RECORDS what it was asked - same reasoning as the other fakes.</summary>
+internal sealed class FakeCooldownRepository(CooldownResult result) : ICooldownRepository
+{
+    public List<(int CustomerId, string ReportType, string ScopeDescriptor, string Period)> Calls { get; } = [];
+
+    public Task<CooldownResult> CheckAsync(
+        int customerId, string reportType, string scopeDescriptor, string period,
+        CancellationToken cancellationToken = default)
+    {
+        Calls.Add((customerId, reportType, scopeDescriptor, period));
+        return Task.FromResult(result);
+    }
+}
+
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
 internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
 {
-    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority)> Calls { get; } = [];
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions)> Calls { get; } = [];
 
     public Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
-        CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive)
+        CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
+        IReadOnlyList<string>? requestedDimensions = null)
     {
-        Calls.Add((tenantId, reportType, scope, period, userId, priority));
+        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions));
         return Task.FromResult(runIdToReturn);
     }
 }
