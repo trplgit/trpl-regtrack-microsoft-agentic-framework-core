@@ -196,13 +196,26 @@ public sealed record NatureRow
 // ── Departments (sql/10) ───────────────────────────────────────────────────────────────
 
 /// <summary>
-/// <see cref="SumOfRows"/> plus <see cref="UnassignedInstances"/> equals <see cref="ScopedInstances"/>.
+/// <see cref="AssignedInstances"/> plus <see cref="UnassignedInstances"/> equals <see cref="ScopedInstances"/>.
 /// Obligations carrying no department appear in no row, so every per-department figure excludes them.
+///
+/// [BUG FOUND LIVE, 2026-09-09] This property used to be named <c>SumOfRows</c>, matching every
+/// other dimension's control-totals shape - but <c>sql/10_dimension_departments.sql</c> itself
+/// deliberately renamed its OWN output column to <c>AssignedInstances</c> (CLAUDE.md Sec.4a's
+/// residual-naming rule: "rows cover only instances WITH a DepartmentID, so a field called
+/// SumOfRows compared against ScopedInstances reads as a gap when it is a declared residual" -
+/// see that file's own comment on the column). Nobody renamed the C# property to match, so Dapper
+/// (this record is materialized directly, no intermediate mapping row) silently left it at its
+/// int default - 0 - on every real fetch since that SQL change, the exact same class of bug
+/// DimensionShapes.cs's own file header warns about for a column with no matching property.
+/// Confirmed live on tenant 29: a dimension_selection:Departments render correctly refused to
+/// trust the value (real end-to-end honesty check working as designed) and flagged the
+/// discrepancy in its own output rather than silently using the wrong number.
 /// </summary>
 public sealed record DepartmentsControlTotals
 {
     public int ScopedInstances { get; init; }
-    public int SumOfRows { get; init; }
+    public int AssignedInstances { get; init; }
     public bool Reconciled { get; init; }
     public int OverdueInstances { get; init; }
     public decimal TenantOverduePct { get; init; }
@@ -418,11 +431,11 @@ public sealed record LicenceControlTotals
     public int ScopedLicences { get; init; }
     public int TypedLicences { get; init; }
     public bool Reconciled { get; init; }
-    public decimal TenantLapsedCorroboratedPct { get; init; }
+    public decimal TenantLapsedPct { get; init; }
     public int LicenceTypesReported { get; init; }
     public int LicenceTypesWithLicences { get; init; }
     public int UntypedLicences { get; init; }
-    public int UncorroboratedLapsedLicences { get; init; }
+    public int ExcludedTerminalStateLicences { get; init; }
 }
 
 public sealed record LicenceRow
@@ -432,11 +445,11 @@ public sealed record LicenceRow
     public bool IsRetired { get; init; }
     public int TotalLicences { get; init; }
     public int ActiveLicences { get; init; }
-    public int LapsedCorroborated { get; init; }
-    public int LapsedUncorroborated { get; init; }
+    public int Lapsed { get; init; }
+    public int ExcludedTerminalState { get; init; }
     public int LapsingNext30 { get; init; }
     public int BranchesCovered { get; init; }
-    public decimal? LapsedCorroboratedPct { get; init; }
+    public decimal? LapsedPct { get; init; }
     public int? OverdueRank { get; init; }
     public string? Flags { get; init; }
 }
@@ -550,4 +563,53 @@ public sealed record EvidenceIntegrityRow
 {
     public string TrailBucket { get; init; } = string.Empty;
     public int ScheduleCount { get; init; }
+}
+
+// ── Forward risk (sql/26) ──────────────────────────────────────────────────────────────
+
+/// <summary>
+/// The 90-day window split into three SEGMENTS - not a forecast, a count of facts already true:
+///   carried_forward = the obligation ALREADY has an open overdue schedule AND another occurrence
+///                     due in the window. A known problem recurring.
+///   clean_at_risk   = no existing overdue, but carries >=1 preventable risk factor (no owner,
+///                     owner gone, branch stress). The actionable set.
+///   healthy         = neither.
+/// Grain is the distinct ComplianceInstance (<see cref="DueInWindow"/> = CarriedForward +
+/// CleanAtRisk + Healthy). Deployed proc, live in prod - never modified from here.
+/// </summary>
+public sealed record ForwardRiskControlTotals
+{
+    public int ScopedInstances { get; init; }
+    public int HorizonDays { get; init; }
+    public int DueInWindow { get; init; }
+    public int SumOfRowsDue { get; init; }
+    public bool Reconciled { get; init; }
+    public int SchedulesInWindow { get; init; }
+    public int CarriedForward { get; init; }
+    public int CleanAtRisk { get; init; }
+    public int Healthy { get; init; }
+    public int PredictedAtRisk { get; init; }
+    public int ImprisonmentNeedingAttention { get; init; }
+    public decimal? TenantMedianBranchOverduePct { get; init; }
+    public decimal? BranchStressThresholdPct { get; init; }
+    public int BranchesReported { get; init; }
+    public int BranchesWithNothingDue { get; init; }
+    public bool ForwardWindowEmpty { get; init; }
+    public string? Method { get; init; }
+}
+
+public sealed record ForwardRiskRow
+{
+    public int BranchID { get; init; }
+    public string? BranchName { get; init; }
+    public int DueInWindow { get; init; }
+    public int CarriedForward { get; init; }
+    public int CleanAtRisk { get; init; }
+    public int Healthy { get; init; }
+    public int ImprisonmentDue { get; init; }
+    public int CriticalDue { get; init; }
+    public decimal? CleanAtRiskPct { get; init; }
+    public decimal? CarriedForwardPct { get; init; }
+    public int? CleanAtRiskRank { get; init; }
+    public string? Flags { get; init; }
 }

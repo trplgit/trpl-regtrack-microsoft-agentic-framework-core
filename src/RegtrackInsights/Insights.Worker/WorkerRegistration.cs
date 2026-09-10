@@ -119,6 +119,10 @@ public static class WorkerRegistration
         services.AddTransient<InjectCoverageGridActivity>();
         services.AddTransient<InjectCoverageCssActivity>();
         services.AddTransient<InjectCoverageScriptActivity>();
+        services.AddTransient<InjectBacklogAgeBarActivity>();
+        services.AddTransient<InjectBacklogAgeBarCssActivity>();
+        services.AddTransient<InjectForwardLookActivity>();
+        services.AddTransient<InjectForwardLookCssActivity>();
         services.AddTransient<NormalizeActivity>();
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
@@ -164,6 +168,8 @@ public static class WorkerRegistration
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
                 ActivityCreator<InjectCoverageCssActivity>(sp), ActivityCreator<InjectCoverageScriptActivity>(sp),
+                ActivityCreator<InjectBacklogAgeBarActivity>(sp), ActivityCreator<InjectBacklogAgeBarCssActivity>(sp),
+                ActivityCreator<InjectForwardLookActivity>(sp), ActivityCreator<InjectForwardLookCssActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),

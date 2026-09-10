@@ -1,0 +1,162 @@
+{
+  "info": {
+    "name": "RegTrack Insights",
+    "_postman_id": "b7e2a1c4-9f30-4d21-8a55-2c9e1f6d0a10",
+    "description": "RegTrack Insights paid-tier + free-digest endpoints. Hosted on the existing RegTrack .NET 8 API under /api/insights. Auth = the host's existing bearer/session auth; set {{bearerToken}} in the environment. `tenantId` is always server-validated against the caller's eligible set (IDOR guard). See docs/INSIGHTS_API_ENDPOINTS.md and API_CONTRACTS.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{bearerToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://localhost:5001", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. List eligible tenants",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": { "raw": "{{baseUrl}}/api/insights/tenants", "host": ["{{baseUrl}}"], "path": ["api", "insights", "tenants"] },
+        "description": "No params. 200 with { tenants: [...] }. Empty array is a 200, not an error (secure-deny state). tier: pro|basic. scopeClass: tenant_wide|functional|entity_scoped."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.code === 200);",
+              "const t = pm.response.json().tenants || [];",
+              "if (t.length) { pm.collectionVariables.set('tenantId', t[0].tenantId); console.log('tenantId ->', t[0].tenantId); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Report history (NOT YET IMPLEMENTED)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/insights/reports?tenantId={{tenantId}}&reportType={{reportType}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "insights", "reports"],
+          "query": [
+            { "key": "tenantId", "value": "{{tenantId}}" },
+            { "key": "reportType", "value": "{{reportType}}" }
+          ]
+        },
+        "description": "Contracted in API_CONTRACTS.md §2 but NO route exists in the API yet. Returns { reports: [...], cooldown: {...} }. Rows filtered by report_scope ⊆ viewer_scope at request time."
+      }
+    },
+    {
+      "name": "3. Generate a report",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenantId\": {{tenantId}},\n  \"reportType\": \"{{reportType}}\",\n  \"scope\": { \"type\": \"tenant\" },\n  \"period\": \"{{period}}\",\n  \"requestedDimensions\": null\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/insights/reports", "host": ["{{baseUrl}}"], "path": ["api", "insights", "reports"] },
+        "description": "reportType: compliance_health | fixed_holistic | dimension_selection.\nscope: { \"type\": \"tenant\" } OR { \"type\": \"entity\", \"entityId\": 92442 }.\nrequestedDimensions: ONLY for dimension_selection - e.g. [\"Location\",\"Nature\",\"Act\"]. One request with N dimensions = one run = one report = one file. null for every other type.\n\n202 -> { runId, status: \"queued\", streamUrl }.  409 COOLDOWN_ACTIVE + nextAvailableUtc.  403 TENANT_NOT_ELIGIBLE / SCOPE_DENIED."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202 Accepted', () => pm.response.code === 202);",
+              "const b = pm.response.json();",
+              "if (b.runId) { pm.collectionVariables.set('runId', b.runId); console.log('runId ->', b.runId); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3b. Generate - dimension_selection (multi-dimension)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenantId\": {{tenantId}},\n  \"reportType\": \"dimension_selection\",\n  \"scope\": { \"type\": \"tenant\" },\n  \"period\": \"{{period}}\",\n  \"requestedDimensions\": [\"Location\", \"Nature\", \"Act\"]\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/insights/reports", "host": ["{{baseUrl}}"], "path": ["api", "insights", "reports"] },
+        "description": "3 dimensions in ONE request -> ONE run, ONE report, ONE HTML file with 3 sections. Not 3 runs."
+      }
+    },
+    {
+      "name": "4. Run progress (SSE stream)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "text/event-stream" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/insights/runs/{{runId}}/stream",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "insights", "runs", "{{runId}}", "stream"]
+        },
+        "description": "Server-Sent Events. Connection capped at 15 min; the run continues, reconnect to resume. Event: { runId, status, stage, stagesComplete, stagesTotal }. stage: gathering -> validating -> composing -> narrating -> verifying -> rendering -> complete. Terminal status: complete | failed. On complete the payload carries the new reportId. Postman's runner does not stream SSE well - use curl -N or the browser for the live view."
+      }
+    },
+    {
+      "name": "5. Open a report (content)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/insights/reports/{{reportId}}/content?tenantId={{tenantId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "insights", "reports", "{{reportId}}", "content"],
+          "query": [{ "key": "tenantId", "value": "{{tenantId}}" }]
+        },
+        "description": "reportId (path, GUID) + tenantId (query). Re-resolves scope NOW, decrypts, mints a FRESH short-lived read SAS every call (nothing stored, nothing reused).\n\n200 -> { contentUrl, expiresUtc, sandboxRequired: true }. The client MUST render contentUrl only in <iframe sandbox=\"allow-scripts\"> with NO allow-same-origin.\n\n404 REPORT_NOT_VISIBLE for every refusal (missing / wrong tenant / scope no longer covers) - existence is never revealed.  403 TENANT_NOT_ELIGIBLE."
+      }
+    },
+    {
+      "name": "6. Free digest - unsubscribe",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/insights/digest/unsubscribe?c={{digestCustomerId}}&u={{digestUserId}}&t={{digestToken}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "insights", "digest", "unsubscribe"],
+          "query": [
+            { "key": "c", "value": "{{digestCustomerId}}", "description": "customer id (> 0)" },
+            { "key": "u", "value": "{{digestUserId}}", "description": "user id (> 0)" },
+            { "key": "t", "value": "{{digestToken}}", "description": "HMAC over (customer,user), issued when the mail was sent" }
+          ]
+        },
+        "description": "NO login (email clients cannot auth). Safety is the t token. 200 { message }. 400 invalid ids / bad token. 500 signing key unconfigured."
+      }
+    },
+    {
+      "name": "7. Free digest - bounce webhook",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": {{digestCustomerId}},\n  \"userId\": {{digestUserId}},\n  \"bounceType\": \"hard\",\n  \"reason\": \"550 mailbox unavailable\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/insights/digest/bounce", "host": ["{{baseUrl}}"], "path": ["api", "insights", "digest", "bounce"] },
+        "description": "Posted by the mail provider (no RegTrack account - protect like other inbound webhooks). Only bounceType 'hard' suppresses (durable). Soft bounce = recorded + ignored. 200 either way; 400 invalid ids."
+      }
+    }
+  ]
+}

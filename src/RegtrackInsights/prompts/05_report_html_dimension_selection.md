@@ -173,17 +173,45 @@ body{font-family:"DM Sans",system-ui,sans-serif;background:var(--bg);color:var(-
   dimension when more than one is selected.
 - Standout/anomaly card (`.card` with a `.tone-tag`) - see "On findings without
   a real detector yet" above - only when a real finding backs it.
-- Comparison table with meters (`.tbl`) or comparison bars (`.statebar`) -
-  **mandatory**, not a judgement call, whenever `dimension_rows[block]` has one
-  or more rows worth comparing (matches Trent's "How the states compare"
-  section - use `.statebar` for a peer/group comparison shape, `.tbl` for a
-  flat member list).
+- **Worst single member card - mandatory, not a judgement call, whenever
+  `dimension_rows[block]` has one or more rows.** Matches Trent's real "Worst
+  single location" card - this is NOT the standout/anomaly card and does NOT
+  need a detector: it is just the single row with the worst value on this
+  dimension's own primary rate field, picked deterministically from the real
+  rows you already have, with 2+ real qstats and one real narrative sentence
+  (name the member, state what the row's own numbers show - never speculate
+  about *why*, e.g. never guess "looks like a test entry" unless a real
+  assertion already says so). Render it even when a standout/anomaly card is
+  also present - they answer different questions (a real pattern vs. the
+  single worst real row) and Trent's own page carries both.
+- **Peer/group comparison bars (`.statebar`) - mandatory, not a judgement
+  call, whenever two or more rows in `dimension_rows[block]` share a real,
+  named grouping field** (e.g. Location rows carry `StateName`/`StateID` -
+  group by `StateName`; a dimension with no such shared field skips this
+  component entirely, never invent a grouping). One real `.statebar` row per
+  group: group name, member+row counts, worst-first by the group's own real
+  rate. Any group whose member count falls below this run's real materiality
+  floor (same floor `sql/05`'s detector logic uses - do not invent a
+  different number) is pulled out of the ranked list and listed instead in a
+  `.callout.info` ("Too small to rank fairly" - matches Trent's real
+  treatment), never silently dropped and never ranked unfairly against
+  larger groups.
+- Comparison table with meters (`.tbl`) - **mandatory**, not a judgement
+  call, whenever `dimension_rows[block]` has one or more rows worth
+  comparing at the individual-member level (every row, not a subset) -
+  present alongside `.statebar` when both apply (the flat member list and
+  the group rollup answer different questions), or alone when rows share no
+  groupable field.
 - Quick-stats row (`.qstats`) - include on any card citing 2 or more discrete
-  real numbers together (matches Trent's real usage on both the standout card
-  and the worst-single-member card).
-- Action list (`.act-list`/`.actx`) - include when real findings/assertions
-  imply at least one concrete next step with a real owner-role and a real
-  measure of completion. Omit for a pane with nothing actionable.
+  real numbers together (matches Trent's real usage on the standout card, the
+  worst-single-member card, and each action's expanded body).
+- Action list (`.act-list`/`.actx`) - **mandatory whenever this pane has ANY
+  real finding or assertion at all** (the standout card, the worst-single-
+  member card, or the SPOF/ownerless/peer-gap style findings folded into the
+  narrative all count) - derive at least one action directly from a real
+  finding, with a real owner-role and a real, checkable "Done when." Only a
+  pane with zero real findings/assertions of any kind may omit this
+  entirely - that should be rare, not the default.
 - Guard note (`.guard`) - include only when a real `data_quality` entry or a
   real assertion caveat applies to this pane. Never invent one.
 
@@ -248,10 +276,36 @@ because the pane "already has enough."
       <div class="callout critical" style="margin-top:14px"><span class="h">Recommended action</span>{real, concrete next step implied by the finding - never invented advice beyond what the data supports}</div>
     </div>
 
-    <!-- (c) Comparison section - see "necessary component" rules above for
-         .statebar (peer/group comparison) vs .tbl (flat member list). Every
-         row in dimension_rows[block] gets a table row / bar - no subset. -->
-    <div class="section-head"><h2>{real comparison framing, e.g. "How the states compare" for Location's StateID grouping, or "Full list" for a dimension with no natural grouping}</h2><span class="hint">worst first</span></div>
+    <!-- (c) Worst single member card - see "necessary component" rules
+         above. Deterministic pick (worst real value on this dimension's own
+         primary rate field), never a detector, never omitted when
+         dimension_rows[block] has rows. -->
+    <div class="section-head"><h2>Worst single {member noun, e.g. "location", "user", "entity"}</h2></div>
+    <div class="card">
+      <b>{real member name}</b>{ · real parent/context field if one exists, e.g. state name}
+      <div class="qstats" style="margin-top:8px">
+        <span class="qstat">{real count label} <b class="tnum">{real}</b></span>
+        <span class="qstat">{real rate label} <b class="tnum">{real}</b></span>
+        <!-- 1-3 more real qstats as the row's own fields support -->
+      </div>
+      <p class="narr">{one real sentence describing what this row's own numbers show - never a guess about cause}</p>
+    </div>
+
+    <!-- (d) Peer/group comparison bars - ONLY when rows share a real grouping
+         field (see rule above). Worst-first by the group's own rate; any
+         group under the real materiality floor moves to the .callout.info
+         below instead of appearing in this list. -->
+    <div class="section-head"><h2>How the {real grouping noun, e.g. "states"} compare</h2><span class="hint">worst first</span></div>
+    <div class="card">
+      <!-- ONE .statebar per group at/above the materiality floor -->
+      <div class="statebar"><span class="sn">{real group name}</span><div class="meter"><i class="{ok|bad}" style="width:{real}%"></i></div><span class="meta">{real row count} · {real member count}</span><span class="meta pct {ok|warn|bad}">{real}%</span></div>
+    </div>
+    <div class="callout info"><span class="h">Too small to rank fairly</span>{real group name(s) with real member/row counts below the materiality floor} - with so few members, a percentage would mislead.</div>
+
+    <!-- (e) Comparison table - every row in dimension_rows[block], no subset.
+         Present alongside (d) when rows have a groupable field, or alone
+         when they do not. -->
+    <div class="section-head"><h2>{real comparison framing, e.g. "Full list" or "Every location"}</h2><span class="hint">worst first</span></div>
     <div class="card">
       <table class="tbl">
         <thead><tr><th>{real field, e.g. name/label}</th><th style="text-align:right">{real count field}</th><th style="width:220px">{real rate/pct field}</th></tr></thead>
@@ -264,7 +318,7 @@ because the pane "already has enough."
       </table>
     </div>
 
-    <!-- (d) Action list - see "necessary component" rules above. -->
+    <!-- (f) Action list - see "necessary component" rules above. -->
     <div class="act-list">
       <details class="actx">
         <summary><span class="pchip {p1..p6, matching real severity/materiality}">Priority {n}</span><span><span class="atitle">{real, concrete action}</span><span class="aowner" style="display:block">Owner: {real role, e.g. Regional Operations, Compliance Operations}</span></span><span class="chev">▼</span></summary>
@@ -275,7 +329,7 @@ because the pane "already has enough."
       </details>
     </div>
 
-    <!-- (e) Guard note - see "necessary component" rules above. -->
+    <!-- (g) Guard note - see "necessary component" rules above. -->
     <div class="guard"><b>{short label}</b> {real caveat/data-quality text, verbatim or lightly reflowed - never paraphrased into something the data does not say}</div>
   </section>
   <!-- repeat the whole pane shape per block -->
@@ -362,6 +416,7 @@ listed here, which should be rare).
 .callout.critical{background:var(--bad-soft);border:1px solid var(--bad-border);color:oklch(0.38 0.13 27)}
 .callout.warning{background:var(--warn-soft);border:1px solid var(--warn-border);color:oklch(0.40 0.09 70)}
 .callout.good{background:var(--ok-soft);border:1px solid var(--ok-border);color:oklch(0.34 0.10 155)}
+.callout.info{background:var(--bg-sunk);border:1px solid var(--border-strong);color:var(--fg-muted)}
 .callout .h{font-size:11px;letter-spacing:0.07em;text-transform:uppercase;font-weight:700;margin-bottom:6px;display:block}
 .guard{margin-top:26px;background:var(--bg-sunk);border:1px dashed var(--border-strong);border-radius:var(--r);padding:13px 16px;font-size:12.5px;color:var(--fg-muted)}
 .guard b{color:var(--fg)}
@@ -432,6 +487,17 @@ cells (`.tbl .num`, which IS right-aligned per Trent's own real CSS - do not
 confuse this with the old `.di-` template's left-alignment rule, which no
 longer applies) · fabricates a standout/anomaly finding with no real detector
 backing it · loads a font from a CDN or declares `@font-face` itself · skips
-the mandatory comparison table/bars when `dimension_rows[block]` has real
-rows · references `trent-shared.css` or any external file · or leaves a pane
-at "one number and one sentence" when the real data supports more.
+the mandatory comparison table when `dimension_rows[block]` has real rows ·
+skips the worst-single-member card when `dimension_rows[block]` has real
+rows · skips the `.statebar` group comparison when 2+ rows share a real
+grouping field (e.g. Location's `StateName`) · ranks a below-materiality-
+floor group in that `.statebar` list instead of pulling it into the
+`.callout.info` · has any real finding/assertion in the pane but no action
+list · **puts a rounded/bucketed class name (`w100`, `w93`, `class="bad
+w80"`, or anything similar) on a `.meter i` instead of a literal
+`style="width:{the exact real percentage}%"`** - no such class is declared
+anywhere in the CSS above, so the bar silently renders at 100% width
+regardless of its real value, worse than showing nothing; `width` is ALWAYS
+an inline style carrying the exact real number, never a class, never rounded
+· references `trent-shared.css` or any external file · or leaves a pane at
+"one number and one sentence" when the real data supports more.

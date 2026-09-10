@@ -50,7 +50,7 @@ public static class CompositeScoreCalculator
         var components = new List<ScoreComponentResult>
         {
             new("risk_weighted", "Risk-weighted exposure", risk is null ? null : ComputeRiskScore(risk.ControlTotals, risk.Rows), RiskWeight),
-            new("licence", "Licence", licenceTotals is null ? null : Clamp(100m - licenceTotals.TenantLapsedCorroboratedPct), LicenceWeight),
+            new("licence", "Licence", licenceTotals is null ? null : Clamp(100m - licenceTotals.TenantLapsedPct), LicenceWeight),
             new("coverage", "Coverage", location is null ? null : ComputeCoverageScore(location.ControlTotals, location.Rows), CoverageWeight),
             new("overdue_backlog", "Overdue / Backlog health", location is null ? null : ComputeOverdueBacklogScore(location.Rows, location.ControlTotals), OverdueBacklogWeight),
             new("people_continuity", "People / continuity", usersRows is null ? null : ComputePeopleScore(usersRows), PeopleWeight),

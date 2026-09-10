@@ -1,5 +1,7 @@
 /*===========================================================================
   RegTrack Insights - Phase 1a, Steps 4 & 5
+  Error block 51020-51029.  Convention: x0 = SCOPE DENIED,
+  x1-x4 = RECONCILIATION FAILED, x5-x9 = DICTIONARY / MASTER DATA GAP.
   ENTITY HIERARCHY  +  ENTITLEMENT GATE
 
   Spec reference : RegTrack_Insights_System_Design_v1.md Sec.6.7 (hierarchy), Sec.5.3 (gate)
@@ -54,16 +56,6 @@ GO
   Orphan roots are FLAGGED (RootKind = 'orphan') so the report can declare
   "this group's parent entity was deleted; it is shown as a top-level group"
   rather than silently re-parenting it.
-
-  -- [FIX] CustomerBranch.Status IS A SECOND ACTIVE FLAG, SEPARATE FROM IsDeleted
-  Status = 0 means the branch is DEACTIVATED: obligations remain tagged to it
-  but are not reported, and no schedules/alerts/escalations are generated for
-  them (CLAUDE.md Sec.5, METRIC_CALCULATION_REFERENCE.md Sec.1.1). "Active
-  branch" throughout this function now means IsDeleted = 0 AND Status = 1 -
-  the same generalisation applied at every hop IsDeleted already was.
-  A deactivated PARENT gets the identical orphan treatment a soft-deleted one
-  already gets: its still-active (IsDeleted=0, Status=1) children must remain
-  reachable, or they vanish from the rollup exactly as the apex-only bug did.
 ---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.tvfInsightsEntityTree', 'IF') IS NOT NULL
     DROP FUNCTION dbo.tvfInsightsEntityTree;
@@ -78,13 +70,11 @@ RETURN
                CASE WHEN cb.ParentID IS NULL THEN 'apex' ELSE 'orphan' END AS RootKind
         FROM CustomerBranch cb
         WHERE cb.CustomerID = @CustomerID
-          AND cb.IsDeleted  = 0
-          AND cb.Status     = 1
+          AND cb.IsDeleted = 0 AND cb.Status = 1
           AND (cb.ParentID IS NULL
                OR NOT EXISTS (SELECT 1 FROM CustomerBranch p
                               WHERE p.ID = cb.ParentID
-                                AND p.IsDeleted = 0
-                                AND p.Status = 1
+                                AND p.IsDeleted = 0 AND p.Status = 1
                                 AND p.CustomerID = cb.CustomerID))
     ),
     tree AS (
@@ -314,13 +304,11 @@ BEGIN
     ---- Step 3: recipients (minus opt-outs) ------------------------------
     IF @decision = 'PROCEED'
     BEGIN
-        SELECT @recipients = COUNT(DISTINCT ucm.UserID)
-        FROM UserCustomerMapping ucm
-        JOIN [User] u ON u.ID = ucm.UserID
-        WHERE ucm.CustomerID = @CustomerID
-          AND ucm.ProductID  = CASE WHEN @Tier = 'free' THEN 18 ELSE 19 END
-          AND ucm.IsActive   = 0        -- INVERTED
-          AND u.IsDeleted    = 0;
+        /*  [CORRECTED 2026-09-08] Management-role users, per BA ruling - both
+            tiers. UserCustomerMapping cannot answer this: all 65 production
+            rows carry ProductID = NULL and IsActive = 1. See sql/01.          */
+        SELECT @recipients = COUNT(DISTINCT m.UserID)
+        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m;
         -- NOTE: subtract durable per-recipient opt-outs here once that store exists
         --       (spec Sec.5.4 - opt-out must SURVIVE tier changes)
 

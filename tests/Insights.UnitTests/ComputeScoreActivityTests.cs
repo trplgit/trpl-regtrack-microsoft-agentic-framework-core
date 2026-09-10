@@ -51,7 +51,7 @@ public sealed class ComputeScoreActivityTests
             "Users", new UsersControlTotals(),
             [new UsersRow { UserID = 1, PerformerInstances = 10, ReviewerInstances = 5 }], [], [], [], []);
         var licence = new DimensionResult<LicenceControlTotals, LicenceRow>(
-            "Licence", new LicenceControlTotals { TenantLapsedCorroboratedPct = 15m }, [], [], [], [], []);
+            "Licence", new LicenceControlTotals { TenantLapsedPct = 15m }, [], [], [], [], []);
 
         var dimensionResults = new Dictionary<string, string>
         {
@@ -87,7 +87,7 @@ public sealed class ComputeScoreActivityTests
     public void Run_AlwaysProducesACompositeAssertion_NeverJustComponents()
     {
         var licence = new DimensionResult<LicenceControlTotals, LicenceRow>(
-            "Licence", new LicenceControlTotals { TenantLapsedCorroboratedPct = 30m }, [], [], [], [], []);
+            "Licence", new LicenceControlTotals { TenantLapsedPct = 30m }, [], [], [], [], []);
         var dimensionResults = new Dictionary<string, string> { ["Licence"] = JsonSerializer.Serialize(licence) };
 
         var result = ComputeScoreActivity.Run(new ComputeScoreInput(dimensionResults));
@@ -102,7 +102,7 @@ public sealed class ComputeScoreActivityTests
     public void Run_MissingDimensionKey_TreatsItAsNull_DoesNotThrow()
     {
         var licence = new DimensionResult<LicenceControlTotals, LicenceRow>(
-            "Licence", new LicenceControlTotals { TenantLapsedCorroboratedPct = 0m }, [], [], [], [], []);
+            "Licence", new LicenceControlTotals { TenantLapsedPct = 0m }, [], [], [], [], []);
         var dimensionResults = new Dictionary<string, string> { ["Licence"] = JsonSerializer.Serialize(licence) };
 
         var result = ComputeScoreActivity.Run(new ComputeScoreInput(dimensionResults));

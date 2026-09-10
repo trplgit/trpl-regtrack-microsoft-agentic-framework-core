@@ -43,9 +43,11 @@ public class PersistActivityTests
         var encryptor = new Mock<IReportEncryptor>();
         encryptor.Setup(e => e.EncryptAsync("<html></html>", It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
 
+        BlobPathContext? seenPathContext = null;
         var blobWriter = new Mock<IReportBlobWriter>();
-        blobWriter.Setup(w => w.WriteAsync(envelope, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BlobLocation("insights-reports-temp", "abc123.dat"));
+        blobWriter.Setup(w => w.WriteAsync(envelope, It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .Callback<EncryptedReportEnvelope, BlobPathContext, CancellationToken>((_, ctx, _) => seenPathContext = ctx)
+            .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
         var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
@@ -58,13 +60,20 @@ public class PersistActivityTests
 
         var row = await db.GeneratedReports.SingleAsync();
         Assert.Equal(result.ReportId, row.Id.ToString());
+        // The blob PATH is built from the row's own id + generation time - the activity fixes both
+        // before the blob write, not after.
+        Assert.NotNull(seenPathContext);
+        Assert.Equal(29, seenPathContext!.TenantId);
+        Assert.Equal("compliance_health", seenPathContext.ReportType);
+        Assert.Equal(row.Id, seenPathContext.ReportId);
+        Assert.Equal(row.GeneratedAtUtc, seenPathContext.GeneratedAtUtc);
+        Assert.Equal("29/compliance_health/2026/09/abc123.html.enc", row.BlobPath);
         Assert.Equal(29, row.CustomerId);
         Assert.Equal("tenant", row.ScopeDescriptor);
         Assert.Equal("compliance_health", row.ReportType);
         Assert.Equal("FY2025-26", row.Period);
         Assert.Equal(38, row.GeneratedByUserId);
         Assert.Equal("insights-reports-temp", row.BlobContainer);
-        Assert.Equal("abc123.dat", row.BlobPath);
         Assert.Equal("complete", row.Status);
         Assert.Equal(envelope.EncryptedAesKey, row.EncryptedAesKey);
         Assert.Equal("TRPLCryptoKey-001", row.KeyVaultObjectName);
@@ -81,8 +90,8 @@ public class PersistActivityTests
         encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
 
         var blobWriter = new Mock<IReportBlobWriter>();
-        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BlobLocation("insights-reports-temp", "abc123.dat"));
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
         var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
@@ -90,6 +99,6 @@ public class PersistActivityTests
         await activity.RunAsync(new PersistInput(
             "<html>real tenant data</html>", 29, "compliance_health", "FY2025-26", "tenant", 38));
 
-        blobWriter.Verify(w => w.WriteAsync(envelope, It.IsAny<CancellationToken>()), Times.Once);
+        blobWriter.Verify(w => w.WriteAsync(envelope, It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

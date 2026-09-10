@@ -17,7 +17,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
 
         IReadOnlyList<Assertion> assertions = [];
-        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100));
 
         var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { ["compliance_health"] = agent.Object });
@@ -43,7 +43,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
 
         IReadOnlyList<Assertion> assertions = [];
-        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", FixedHolisticComposition.ReportType, generatedAt, null, null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", FixedHolisticComposition.ReportType, generatedAt, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html>fixed holistic</html>", 4200));
 
         var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [FixedHolisticComposition.ReportType] = agent.Object });
@@ -69,7 +69,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
         IReadOnlyList<Assertion> assertions = [];
 
-        locationAgent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, null, null, It.IsAny<CancellationToken>()))
+        locationAgent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html>location, finalized</html>", 2000));
 
         var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent>
@@ -81,7 +81,7 @@ public class RenderHtmlActivityTests
         var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt));
 
         Assert.Equal("<!DOCTYPE html><html>location, finalized</html>", result.Html);
-        genericAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Never);
+        genericAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     /// <summary>Regression guard - today's exact behavior when no dimension-specific agent is registered yet (the real current state for every dimension).</summary>
@@ -94,7 +94,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
         IReadOnlyList<Assertion> assertions = [];
 
-        genericAgent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, null, null, It.IsAny<CancellationToken>()))
+        genericAgent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html>nature, generic</html>", 1800));
 
         var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent>
@@ -118,7 +118,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
         IReadOnlyList<Assertion> assertions = [];
 
-        genericAgent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, null, null, It.IsAny<CancellationToken>()))
+        genericAgent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html>location+users, generic</html>", 3200));
 
         var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent>
@@ -130,7 +130,7 @@ public class RenderHtmlActivityTests
         var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt));
 
         Assert.Equal("<!DOCTYPE html><html>location+users, generic</html>", result.Html);
-        locationAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Never);
+        locationAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     /// <summary>Unchanged - an unrecognized ReportType still throws, fail-closed, regardless of this change.</summary>

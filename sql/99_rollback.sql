@@ -75,6 +75,7 @@ IF OBJECT_ID('dbo.tvfInsightsEntityTree',        'IF') IS NOT NULL DROP FUNCTION
 IF OBJECT_ID('dbo.tvfInsightsOverdueSchedules',  'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsOverdueSchedules;
 IF OBJECT_ID('dbo.tvfInsightsLatestStatus',      'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsLatestStatus;
 IF OBJECT_ID('dbo.tvfInsightsOwnership',         'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsOwnership;
+IF OBJECT_ID('dbo.tvfInsightsManagementUsers',   'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsManagementUsers;
 IF OBJECT_ID('dbo.tvfInsightsForwardPipelineSchedules', 'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsForwardPipelineSchedules;
 GO
 

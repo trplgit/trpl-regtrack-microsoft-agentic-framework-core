@@ -49,6 +49,14 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -120,6 +128,14 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -183,6 +199,14 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -382,6 +406,14 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -401,6 +433,107 @@ public class InsightsReportOrchestratorTests
         Assert.NotNull(capturedRetryOptions);
         Assert.True(capturedRetryOptions!.Handle(new InvalidOperationException("malformed render")), "a transient/malformed-render failure must be retryable");
         Assert.False(capturedRetryOptions.Handle(new OrchestrationRefusedException("NOT_NORMALIZABLE", "refused")), "a deterministic refusal must never be retried");
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-09] The real Angular product has no dedicated per-dimension branch for
+    /// Entity at all (confirmed by reading detailed-insights.component.html/.ts directly - only
+    /// 'User' and 'Department' get one; Entity itself falls through to the plain full holistic
+    /// view). A "dimension_selection" request naming Entity alone is therefore translated,
+    /// in-process, into a plain "fixed_holistic" request before anything else runs - proven here
+    /// the same way RunTask_FixedHolisticReportType_SkipsComposeAndReflection_ReachesPersistOutput
+    /// proves the real fixed_holistic path: zero LLM composition (Compose/ReflectOnComposition
+    /// never scheduled), ComputeScoreActivity DOES run (the opposite of every other
+    /// dimension_selection request, which skips it - RunTask_HappyPath's own sibling test never
+    /// covers this combination), and the render call actually receives ReportType
+    /// "fixed_holistic", never "dimension_selection" - a caller inspecting the rendered payload
+    /// (or a render-agent-key lookup) sees the real fixed_holistic shape throughout, not a
+    /// half-translated hybrid.
+    /// </summary>
+    [Fact]
+    public async Task RunTask_DimensionSelectionRequestingOnlyEntity_TranslatesToFixedHolistic()
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc));
+
+        var narrative = new NarrativeResult([]);
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+
+        FetchDimensionsInput? capturedFetchInput = null;
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Callback<string, string, object[]>((_, _, args) => capturedFetchInput = (FetchDimensionsInput)args[0])
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
+
+        // Deliberately NO Setup for ComposeOutput/ReflectOnCompositionOutput - Times.Never below
+        // proves they were never called, same as the plain fixed_holistic test.
+        context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ComputeScoreOutput(new OverallHealth(null, "Needs Attention", "flat", "test", []), [], "{}"));
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(narrative, 1000));
+        context.Setup(c => c.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ReflectOnNarrativeOutput(new NarrativeReflectionResult(ReflectionVerdict.Approve, []), 1000));
+        context.Setup(c => c.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PublishGateOutput(true));
+
+        RenderHtmlInput? capturedRenderInput = null;
+        context.Setup(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
+            .Callback<string, string, RetryOptions, object[]>((_, _, _, args) => capturedRenderInput = (RenderHtmlInput)args[0])
+            .ReturnsAsync(new RenderHtmlOutput("<html></html>", 1000));
+
+        context.Setup(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectFontOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageGridOutput>(typeof(InjectCoverageGridActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageGridOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageCssOutput>(typeof(InjectCoverageCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html></html>"));
+
+        ValidateFixedHolisticStructureInput? capturedStructureInput = null;
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Callback<string, string, object[]>((_, _, args) => capturedStructureInput = (ValidateFixedHolisticStructureInput)args[0])
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PersistOutput("33333333-3333-3333-3333-333333333333"));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(
+            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Entity"]);
+
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
+        context.Verify(c => c.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+        context.Verify(c => c.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+        context.Verify(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+        context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+
+        Assert.NotNull(capturedFetchInput);
+        Assert.Null(capturedFetchInput!.RequestedDimensions); // fetches every dimension, not just Entity
+        Assert.NotNull(capturedRenderInput);
+        Assert.Equal(FixedHolisticComposition.ReportType, capturedRenderInput!.ReportType);
+        Assert.NotNull(capturedStructureInput);
+        Assert.Equal(FixedHolisticComposition.ReportType, capturedStructureInput!.ReportType); // the real gate actually evaluates, not a no-op
     }
 
     /// <summary>Several calls that individually look fine must still sum and refuse - the budget is on the RUN, not any one call.</summary>

@@ -45,6 +45,20 @@ public interface IReportHtmlAgent
     /// to build a per-member data table from - asking it to "include a table of real rows" was
     /// asking for data it was never actually given, which is why it kept skipping that instruction,
     /// not a prompt-wording problem. Null/empty for every other report type.
+    ///
+    /// <paramref name="dimensionControlTotalsJson"/> [ADDED 2026-09-09, same class of gap as
+    /// dimensionRowsJson above] Keyed by block name, each value the REAL "ControlTotals" JSON
+    /// object for that dimension (e.g. DepartmentsControlTotals: UnassignedInstances,
+    /// DepartmentsReported, ...). [BUG FOUND LIVE, 2026-09-09] A dimension-specific render prompt
+    /// (05_report_html_dimension_selection_department.md) asked for real tenant-level aggregates
+    /// (the untagged/unassigned bucket's size) that exist ONLY on the dimension's ControlTotals
+    /// result set - never as a named assertion (sql/10_dimension_departments.sql's own #assert
+    /// block confirms only 4 assertion types exist for this dimension, none of them tenant-level
+    /// coverage totals) and never derivable from dimension_rows (the untagged bucket has no row -
+    /// sql/10's own header comment says so explicitly, to stop a narrator inventing one). The
+    /// render agent correctly refused rather than fabricate ("I will not infer or invent those
+    /// values") - the fix is giving it the real numbers, not asking it to guess harder. Null/empty
+    /// for every report type that does not need it.
     /// </summary>
     Task<AgentCallResult<string>> RenderAsync(
         CompositionPlan plan,
@@ -55,6 +69,7 @@ public interface IReportHtmlAgent
         DateTime generatedAt,
         IReadOnlyList<LocationRow>? locationRows = null,
         IReadOnlyDictionary<string, string>? dimensionRowsJson = null,
+        IReadOnlyDictionary<string, string>? dimensionControlTotalsJson = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -75,12 +90,17 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
         DateTime generatedAt,
         IReadOnlyList<LocationRow>? locationRows = null,
         IReadOnlyDictionary<string, string>? dimensionRowsJson = null,
+        IReadOnlyDictionary<string, string>? dimensionControlTotalsJson = null,
         CancellationToken cancellationToken = default)
     {
-        // Each value is already a real JSON array string (extracted from the dimension's own
-        // serialized Rows) - parsed back into JsonElement so it nests as real JSON in the payload
-        // below, not as an escaped string the render agent would have to un-escape itself.
+        // Each value is already a real JSON string (extracted from the dimension's own serialized
+        // Rows/ControlTotals) - parsed back into JsonElement so it nests as real JSON in the
+        // payload below, not as an escaped string the render agent would have to un-escape itself.
         var dimensionRows = dimensionRowsJson?.ToDictionary(
+            kv => kv.Key,
+            kv => JsonSerializer.Deserialize<JsonElement>(kv.Value));
+
+        var dimensionControlTotals = dimensionControlTotalsJson?.ToDictionary(
             kv => kv.Key,
             kv => JsonSerializer.Deserialize<JsonElement>(kv.Value));
 
@@ -95,6 +115,7 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
                 generated_at = generatedAt,
                 coverage_status_counts = ComputeCoverageStatusCounts(locationRows),
                 dimension_rows = dimensionRows,
+                dimension_control_totals = dimensionControlTotals,
             },
             JsonOptions);
 
@@ -118,7 +139,9 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
             PoppinsFontInjector's own regex via HasHeadTag - one definition of "well-formed enough
             to proceed", never two copies that could drift apart.                                 */
         if (!PoppinsFontInjector.HasHeadTag(stripped))
-            throw new InvalidOperationException("Report HTML agent returned a document with no <head> tag - malformed or truncated render.");
+            throw new InvalidOperationException(
+                "Report HTML agent returned a document with no <head> tag - malformed or truncated render. " +
+                $"Length={stripped.Length}. Start=[{stripped[..Math.Min(300, stripped.Length)]}]. End=[{stripped[Math.Max(0, stripped.Length - 300)..]}].");
 
         var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
         return new AgentCallResult<string>(stripped, totalTokens);

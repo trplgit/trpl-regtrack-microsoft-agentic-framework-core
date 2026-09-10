@@ -8,7 +8,8 @@ public sealed record RenderHtmlInput(
     CompositionPlan Plan, NarrativeResult Narrative, IReadOnlyList<Assertion> Assertions, string TenantName, string ReportType, DateTime GeneratedAt,
     LlmCallPriority Priority = LlmCallPriority.Interactive,
     IReadOnlyList<LocationRow>? LocationRows = null,
-    IReadOnlyDictionary<string, string>? DimensionRowsJson = null);
+    IReadOnlyDictionary<string, string>? DimensionRowsJson = null,
+    IReadOnlyDictionary<string, string>? DimensionControlTotalsJson = null);
 public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 
 /// <summary>
@@ -56,7 +57,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
-            input.LocationRows, input.DimensionRowsJson, CancellationToken.None);
+            input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);
         return new RenderHtmlOutput(result.Value, result.TotalTokens);
     }
 }

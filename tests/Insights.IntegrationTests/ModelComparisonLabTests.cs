@@ -46,8 +46,11 @@ namespace Insights.IntegrationTests;
 /// </summary>
 public sealed class ModelComparisonLabTests(ITestOutputHelper output)
 {
-    private const int TenantId = 29; // 89% of estate under a soft-deleted parent - CLAUDE.md's own stress profile, real data, not a toy fixture.
-    private const int UserId = 38;
+    // [2026-09-10] Designated test tenant for RegTrack Insights lab runs against the
+    // regtech_dev01_readonly login (10.224.254.4). Read-only checks only against this tenant -
+    // never any write. Was tenant 29 / user 38 (a CLAUDE.md stress profile) up to this date.
+    private const int TenantId = 1300;
+    private const int UserId = 22426;
     private const string ReportType = "compliance_health";
     private const string Period = "FY2025-26";
 
@@ -349,6 +352,10 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         services.AddTransient<InjectCoverageGridActivity>();
         services.AddTransient<InjectCoverageCssActivity>();
         services.AddTransient<InjectCoverageScriptActivity>();
+        services.AddTransient<InjectBacklogAgeBarActivity>();
+        services.AddTransient<InjectBacklogAgeBarCssActivity>();
+        services.AddTransient<InjectForwardLookActivity>();
+        services.AddTransient<InjectForwardLookCssActivity>();
         services.AddTransient<NormalizeActivity>();
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
@@ -361,8 +368,16 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         var gathered = await sp.GetRequiredService<GatherScopeActivity>().RunAsync(new GatherScopeInput(UserId, TenantId));
         output.WriteLine($"Scope gathered: {gathered.ScopePairs.Count} pairs, shape={gathered.TenantShape}");
 
-        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(new FetchDimensionsInput(UserId, TenantId));
-        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/14 succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
+        // [2026-09-10] Run the two windowed dimensions (TimelinessFY, EvidenceIntegrity) over the
+        // LAST 90 DAYS rather than the current-FY-to-date default - the period-picker "Last 90
+        // days" option, resolved to concrete dates the same way ReportPeriodResolver will in prod.
+        var window = ReportPeriodResolver.Resolve(ReportPeriodChoice.Last90Days, DateTime.UtcNow);
+        output.WriteLine($"Report window: {window.Label} [{window.StartInclusive:yyyy-MM-dd} .. {window.EndExclusive:yyyy-MM-dd})");
+
+        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(
+            new FetchDimensionsInput(UserId, TenantId, WindowStart: window.StartInclusive, WindowEnd: window.EndExclusive));
+        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/15 succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
+
 
         var scoreResult = ComputeScoreActivity.Run(new ComputeScoreInput(dimensions.DimensionResults));
         var dimensionResultsWithScore = new Dictionary<string, string>(dimensions.DimensionResults) { ["Score"] = scoreResult.ScoreDimensionResultJson };
@@ -401,6 +416,15 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         var locationRows = dimensions.DimensionResults.TryGetValue("Location", out var locationJson)
             ? JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson, SnapshotJsonOptions)?.Rows
             : null;
+        var backlogAgingResult = dimensions.DimensionResults.TryGetValue("BacklogAging", out var backlogAgingJson)
+            ? JsonSerializer.Deserialize<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>>(backlogAgingJson, SnapshotJsonOptions)
+            : null;
+        var forwardRiskResult = dimensions.DimensionResults.TryGetValue("ForwardRisk", out var forwardRiskJson)
+            ? JsonSerializer.Deserialize<DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>>(forwardRiskJson, SnapshotJsonOptions)
+            : null;
+        var forwardPipelineResult = dimensions.DimensionResults.TryGetValue("ForwardPipeline", out var forwardPipelineJson)
+            ? JsonSerializer.Deserialize<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>>(forwardPipelineJson, SnapshotJsonOptions)
+            : null;
 
         // [FIX] PaidReportAgentsRegistration no longer registers a plain IReportHtmlAgent
         // directly - since the "dimension_selection" report type needs its own render agent,
@@ -412,6 +436,10 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         var injectCoverageGridActivity = sp.GetRequiredService<InjectCoverageGridActivity>();
         var injectCoverageCssActivity = sp.GetRequiredService<InjectCoverageCssActivity>();
         var injectCoverageScriptActivity = sp.GetRequiredService<InjectCoverageScriptActivity>();
+        var injectBacklogAgeBarActivity = sp.GetRequiredService<InjectBacklogAgeBarActivity>();
+        var injectBacklogAgeBarCssActivity = sp.GetRequiredService<InjectBacklogAgeBarCssActivity>();
+        var injectForwardLookActivity = sp.GetRequiredService<InjectForwardLookActivity>();
+        var injectForwardLookCssActivity = sp.GetRequiredService<InjectForwardLookCssActivity>();
         var normalizeActivity = sp.GetRequiredService<NormalizeActivity>();
         var sanitizeActivity = sp.GetRequiredService<SanitizeActivity>();
         var structureActivity = sp.GetRequiredService<ValidateFixedHolisticStructureActivity>();
@@ -435,10 +463,16 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
                 var coverageGridded = await injectCoverageGridActivity.RunAsync(new InjectCoverageGridInput(fonted.Html, locationRows));
                 var coverageStyled = await injectCoverageCssActivity.RunAsync(new InjectCoverageCssInput(coverageGridded.Html));
                 var coverageScripted = await injectCoverageScriptActivity.RunAsync(new InjectCoverageScriptInput(coverageStyled.Html));
-                var normalized = await normalizeActivity.RunAsync(new NormalizeInput(coverageScripted.Html));
+                var agebarred = await injectBacklogAgeBarActivity.RunAsync(new InjectBacklogAgeBarInput(coverageScripted.Html, backlogAgingResult?.Rows, backlogAgingResult?.ControlTotals));
+                var agebarStyled = await injectBacklogAgeBarCssActivity.RunAsync(new InjectBacklogAgeBarCssInput(agebarred.Html));
+                var forwarded = await injectForwardLookActivity.RunAsync(new InjectForwardLookInput(
+                    agebarStyled.Html, forwardRiskResult?.ControlTotals,
+                    forwardPipelineResult?.ControlTotals, forwardPipelineResult?.Rows));
+                var forwardStyled = await injectForwardLookCssActivity.RunAsync(new InjectForwardLookCssInput(forwarded.Html));
+                var normalized = await normalizeActivity.RunAsync(new NormalizeInput(forwardStyled.Html));
                 var sanitized = await sanitizeActivity.RunAsync(new SanitizeInput(normalized.Html));
                 var reNormalized = await normalizeActivity.RunAsync(new NormalizeInput(sanitized.Html));
-                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html));
+                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html, FixedHolisticComposition.ReportType));
 
                 await File.WriteAllTextAsync(htmlPath, structureChecked.Html);
                 output.WriteLine($"Report written to {htmlPath} - attempt {attempt}, renderTokens={renderTokens}, totalTokens={narrateTokens + renderTokens}");
@@ -456,6 +490,561 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             {
                 // Same shape as InjectFontActivity's one throw (missing/malformed <head>) - a
                 // recoverable, non-deterministic LLM failure, not a bug in this loop.
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: render/inject failed - {ex.Message}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Every attempt (0..{MaxReviewIterations}) failed the deterministic gate chain. Last failure: {lastFailure?.Message}", lastFailure);
+    }
+
+    /// <summary>
+    /// [TEMPORARY, NOT COMMITTED - user asked to look, not to keep] Real end-to-end run of the
+    /// new Trent-styled dimension_selection prompt against real UAT tenant 29, single dimension
+    /// (Location, the one directly comparable to trent/02 - Location.html). Mirrors
+    /// GenerateFixedHolisticReportAsync's real pipeline shape immediately above, with the
+    /// dimension_selection-specific differences: no ComputeScoreActivity (this report type never
+    /// computes one), DimensionSelectionComposition.Build instead of FixedHolisticComposition.Build,
+    /// the "dimension_selection" key resolved from the render-agent dictionary, and the real
+    /// dimensionRowsJson construction the orchestrator itself does (InsightsReportOrchestrator.cs).
+    /// </summary>
+    [Fact]
+    public async Task GenerateDimensionSelectionLocationReportAsync()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddTransient<GatherScopeActivity>();
+        services.AddTransient<FetchDimensionsActivity>();
+        services.AddTransient<NarrateActivity>();
+        services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<InjectFontActivity>();
+        services.AddTransient<InjectCoverageGridActivity>();
+        services.AddTransient<InjectCoverageCssActivity>();
+        services.AddTransient<InjectCoverageScriptActivity>();
+        services.AddTransient<NormalizeActivity>();
+        services.AddTransient<SanitizeActivity>();
+        services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient<PlaywrightQaActivity>();
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        IReadOnlyList<string> requestedDimensions = ["Location"];
+
+        var gathered = await sp.GetRequiredService<GatherScopeActivity>().RunAsync(new GatherScopeInput(UserId, TenantId));
+        output.WriteLine($"Scope gathered: {gathered.ScopePairs.Count} pairs, shape={gathered.TenantShape}");
+
+        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(new FetchDimensionsInput(UserId, TenantId, requestedDimensions));
+        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/{requestedDimensions.Count} succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
+
+        // No ComputeScoreActivity - dimension_selection never computes a composite score
+        // (InsightsReportOrchestrator's own real branch skips it for this ReportType).
+
+        var plan = DimensionSelectionComposition.Build(requestedDimensions);
+        output.WriteLine($"Dimension-selection composition: hero={plan.Hero.Block}, blocks=[{string.Join(",", plan.Blocks.Select(b => b.Block))}]");
+
+        var narrateActivity = sp.GetRequiredService<NarrateActivity>();
+        var reflectNarrativeActivity = sp.GetRequiredService<ReflectOnNarrativeActivity>();
+        var narrateResult = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null));
+        var narrative = narrateResult.Narrative;
+        var narrateTokens = narrateResult.TotalTokens;
+        for (var i = 0; i < MaxReviewIterations; i++)
+        {
+            var reflection = await reflectNarrativeActivity.RunAsync(new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings));
+            narrateTokens += reflection.TotalTokens;
+            if (reflection.Result.Verdict == ReflectionVerdict.Approve) break;
+            var revised = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues));
+            narrateTokens += revised.TotalTokens;
+            narrative = revised.Narrative;
+        }
+        output.WriteLine($"Narrative approved: {narrative.Blocks.Count} block(s), tokens={narrateTokens}");
+
+        var publishGate = sp.GetRequiredService<PublishGate>();
+        var gateResult = await publishGate.EvaluateAsync(UserId, TenantId, narrative, dimensions.Assertions);
+        if (!gateResult.Approved)
+            throw new InvalidOperationException($"Publish gate refused: {string.Join("; ", gateResult.InternalDiagnostics)}");
+        output.WriteLine("Publish gate: approved.");
+
+        var locationRows = dimensions.DimensionResults.TryGetValue("Location", out var locationJson)
+            ? JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson, SnapshotJsonOptions)?.Rows
+            : null;
+
+        // Real orchestrator logic (InsightsReportOrchestrator.cs), replicated exactly - the raw
+        // "Rows" JSON array per requested dimension, not just the curated assertions.
+        var dimensionRowsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("Rows").GetRawText());
+        var dimensionControlTotalsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("ControlTotals").GetRawText());
+
+        // [FIX 2026-09-09] Was hardcoded to the generic "dimension_selection" key - written
+        // before Location got its own "dimension_selection:Location" specific-key registration
+        // (Sambram's approved dimension-view rewrite), so this test kept silently exercising the
+        // old Trent-based generic prompt instead of the real specific-key path RenderHtmlActivity
+        // itself uses in production. Same specific-key-first lookup the Users/Departments test
+        // methods already use.
+        var htmlAgentsForLocation = sp.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
+        var locationSpecificKey = $"{DimensionSelectionComposition.ReportType}:{plan.Blocks[0].Block}";
+        var htmlAgent = htmlAgentsForLocation.TryGetValue(locationSpecificKey, out var locationSpecificAgent) ? locationSpecificAgent : htmlAgentsForLocation[DimensionSelectionComposition.ReportType];
+        output.WriteLine($"Render agent key used: {(htmlAgentsForLocation.ContainsKey(locationSpecificKey) ? locationSpecificKey : DimensionSelectionComposition.ReportType)}");
+        var injectFontActivity = sp.GetRequiredService<InjectFontActivity>();
+        var injectCoverageGridActivity = sp.GetRequiredService<InjectCoverageGridActivity>();
+        var injectCoverageCssActivity = sp.GetRequiredService<InjectCoverageCssActivity>();
+        var injectCoverageScriptActivity = sp.GetRequiredService<InjectCoverageScriptActivity>();
+        var normalizeActivity = sp.GetRequiredService<NormalizeActivity>();
+        var sanitizeActivity = sp.GetRequiredService<SanitizeActivity>();
+        var structureActivity = sp.GetRequiredService<ValidateFixedHolisticStructureActivity>();
+        var qaActivity = sp.GetRequiredService<PlaywrightQaActivity>();
+
+        Directory.CreateDirectory(LabRoot);
+        var htmlPath = Path.Combine(LabRoot, "dimension-selection-location.html");
+
+        var renderTokens = 0L;
+        Exception? lastFailure = null;
+        for (var attempt = 0; attempt <= MaxReviewIterations; attempt++)
+        {
+            try
+            {
+                var renderResult = await htmlAgent.RenderAsync(
+                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, locationRows, dimensionRowsJson, dimensionControlTotalsJson);
+                renderTokens += renderResult.TotalTokens;
+                var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
+
+                var fonted = await injectFontActivity.RunAsync(new InjectFontInput(html));
+                var coverageGridded = await injectCoverageGridActivity.RunAsync(new InjectCoverageGridInput(fonted.Html, locationRows));
+                var coverageStyled = await injectCoverageCssActivity.RunAsync(new InjectCoverageCssInput(coverageGridded.Html));
+                var coverageScripted = await injectCoverageScriptActivity.RunAsync(new InjectCoverageScriptInput(coverageStyled.Html));
+                var normalized = await normalizeActivity.RunAsync(new NormalizeInput(coverageScripted.Html));
+                var sanitized = await sanitizeActivity.RunAsync(new SanitizeInput(normalized.Html));
+                var reNormalized = await normalizeActivity.RunAsync(new NormalizeInput(sanitized.Html));
+                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html, DimensionSelectionComposition.ReportType));
+
+                await File.WriteAllTextAsync(htmlPath, structureChecked.Html);
+                output.WriteLine($"Report written to {htmlPath} - attempt {attempt}, renderTokens={renderTokens}, totalTokens={narrateTokens + renderTokens}");
+
+                var qaResult = await qaActivity.RunAsync(new PlaywrightQaInput(structureChecked.Html));
+                output.WriteLine($"Playwright QA (advisory only): hasIssues={qaResult.Result.HasIssues}, consoleErrors={qaResult.Result.ConsoleErrors.Count}, horizontalOverflow={qaResult.Result.HasHorizontalOverflow}");
+                return;
+            }
+            catch (OrchestrationRefusedException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: {ex.ReasonCode} refused - {string.Join("; ", ex.InternalDiagnostics)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: render/inject failed - {ex.Message}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Every attempt (0..{MaxReviewIterations}) failed the deterministic gate chain. Last failure: {lastFailure?.Message}", lastFailure);
+    }
+
+    /// <summary>
+    /// [TEMPORARY, NOT COMMITTED] Real end-to-end run of the new dimension-specific "Users"
+    /// render prompt (05_report_html_dimension_selection_user.md, the real .di-/Poppins "By User
+    /// & Role" page reproduction) against real UAT tenant 29. Same shape as
+    /// GenerateDimensionSelectionLocationReportAsync above, except the render agent is resolved
+    /// from the SPECIFIC "dimension_selection:Users" key (PaidReportAgentsRegistration.cs) rather
+    /// than the generic "dimension_selection" key - this test bypasses RenderHtmlActivity itself
+    /// (same as the Location test above), so it has to replicate that activity's own
+    /// specific-key-first lookup manually.
+    /// </summary>
+    [Fact]
+    public async Task GenerateDimensionSelectionUsersReportAsync()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddTransient<GatherScopeActivity>();
+        services.AddTransient<FetchDimensionsActivity>();
+        services.AddTransient<NarrateActivity>();
+        services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<InjectFontActivity>();
+        services.AddTransient<InjectCoverageGridActivity>();
+        services.AddTransient<InjectCoverageCssActivity>();
+        services.AddTransient<InjectCoverageScriptActivity>();
+        services.AddTransient<NormalizeActivity>();
+        services.AddTransient<SanitizeActivity>();
+        services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient<PlaywrightQaActivity>();
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        IReadOnlyList<string> requestedDimensions = ["Users"];
+
+        var gathered = await sp.GetRequiredService<GatherScopeActivity>().RunAsync(new GatherScopeInput(UserId, TenantId));
+        output.WriteLine($"Scope gathered: {gathered.ScopePairs.Count} pairs, shape={gathered.TenantShape}");
+
+        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(new FetchDimensionsInput(UserId, TenantId, requestedDimensions));
+        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/{requestedDimensions.Count} succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
+
+        var plan = DimensionSelectionComposition.Build(requestedDimensions);
+        output.WriteLine($"Dimension-selection composition: hero={plan.Hero.Block}, blocks=[{string.Join(",", plan.Blocks.Select(b => b.Block))}]");
+
+        var narrateActivity = sp.GetRequiredService<NarrateActivity>();
+        var reflectNarrativeActivity = sp.GetRequiredService<ReflectOnNarrativeActivity>();
+        var narrateResult = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null));
+        var narrative = narrateResult.Narrative;
+        var narrateTokens = narrateResult.TotalTokens;
+        for (var i = 0; i < MaxReviewIterations; i++)
+        {
+            var reflection = await reflectNarrativeActivity.RunAsync(new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings));
+            narrateTokens += reflection.TotalTokens;
+            if (reflection.Result.Verdict == ReflectionVerdict.Approve) break;
+            var revised = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues));
+            narrateTokens += revised.TotalTokens;
+            narrative = revised.Narrative;
+        }
+        output.WriteLine($"Narrative approved: {narrative.Blocks.Count} block(s), tokens={narrateTokens}");
+
+        var publishGate = sp.GetRequiredService<PublishGate>();
+        var gateResult = await publishGate.EvaluateAsync(UserId, TenantId, narrative, dimensions.Assertions);
+        if (!gateResult.Approved)
+            throw new InvalidOperationException($"Publish gate refused: {string.Join("; ", gateResult.InternalDiagnostics)}");
+        output.WriteLine("Publish gate: approved.");
+
+        var dimensionRowsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("Rows").GetRawText());
+        var dimensionControlTotalsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("ControlTotals").GetRawText());
+
+        // Specific-key-first, same rule RenderHtmlActivity itself applies (Plan.Blocks.Count == 1
+        // -> try "{ReportType}:{Block}" before falling back to the plain ReportType key).
+        var htmlAgents = sp.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
+        var specificKey = $"{DimensionSelectionComposition.ReportType}:{plan.Blocks[0].Block}";
+        var htmlAgent = htmlAgents.TryGetValue(specificKey, out var specific) ? specific : htmlAgents[DimensionSelectionComposition.ReportType];
+        output.WriteLine($"Render agent key used: {(htmlAgents.ContainsKey(specificKey) ? specificKey : DimensionSelectionComposition.ReportType)}");
+
+        var injectFontActivity = sp.GetRequiredService<InjectFontActivity>();
+        var injectCoverageGridActivity = sp.GetRequiredService<InjectCoverageGridActivity>();
+        var injectCoverageCssActivity = sp.GetRequiredService<InjectCoverageCssActivity>();
+        var injectCoverageScriptActivity = sp.GetRequiredService<InjectCoverageScriptActivity>();
+        var normalizeActivity = sp.GetRequiredService<NormalizeActivity>();
+        var sanitizeActivity = sp.GetRequiredService<SanitizeActivity>();
+        var structureActivity = sp.GetRequiredService<ValidateFixedHolisticStructureActivity>();
+        var qaActivity = sp.GetRequiredService<PlaywrightQaActivity>();
+
+        Directory.CreateDirectory(LabRoot);
+        var htmlPath = Path.Combine(LabRoot, "dimension-selection-users.html");
+
+        var renderTokens = 0L;
+        Exception? lastFailure = null;
+        for (var attempt = 0; attempt <= MaxReviewIterations; attempt++)
+        {
+            try
+            {
+                var renderResult = await htmlAgent.RenderAsync(
+                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
+                renderTokens += renderResult.TotalTokens;
+                var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
+
+                var fonted = await injectFontActivity.RunAsync(new InjectFontInput(html));
+                var coverageGridded = await injectCoverageGridActivity.RunAsync(new InjectCoverageGridInput(fonted.Html, null));
+                var coverageStyled = await injectCoverageCssActivity.RunAsync(new InjectCoverageCssInput(coverageGridded.Html));
+                var coverageScripted = await injectCoverageScriptActivity.RunAsync(new InjectCoverageScriptInput(coverageStyled.Html));
+                var normalized = await normalizeActivity.RunAsync(new NormalizeInput(coverageScripted.Html));
+                var sanitized = await sanitizeActivity.RunAsync(new SanitizeInput(normalized.Html));
+                var reNormalized = await normalizeActivity.RunAsync(new NormalizeInput(sanitized.Html));
+                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html, DimensionSelectionComposition.ReportType));
+
+                await File.WriteAllTextAsync(htmlPath, structureChecked.Html);
+                output.WriteLine($"Report written to {htmlPath} - attempt {attempt}, renderTokens={renderTokens}, totalTokens={narrateTokens + renderTokens}");
+
+                var qaResult = await qaActivity.RunAsync(new PlaywrightQaInput(structureChecked.Html));
+                output.WriteLine($"Playwright QA (advisory only): hasIssues={qaResult.Result.HasIssues}, consoleErrors={qaResult.Result.ConsoleErrors.Count}, horizontalOverflow={qaResult.Result.HasHorizontalOverflow}");
+                return;
+            }
+            catch (OrchestrationRefusedException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: {ex.ReasonCode} refused - {string.Join("; ", ex.InternalDiagnostics)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: render/inject failed - {ex.Message}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Every attempt (0..{MaxReviewIterations}) failed the deterministic gate chain. Last failure: {lastFailure?.Message}", lastFailure);
+    }
+
+    /// <summary>
+    /// [TEMPORARY, NOT COMMITTED] Real end-to-end run of the new dimension-specific
+    /// "Departments" render prompt (05_report_html_dimension_selection_department.md) against
+    /// real UAT tenant 29. Same shape as GenerateDimensionSelectionUsersReportAsync above,
+    /// resolved from the "dimension_selection:Departments" specific key.
+    /// </summary>
+    [Fact]
+    public async Task GenerateDimensionSelectionDepartmentsReportAsync()
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddTransient<GatherScopeActivity>();
+        services.AddTransient<FetchDimensionsActivity>();
+        services.AddTransient<NarrateActivity>();
+        services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<InjectFontActivity>();
+        services.AddTransient<InjectCoverageGridActivity>();
+        services.AddTransient<InjectCoverageCssActivity>();
+        services.AddTransient<InjectCoverageScriptActivity>();
+        services.AddTransient<NormalizeActivity>();
+        services.AddTransient<SanitizeActivity>();
+        services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient<PlaywrightQaActivity>();
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        IReadOnlyList<string> requestedDimensions = ["Departments"];
+
+        var gathered = await sp.GetRequiredService<GatherScopeActivity>().RunAsync(new GatherScopeInput(UserId, TenantId));
+        output.WriteLine($"Scope gathered: {gathered.ScopePairs.Count} pairs, shape={gathered.TenantShape}");
+
+        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(new FetchDimensionsInput(UserId, TenantId, requestedDimensions));
+        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/{requestedDimensions.Count} succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
+
+        var plan = DimensionSelectionComposition.Build(requestedDimensions);
+        output.WriteLine($"Dimension-selection composition: hero={plan.Hero.Block}, blocks=[{string.Join(",", plan.Blocks.Select(b => b.Block))}]");
+
+        var narrateActivity = sp.GetRequiredService<NarrateActivity>();
+        var reflectNarrativeActivity = sp.GetRequiredService<ReflectOnNarrativeActivity>();
+        var narrateResult = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null));
+        var narrative = narrateResult.Narrative;
+        var narrateTokens = narrateResult.TotalTokens;
+        for (var i = 0; i < MaxReviewIterations; i++)
+        {
+            var reflection = await reflectNarrativeActivity.RunAsync(new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings));
+            narrateTokens += reflection.TotalTokens;
+            if (reflection.Result.Verdict == ReflectionVerdict.Approve) break;
+            var revised = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues));
+            narrateTokens += revised.TotalTokens;
+            narrative = revised.Narrative;
+        }
+        output.WriteLine($"Narrative approved: {narrative.Blocks.Count} block(s), tokens={narrateTokens}");
+
+        var publishGate = sp.GetRequiredService<PublishGate>();
+        var gateResult = await publishGate.EvaluateAsync(UserId, TenantId, narrative, dimensions.Assertions);
+        if (!gateResult.Approved)
+            throw new InvalidOperationException($"Publish gate refused: {string.Join("; ", gateResult.InternalDiagnostics)}");
+        output.WriteLine("Publish gate: approved.");
+
+        var dimensionRowsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("Rows").GetRawText());
+        var dimensionControlTotalsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("ControlTotals").GetRawText());
+
+        var htmlAgents = sp.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
+        var specificKey = $"{DimensionSelectionComposition.ReportType}:{plan.Blocks[0].Block}";
+        var htmlAgent = htmlAgents.TryGetValue(specificKey, out var specific) ? specific : htmlAgents[DimensionSelectionComposition.ReportType];
+        output.WriteLine($"Render agent key used: {(htmlAgents.ContainsKey(specificKey) ? specificKey : DimensionSelectionComposition.ReportType)}");
+
+        var injectFontActivity = sp.GetRequiredService<InjectFontActivity>();
+        var injectCoverageGridActivity = sp.GetRequiredService<InjectCoverageGridActivity>();
+        var injectCoverageCssActivity = sp.GetRequiredService<InjectCoverageCssActivity>();
+        var injectCoverageScriptActivity = sp.GetRequiredService<InjectCoverageScriptActivity>();
+        var normalizeActivity = sp.GetRequiredService<NormalizeActivity>();
+        var sanitizeActivity = sp.GetRequiredService<SanitizeActivity>();
+        var structureActivity = sp.GetRequiredService<ValidateFixedHolisticStructureActivity>();
+        var qaActivity = sp.GetRequiredService<PlaywrightQaActivity>();
+
+        Directory.CreateDirectory(LabRoot);
+        var htmlPath = Path.Combine(LabRoot, "dimension-selection-departments.html");
+
+        var renderTokens = 0L;
+        Exception? lastFailure = null;
+        for (var attempt = 0; attempt <= MaxReviewIterations; attempt++)
+        {
+            try
+            {
+                var renderResult = await htmlAgent.RenderAsync(
+                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
+                renderTokens += renderResult.TotalTokens;
+                var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
+
+                var fonted = await injectFontActivity.RunAsync(new InjectFontInput(html));
+                var coverageGridded = await injectCoverageGridActivity.RunAsync(new InjectCoverageGridInput(fonted.Html, null));
+                var coverageStyled = await injectCoverageCssActivity.RunAsync(new InjectCoverageCssInput(coverageGridded.Html));
+                var coverageScripted = await injectCoverageScriptActivity.RunAsync(new InjectCoverageScriptInput(coverageStyled.Html));
+                var normalized = await normalizeActivity.RunAsync(new NormalizeInput(coverageScripted.Html));
+                var sanitized = await sanitizeActivity.RunAsync(new SanitizeInput(normalized.Html));
+                var reNormalized = await normalizeActivity.RunAsync(new NormalizeInput(sanitized.Html));
+                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html, DimensionSelectionComposition.ReportType));
+
+                await File.WriteAllTextAsync(htmlPath, structureChecked.Html);
+                output.WriteLine($"Report written to {htmlPath} - attempt {attempt}, renderTokens={renderTokens}, totalTokens={narrateTokens + renderTokens}");
+
+                var qaResult = await qaActivity.RunAsync(new PlaywrightQaInput(structureChecked.Html));
+                output.WriteLine($"Playwright QA (advisory only): hasIssues={qaResult.Result.HasIssues}, consoleErrors={qaResult.Result.ConsoleErrors.Count}, horizontalOverflow={qaResult.Result.HasHorizontalOverflow}");
+                return;
+            }
+            catch (OrchestrationRefusedException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: {ex.ReasonCode} refused - {string.Join("; ", ex.InternalDiagnostics)}");
+            }
+            catch (InvalidOperationException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: render/inject failed - {ex.Message}");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Every attempt (0..{MaxReviewIterations}) failed the deterministic gate chain. Last failure: {lastFailure?.Message}", lastFailure);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-10] One parameterised live run for the three NEW dimension-specific views
+    /// built the same day (BacklogAging / Act / Licence - Sambram's single-section system, content
+    /// mimicked from Trent's 03/05/06). Same pipeline shape as
+    /// GenerateDimensionSelectionDepartmentsReportAsync above; the render agent resolves from the
+    /// "dimension_selection:{Name}" specific key. Real UAT tenant 29. Not part of CI - run with
+    /// --filter and ConnectionStrings__RegTrack + MAF_* set.
+    /// </summary>
+    [Theory]
+    [InlineData("BacklogAging", "dimension-selection-backlogaging.html")]
+    [InlineData("Act", "dimension-selection-act.html")]
+    [InlineData("Licence", "dimension-selection-licence.html")]
+    public async Task GenerateDimensionSelectionReportAsync(string dimensionName, string outputFile)
+    {
+        var configuration = BuildConfiguration();
+        var services = new ServiceCollection();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddTransient<GatherScopeActivity>();
+        services.AddTransient<FetchDimensionsActivity>();
+        services.AddTransient<NarrateActivity>();
+        services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<InjectFontActivity>();
+        services.AddTransient<InjectCoverageGridActivity>();
+        services.AddTransient<InjectCoverageCssActivity>();
+        services.AddTransient<InjectCoverageScriptActivity>();
+        services.AddTransient<NormalizeActivity>();
+        services.AddTransient<SanitizeActivity>();
+        services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient<PlaywrightQaActivity>();
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        IReadOnlyList<string> requestedDimensions = [dimensionName];
+
+        var gathered = await sp.GetRequiredService<GatherScopeActivity>().RunAsync(new GatherScopeInput(UserId, TenantId));
+        output.WriteLine($"Scope gathered: {gathered.ScopePairs.Count} pairs, shape={gathered.TenantShape}");
+
+        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(new FetchDimensionsInput(UserId, TenantId, requestedDimensions));
+        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/{requestedDimensions.Count} succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
+        if (!dimensions.DimensionResults.ContainsKey(dimensionName))
+            throw new InvalidOperationException($"{dimensionName} did not return - failed=[{string.Join(",", dimensions.FailedDimensions)}]. Cannot render a view with no data.");
+
+        var plan = DimensionSelectionComposition.Build(requestedDimensions);
+        output.WriteLine($"Dimension-selection composition: hero={plan.Hero.Block}, blocks=[{string.Join(",", plan.Blocks.Select(b => b.Block))}]");
+
+        var narrateActivity = sp.GetRequiredService<NarrateActivity>();
+        var reflectNarrativeActivity = sp.GetRequiredService<ReflectOnNarrativeActivity>();
+        var narrateResult = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null));
+        var narrative = narrateResult.Narrative;
+        var narrateTokens = narrateResult.TotalTokens;
+        for (var i = 0; i < MaxReviewIterations; i++)
+        {
+            var reflection = await reflectNarrativeActivity.RunAsync(new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings));
+            narrateTokens += reflection.TotalTokens;
+            if (reflection.Result.Verdict == ReflectionVerdict.Approve) break;
+            var revised = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues));
+            narrateTokens += revised.TotalTokens;
+            narrative = revised.Narrative;
+        }
+        output.WriteLine($"Narrative approved: {narrative.Blocks.Count} block(s), tokens={narrateTokens}");
+
+        var publishGate = sp.GetRequiredService<PublishGate>();
+        var gateResult = await publishGate.EvaluateAsync(UserId, TenantId, narrative, dimensions.Assertions);
+        if (!gateResult.Approved)
+            throw new InvalidOperationException($"Publish gate refused: {string.Join("; ", gateResult.InternalDiagnostics)}");
+        output.WriteLine("Publish gate: approved.");
+
+        var dimensionRowsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("Rows").GetRawText());
+        var dimensionControlTotalsJson = dimensions.DimensionResults
+            .Where(kv => requestedDimensions.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => JsonDocument.Parse(kv.Value).RootElement.GetProperty("ControlTotals").GetRawText());
+
+        var htmlAgents = sp.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
+        var specificKey = $"{DimensionSelectionComposition.ReportType}:{plan.Blocks[0].Block}";
+        var htmlAgent = htmlAgents.TryGetValue(specificKey, out var specific) ? specific : htmlAgents[DimensionSelectionComposition.ReportType];
+        output.WriteLine($"Render agent key used: {(htmlAgents.ContainsKey(specificKey) ? specificKey : DimensionSelectionComposition.ReportType)}");
+
+        var injectFontActivity = sp.GetRequiredService<InjectFontActivity>();
+        var injectCoverageGridActivity = sp.GetRequiredService<InjectCoverageGridActivity>();
+        var injectCoverageCssActivity = sp.GetRequiredService<InjectCoverageCssActivity>();
+        var injectCoverageScriptActivity = sp.GetRequiredService<InjectCoverageScriptActivity>();
+        var normalizeActivity = sp.GetRequiredService<NormalizeActivity>();
+        var sanitizeActivity = sp.GetRequiredService<SanitizeActivity>();
+        var structureActivity = sp.GetRequiredService<ValidateFixedHolisticStructureActivity>();
+        var qaActivity = sp.GetRequiredService<PlaywrightQaActivity>();
+
+        Directory.CreateDirectory(LabRoot);
+        var htmlPath = Path.Combine(LabRoot, outputFile);
+
+        var renderTokens = 0L;
+        Exception? lastFailure = null;
+        for (var attempt = 0; attempt <= MaxReviewIterations; attempt++)
+        {
+            try
+            {
+                var renderResult = await htmlAgent.RenderAsync(
+                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
+                renderTokens += renderResult.TotalTokens;
+                var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
+
+                var fonted = await injectFontActivity.RunAsync(new InjectFontInput(html));
+                var coverageGridded = await injectCoverageGridActivity.RunAsync(new InjectCoverageGridInput(fonted.Html, null));
+                var coverageStyled = await injectCoverageCssActivity.RunAsync(new InjectCoverageCssInput(coverageGridded.Html));
+                var coverageScripted = await injectCoverageScriptActivity.RunAsync(new InjectCoverageScriptInput(coverageStyled.Html));
+                var normalized = await normalizeActivity.RunAsync(new NormalizeInput(coverageScripted.Html));
+                var sanitized = await sanitizeActivity.RunAsync(new SanitizeInput(normalized.Html));
+                var reNormalized = await normalizeActivity.RunAsync(new NormalizeInput(sanitized.Html));
+                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html, DimensionSelectionComposition.ReportType));
+
+                await File.WriteAllTextAsync(htmlPath, structureChecked.Html);
+                output.WriteLine($"Report written to {htmlPath} - attempt {attempt}, renderTokens={renderTokens}, totalTokens={narrateTokens + renderTokens}");
+
+                var qaResult = await qaActivity.RunAsync(new PlaywrightQaInput(structureChecked.Html));
+                output.WriteLine($"Playwright QA (advisory only): hasIssues={qaResult.Result.HasIssues}, consoleErrors={qaResult.Result.ConsoleErrors.Count}, horizontalOverflow={qaResult.Result.HasHorizontalOverflow}");
+                return;
+            }
+            catch (OrchestrationRefusedException ex)
+            {
+                lastFailure = ex;
+                output.WriteLine($"Attempt {attempt}: {ex.ReasonCode} refused - {string.Join("; ", ex.InternalDiagnostics)}");
+            }
+            catch (InvalidOperationException ex)
+            {
                 lastFailure = ex;
                 output.WriteLine($"Attempt {attempt}: render/inject failed - {ex.Message}");
             }
@@ -666,7 +1255,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
                 var normalized = await normalizeActivity.RunAsync(new NormalizeInput(coverageScripted.Html));
                 var sanitized = await sanitizeActivity.RunAsync(new SanitizeInput(normalized.Html));
                 var reNormalized = await normalizeActivity.RunAsync(new NormalizeInput(sanitized.Html));
-                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html));
+                var structureChecked = await structureActivity.RunAsync(new ValidateFixedHolisticStructureInput(reNormalized.Html, snapshot.ReportType));
                 html = structureChecked.Html;
             }
             catch (OrchestrationRefusedException ex)

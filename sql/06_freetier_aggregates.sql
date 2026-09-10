@@ -80,13 +80,13 @@ BEGIN
     -- Step 3: recipients, minus durable opt-outs
     IF @decision = 'PROCEED'
     BEGIN
-        SELECT @recips = COUNT(DISTINCT ucm.UserID)
-        FROM UserCustomerMapping ucm
-        JOIN [User] u ON u.ID = ucm.UserID
-        WHERE ucm.CustomerID = @CustomerID
-          AND ucm.ProductID  = 18
-          AND ucm.IsActive   = 0        -- INVERTED
-          AND u.IsDeleted    = 0;
+        /*  [CORRECTED 2026-09-08] Recipients are the tenant's MANAGEMENT-ROLE
+            users, per BA ruling. Previously counted from UserCustomerMapping,
+            where every production row has ProductID = NULL and IsActive = 1 -
+            so this returned ZERO for every tenant and the digest could never
+            send. See sql/01 for the evidence.                                */
+        SELECT @recips = COUNT(DISTINCT m.UserID)
+        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m;
         -- TODO: subtract per-recipient opt-outs once that store exists (Sec.5.4).
         --       Opt-out is DURABLE and must SURVIVE tier changes - otherwise an
         --       upgrade/downgrade cycle silently re-subscribes someone who asked

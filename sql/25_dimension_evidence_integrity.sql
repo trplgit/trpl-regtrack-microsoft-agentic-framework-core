@@ -5,7 +5,19 @@
   Authored by Claude Code; deployed to production 2026-09-03. Pulled from
   sys.sql_modules and committed here so the repo matches what is running.
 
-  Emits SIX result sets. Error codes 51175-51176 (shared block 5117x).
+  Emits SIX result sets. Error codes 51175-51176, plus 51178 for the
+  window-parameter guard (free code, CLAUDE.md Sec.5b free list).
+
+  -- [CHANGED] THE WINDOW IS NOW REQUIRED, ALWAYS CALLER-SUPPLIED --------
+  @WindowStart / @WindowEnd are MANDATORY. The caller resolves a period-
+  picker choice (last 30/60/90 days, or a quarter of the current FY) to a
+  concrete [start, end) pair and passes it - there is no "every closed
+  schedule in scope" mode any more.
+    - Only closures whose CLOSURE DATE (the latest ComplianceTransaction.Dated,
+      NOT ScheduleOn - a schedule closed early can be future-dated) falls in
+      [@WindowStart, @WindowEnd) are counted.
+    - There is no comparator in this dimension, so nothing to suppress.
+    - @WindowStart/@WindowEnd NULL, or @WindowEnd <= @WindowStart -> THROW 51178.
 
   -- WHAT IT MEASURES, HONESTLY --------------------------------------------
   Whether a closed schedule shows MORE THAN ONE ComplianceTransaction row - a
@@ -28,7 +40,9 @@ IF OBJECT_ID('dbo.usp_Insights_Dimension_EvidenceIntegrity', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_Dimension_EvidenceIntegrity;
 GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_EvidenceIntegrity
-    @UserID INT, @CustomerID INT, @AsOf DATETIME = NULL
+    @UserID INT, @CustomerID INT,
+    @WindowStart DATETIME, @WindowEnd DATETIME,
+    @AsOf DATETIME = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -38,6 +52,12 @@ BEGIN
     /*-- 0. PRE-FLIGHT --------------------------------------------------------*/
     IF NOT EXISTS (SELECT 1 FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
         THROW 51175, N'SCOPE DENIED - user has no authorised (branch, category) pairs for this tenant. Refusing to compute.', 1;
+
+    /*-- Window is REQUIRED. Caller always resolves a picker choice to dates. */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51178, N'EVIDENCE INTEGRITY - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51178, N'EVIDENCE INTEGRITY - @WindowEnd must be strictly after @WindowStart.', 1;
 
     EXEC dbo.usp_Insights_AssertStatusCoverage;
 
@@ -64,14 +84,15 @@ BEGIN
     INTO #closed
     FROM #scoped sc
     JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = sc.ComplianceInstanceID
-    CROSS APPLY (SELECT TOP 1 t.StatusId FROM ComplianceTransaction t
+    CROSS APPLY (SELECT TOP 1 t.StatusId, t.Dated AS ClosedOn FROM ComplianceTransaction t
                  WHERE t.ComplianceScheduleOnID = cso.ID
                  ORDER BY t.Dated DESC, t.ID DESC) lt
     JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = lt.StatusId
     CROSS APPLY (SELECT COUNT(*) AS TxnRows FROM ComplianceTransaction ct
                  WHERE ct.ComplianceScheduleOnID = cso.ID) txn
     WHERE cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1
-      AND d.ClosureClass IN ('completed', 'resolved_terminal');
+      AND d.ClosureClass IN ('completed', 'resolved_terminal')
+      AND lt.ClosedOn >= @WindowStart AND lt.ClosedOn < @WindowEnd;
 
     /*-- 2. THE 2 REAL BUCKET ROWS - always exactly 2, zero-filled ------------*/
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
@@ -178,8 +199,12 @@ BEGIN
     SELECT 'data_quality' AS ResultSet, Issue, Detail
     FROM (
         SELECT 'zero_closed_schedules' AS Issue,
-               N'No completed or resolved schedules in scope - review-trail integrity cannot be assessed.' AS Detail
+               N'No completed or resolved schedules CLOSED IN THE SUPPLIED WINDOW - review-trail integrity cannot be assessed for this span.' AS Detail
         WHERE @sumOfRows = 0
+        UNION ALL
+        SELECT 'window',
+               CONCAT(N'Review-trail rate computed over closures whose closure date falls in the caller-supplied window ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' to ', CONVERT(VARCHAR(10), @WindowEnd, 23), N'.')
         UNION ALL
         SELECT 'proxy_not_evidence',
                N'This measures whether ComplianceTransaction shows more than one recorded step for a closure (a review-trail proxy), never whether supporting evidence was actually attached - document evidence lives in blob storage, not in this database. evidence_in_sql is always false.'

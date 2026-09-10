@@ -181,8 +181,100 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         agent for ReportType "dimension_selection" was only ever given `assertions` (curated,
         top-5-capped) and never a dimension's complete real row set, so its own prompt instruction
         to "include a table of real rows" kept getting skipped - not a wording problem, a missing-
-        data problem. [VERIFY BEFORE DEPLOY] in-flight 2.5 instances not checked this session.       */
-    public const string Version = "2.6";
+        data problem. [VERIFY BEFORE DEPLOY] in-flight 2.5 instances not checked this session.
+
+        Bumped 2.6 -> 2.7: RenderHtmlInput gained DimensionControlTotalsJson - payload-shape-only
+        change, same precedent as the 2.5->2.6 bump immediately above. Fixes the mirror-image gap:
+        a dimension-specific render prompt (05_report_html_dimension_selection_department.md) asked
+        for real tenant-level aggregates (the untagged/unassigned bucket's size) that live ONLY on
+        a dimension's ControlTotals result set - never a named assertion, never derivable from Rows
+        (confirmed live: the render agent correctly refused rather than fabricate a number it did
+        not have - "I will not infer or invent those values from narrative prose or incomplete
+        data"). [VERIFY BEFORE DEPLOY] in-flight 2.6 instances not checked this session.
+
+        Bumped 2.7 -> 2.8: ValidateFixedHolisticStructureInput gained ReportType - payload-shape-only
+        change, same precedent as 2.5->2.6/2.6->2.7. Fixes a real refusal found live the same day:
+        ValidateFixedHolisticStructureActivity now SKIPS its evaluation entirely for any ReportType
+        other than "fixed_holistic" (previously ran unconditionally on every render's HTML string,
+        with no way to tell a real fixed_holistic score hero apart from a per-dimension prompt's
+        legitimate, unrelated reuse of the same ".di-components" class - see
+        FixedHolisticStructureGate's own corrected doc comment). [VERIFY BEFORE DEPLOY] in-flight 2.7
+        instances not checked this session.
+
+        Bumped 2.8 -> 2.9: a "dimension_selection" request naming exactly ["Entity"] is now
+        translated to a plain "fixed_holistic" request (ReportType and RequestedDimensions both
+        rewritten) in the very first lines of RunTask, before anything else reads either field.
+        Load-bearing, NOT just a payload-shape change - every ScheduleTask call this run makes
+        from that point on is the real fixed_holistic sequence (ComputeScoreActivity now runs
+        instead of being skipped, Coverage-grid injectors receive real Location rows instead of
+        null, ValidateFixedHolisticStructureActivity actually evaluates instead of no-op'ing,
+        composition is FixedHolisticComposition.Build() instead of
+        DimensionSelectionComposition.Build()) - the call sequence for an Entity-named
+        dimension_selection request is now materially longer and different than a 2.8 instance's
+        history would replay against. Real product parity, not a stylistic choice: the real
+        Angular app has no dedicated Entity branch either (confirmed by reading
+        detailed-insights.component.html/.ts) - Entity alone already meant "the full holistic
+        view" there. [VERIFY BEFORE DEPLOY] no dimension_selection request naming exactly
+        ["Entity"] could have taken any other path before this bump (the translation did not
+        exist), so no in-flight instance of that specific shape needs checking; every other
+        dimension_selection shape and every fixed_holistic instance is completely unaffected by
+        this bump.
+
+        Bumped 2.9 -> 3.0: a new ScheduleTask call (InjectBacklogAgeBarActivity, node 8e) now runs
+        right after InjectCoverageScriptActivity and before the first Normalize call - an extra
+        call mid-sequence, not just a payload shape change, same load-bearing reasoning as every
+        prior mid-sequence insertion in this file. Closes a real gap found live: the segmented
+        backlog age-bar (Tab 2 Card 2) was silently skipped in favour of the bigNumber-only
+        fallback on two consecutive real tenant-29 runs, even with real BacklogAging bucket data
+        available both times - same failure family as the Coverage-grid fix already in this file,
+        now closed the same way (deterministic post-render injection instead of asking the render
+        agent to author it). [VERIFY BEFORE DEPLOY] in-flight 2.9 instances not checked this
+        session.
+
+        Bumped 3.0 -> 3.1: a new ScheduleTask call (InjectBacklogAgeBarCssActivity, node 8f) now
+        runs right after InjectBacklogAgeBarActivity and before the first Normalize call - same
+        load-bearing reasoning as every prior mid-sequence insertion in this file. Closes a real
+        gap found live: node 8e's deterministically-injected age-bar markup had no CSS anywhere in
+        the whole pipeline (not in the render agent's prompt instructions, not injected by any
+        activity), so it rendered with real bucket counts and real segment widths but zero colour
+        and no bar chrome - same failure family as the Coverage CSS fix (node 8c) already in this
+        file, closed the same way. [VERIFY BEFORE DEPLOY] in-flight 3.0 instances not checked this
+        session.
+
+        Bumped 3.1 -> 3.2: FetchDimensionsActivity now fetches a fifteenth dimension (ForwardRisk,
+        usp_Insights_Dimension_ForwardRisk / sql/26 - already deployed and live in prod, not
+        modified) - an extra SQL call inside that activity, plus a new ScheduleTask
+        (InjectForwardLookActivity, node 8g) right after InjectBacklogAgeBarCssActivity. Wires the
+        real carried_forward / clean_at_risk / healthy segment counts (the "already late today"
+        figure the live demo shows) into Tab 5, deterministically - those counts are reconciled by
+        the proc but carry no typed assertion, so they cannot travel through the render agent's
+        assertion-only payload. [VERIFY BEFORE DEPLOY] in-flight 3.1 instances not checked this
+        session.
+
+        Bumped 3.2 -> 3.3: FetchDimensionsInput gained optional WindowStart/WindowEnd, and
+        FetchDimensionsActivity now passes a concrete [start, end) window to
+        GetTimelinessFYAsync / GetEvidenceIntegrityAsync - the deployed sql/23 + sql/25 procs now
+        REQUIRE @WindowStart/@WindowEnd (they THROW 51177 / 51178 on NULL). Payload-shape-only for
+        the orchestrator (same ScheduleTask sequence); the new fields default to null and the
+        activity falls back to CURRENT-FY-TO-DATE, preserving today's numbers. **COORDINATED
+        RELEASE**: this worker build and the sql/23 + sql/25 deploy must ship together - deploy
+        either alone and TimelinessFY + EvidenceIntegrity fetch fails (degrades to a placeholder,
+        report still ships) until both are in place. [VERIFY BEFORE DEPLOY] in-flight 3.2 instances
+        not checked this session.
+
+        Bumped 3.3 -> 3.4: InjectForwardLookActivity (node 8g) now also receives ForwardPipeline's
+        control totals + rows (the 5 day-window bucket counts), and ForwardLookInjector renders
+        the ENTIRE Tab 5 pane body deterministically - the `.di-kpi--fwd` card, the due figure,
+        the segment breakdown AND the bucket chart. Was rendering only the 3-segment breakdown;
+        the render agent kept dropping the rest of the pane on real tenants. Payload-shape change
+        to InjectForwardLookInput (two new nullable fields); same ScheduleTask sequence.
+
+        Bumped 3.4 -> 3.5: new ScheduleTask call (InjectForwardLookCssActivity, node 8h) right
+        after node 8g. Once the render agent only authors the Tab 5 shell it stopped emitting the
+        Tab 5 style block, so the injected `.di-fwd` bucket chart rendered with zero height. The
+        CSS is 100% static - injected markup needs injected CSS, same as the age bar (8f) and
+        Coverage. New call-sequence node.                                                          */
+    public const string Version = "3.5";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
     // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
@@ -200,6 +292,25 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
     public override async Task<PersistOutput> RunTask(OrchestrationContext context, InsightsReportOrchestrationInput input)
     {
+        // [ADDED 2026-09-09] "Entity" special case, decided explicitly: the real Angular product
+        // has no dedicated per-dimension branch for Entity at all (confirmed by reading
+        // detailed-insights.component.html/.ts directly - only 'User' and 'Department' get one;
+        // dimensions = ['Entity', 'User', 'Department', 'Location', 'Statutory', 'Internal'] but
+        // Entity itself just falls through to the plain full holistic view). A
+        // "dimension_selection" request naming Entity alone is therefore translated, right here,
+        // into a plain "fixed_holistic" request before anything else reads ReportType or
+        // RequestedDimensions - every other branch in this file (composition, dimension fetch
+        // scope, ComputeScoreActivity's skip condition, the render-agent key lookup, the
+        // dimension_rows/dimension_control_totals threading) already keys off those two fields
+        // consistently, so this single rewrite is the whole fix - no other line needs to know
+        // Entity was ever mentioned. Sambram never built a per-dimension Entity template for this
+        // reason - the real product doesn't have one to model it on.
+        if (input.ReportType == DimensionSelectionComposition.ReportType
+            && input.RequestedDimensions is ["Entity"])
+        {
+            input = input with { ReportType = FixedHolisticComposition.ReportType, RequestedDimensions = null };
+        }
+
         const int maxReflectionIterations = 2; // matches Agents:MaxReflectionIterations' documented default.
 
         // Item 17's per-run token budget (design doc Sec.12.3): "a single report exceeding its
@@ -351,6 +462,30 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson)?.Rows
                 : null;
 
+            // [ADDED 2026-09-09] Same deliberate, scoped exception as locationRows immediately
+            // above - feeds InjectBacklogAgeBarActivity (node 8e below). Null when BacklogAging
+            // degraded (dimensions.DimensionResults has no "BacklogAging" key) - fixed_holistic is
+            // the only ReportType this dimension is ever fetched for today, so it is null for
+            // every other ReportType, matching locationRows' own real behaviour for
+            // dimension_selection requests that never asked for Location either.
+            var backlogAgingResult = dimensions.DimensionResults.TryGetValue("BacklogAging", out var backlogAgingJson)
+                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>>(backlogAgingJson)
+                : null;
+
+            // [ADDED 2026-09-10] Same deliberate, scoped extraction as backlogAgingResult above -
+            // feeds InjectForwardLookActivity (node 8g). Null when ForwardRisk degraded or was not
+            // fetched (fixed_holistic is the only ReportType that fetches it today). The proc
+            // (sql/26) is deployed and live in prod; nothing here modifies it.
+            var forwardRiskResult = dimensions.DimensionResults.TryGetValue("ForwardRisk", out var forwardRiskJson)
+                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>>(forwardRiskJson)
+                : null;
+
+            // [ADDED 2026-09-10] The 5 day-window bucket counts for Tab 5's chart - also injected
+            // now (the render agent was dropping the whole forward pane). Same scoped extraction.
+            var forwardPipelineResult = dimensions.DimensionResults.TryGetValue("ForwardPipeline", out var forwardPipelineJson)
+                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>>(forwardPipelineJson)
+                : null;
+
             // [ADDED 2026-09-08] Only meaningful for DimensionSelectionComposition.ReportType - the
             // render agent's own payload only ever carried `assertions` (curated, top-5-capped
             // comparative facts), never a dimension's full per-member row set, so asking it to
@@ -369,6 +504,19 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     .ToDictionary(
                         kv => kv.Key,
                         kv => System.Text.Json.JsonDocument.Parse(kv.Value).RootElement.GetProperty("Rows").GetRawText())
+                : null;
+
+            // [ADDED 2026-09-09] Same shape as dimensionRowsJson immediately above, one property
+            // name different ("ControlTotals" instead of "Rows") - see IReportHtmlAgent.RenderAsync's
+            // own doc comment on dimensionControlTotalsJson for the real gap this closes (tenant-
+            // level aggregates, e.g. Departments' untagged/unassigned bucket size, exist ONLY on a
+            // dimension's ControlTotals, never as a named assertion and never derivable from Rows).
+            IReadOnlyDictionary<string, string>? dimensionControlTotalsJson = input.ReportType == DimensionSelectionComposition.ReportType
+                ? dimensions.DimensionResults
+                    .Where(kv => input.RequestedDimensions!.Contains(kv.Key))
+                    .ToDictionary(
+                        kv => kv.Key,
+                        kv => System.Text.Json.JsonDocument.Parse(kv.Value).RootElement.GetProperty("ControlTotals").GetRawText())
                 : null;
 
             SetStage(InsightsRunStage.Rendering);
@@ -417,7 +565,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         BackoffCoefficient = 2.0,
                         Handle = ex => ex is not OrchestrationRefusedException,
                     },
-                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson));
+                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
@@ -470,7 +618,51 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 var coverageScripted = await context.ScheduleTask<InjectCoverageScriptOutput>(
                     typeof(InjectCoverageScriptActivity).Name, "1.0", new InjectCoverageScriptInput(coverageStyled.Html));
 
-                var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(coverageScripted.Html));
+                // Node 8e - same deterministic-injection treatment, a completely different part of
+                // the document from the Coverage pieces above (Tab 2 Card 2's age-bar, not Tab 3).
+                // BacklogAgeBarInjector's own [BUG FOUND LIVE] note: confirmed on two consecutive
+                // real tenant-29 runs, the render agent silently fell back to the bigNumber-only
+                // shape and never rendered the segmented bar, even with real bucket data available.
+                // No-op when the render agent's own `di-agebar-root` placeholder is missing (or
+                // BacklogAging degraded, or a real zero-overdue tenant) - never forces a bar in.
+                var agebarred = await context.ScheduleTask<InjectBacklogAgeBarOutput>(
+                    typeof(InjectBacklogAgeBarActivity).Name, "1.0",
+                    new InjectBacklogAgeBarInput(coverageScripted.Html, backlogAgingResult?.Rows, backlogAgingResult?.ControlTotals));
+
+                // Node 8f - same deterministic-injection treatment as node 8c, for the piece node 8e
+                // just injected. BacklogAgeBarCssInjector's own [BUG FOUND LIVE] note: the age-bar's
+                // markup was already deterministic (node 8e), but its CSS was never declared anywhere
+                // - not in the render agent's prompt, not by any injector - so it rendered with real
+                // bucket counts and real widths but zero colour and no bar chrome. No-op when node 8e
+                // injected nothing (blocked/degraded/zero-overdue this run).
+                var agebarStyled = await context.ScheduleTask<InjectBacklogAgeBarCssOutput>(
+                    typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", new InjectBacklogAgeBarCssInput(agebarred.Html));
+
+                // Node 8g - renders the WHOLE Tab 5 pane body: the `.di-kpi--fwd` card, the "N due
+                // in the next 90 days" figure + carried_forward / clean_at_risk / healthy segment
+                // breakdown (from ForwardRisk's control totals, sql/26, reconciled by the proc),
+                // AND the 5 day-window bucket chart (from ForwardPipeline's rows, sql/24). None of
+                // those are typed assertions, so none can round-trip through the render agent's
+                // assertion-only payload - same deterministic-injection reason as the Coverage pane
+                // and the age-bar above. [WIDENED 2026-09-10] Was just the segment breakdown; the
+                // render agent kept dropping the rest of the pane. No-op when the `di-forward-root`
+                // placeholder is missing; head-only pane when both sources degraded/empty.
+                var forwarded = await context.ScheduleTask<InjectForwardLookOutput>(
+                    typeof(InjectForwardLookActivity).Name, "1.0",
+                    new InjectForwardLookInput(
+                        agebarStyled.Html,
+                        forwardRiskResult?.ControlTotals,
+                        forwardPipelineResult?.ControlTotals,
+                        forwardPipelineResult?.Rows));
+
+                // Node 8h - the CSS for the Tab 5 card ForwardLookActivity just injected. The
+                // render agent stopped emitting the Tab 5 style block once it only authors the
+                // shell, so the injected `.di-fwd` chart had no height and its axis ran together.
+                // Injected markup needs injected CSS. No-op when no forward card rendered.
+                var forwardStyled = await context.ScheduleTask<InjectForwardLookCssOutput>(
+                    typeof(InjectForwardLookCssActivity).Name, "1.0", new InjectForwardLookCssInput(forwarded.Html));
+
+                var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(forwardStyled.Html));
                 var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
                 // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
                 // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.
@@ -499,7 +691,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 try
                 {
                     structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
-                        typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html));
+                        typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html, input.ReportType));
                     break;
                 }
                 catch (Exception) when (renderAttempt < maxRenderAttempts)
