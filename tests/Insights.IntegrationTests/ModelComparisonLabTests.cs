@@ -136,113 +136,20 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         Environment.GetEnvironmentVariable(name)
         ?? throw new InvalidOperationException($"Set {name} before running this manual test - see the class doc comment.");
 
-    // ================================================================================
-    // PHASE 1 - run once. Gathers real data, composes, narrates, publish-gates, freezes
-    // the result. Calls the activity classes directly as plain objects - no Durable Task,
-    // no task-hub database, no orchestration machinery. That is the whole point.
-    // ================================================================================
-    [Fact]
-    public async Task CaptureSnapshotAsync()
-    {
-        var configuration = BuildConfiguration();
-        var services = new ServiceCollection();
-        services.AddInsightsData(configuration);
-        services.AddInsightsWorker();
-        services.AddInsightsPaidReportAgents(configuration);
-        // Deliberately NOT AddInsightsOrchestration*/AddInsightsPaidKeepWarm - both need the task
-        // hub database and neither is used here; the activities below are constructed and called
-        // directly as plain C# objects.
-        services.AddTransient<GatherScopeActivity>();
-        services.AddTransient<FetchDimensionsActivity>();
-        // ComputeScoreActivity has no constructor dependencies (pure/deterministic), so this lab
-        // harness calls its static Run(...) directly below rather than resolving it from DI - no
-        // registration needed here. The real orchestrator still resolves it through DI/DurableTask's
-        // ActivityCreator (WorkerRegistration.cs), because that dispatch mechanism requires it.
-        services.AddTransient<ComposeActivity>();
-        services.AddTransient<ReflectOnCompositionActivity>();
-        services.AddTransient<NarrateActivity>();
-        services.AddTransient<ReflectOnNarrativeActivity>();
-
-        await using var provider = services.BuildServiceProvider();
-        using var scope = provider.CreateScope();
-        var sp = scope.ServiceProvider;
-
-        var gathered = await sp.GetRequiredService<GatherScopeActivity>().RunAsync(new GatherScopeInput(UserId, TenantId));
-        output.WriteLine($"Scope gathered: {gathered.ScopePairs.Count} pairs, shape={gathered.TenantShape}");
-
-        var dimensions = await sp.GetRequiredService<FetchDimensionsActivity>().RunAsync(new FetchDimensionsInput(UserId, TenantId));
-        output.WriteLine($"Dimensions fetched: {dimensions.DimensionResults.Count}/10 succeeded, failed=[{string.Join(",", dimensions.FailedDimensions)}]");
-
-        // Same node the real orchestrator now runs (InsightsReportOrchestrator 1.6) - deterministic,
-        // folded into the SAME assertions list Compose/Narrate/reflection all read via `dimensions`.
-        // This lab test constructs the pipeline by hand rather than going through the orchestrator,
-        // so it has to replicate this step explicitly or the score never reaches the narrative.
-        var scoreResult = ComputeScoreActivity.Run(new ComputeScoreInput(dimensions.DimensionResults));
-        // Merged into BOTH DimensionResults (what ComposeActivity's LLM input actually contains -
-        // see ComputeScoreOutput's doc comment, found missing live) and Assertions (what
-        // Reflect/Narrate/PublishGate read).
-        var dimensionResultsWithScore = new Dictionary<string, string>(dimensions.DimensionResults) { ["Score"] = scoreResult.ScoreDimensionResultJson };
-        dimensions = dimensions with
-        {
-            DimensionResults = dimensionResultsWithScore,
-            Assertions = dimensions.Assertions.Concat(scoreResult.Assertions).ToList(),
-        };
-        output.WriteLine($"Composite score: {scoreResult.OverallHealth.Score} ({scoreResult.OverallHealth.Band}), {scoreResult.Assertions.Count} component(s) scored");
-
-        var composeActivity = sp.GetRequiredService<ComposeActivity>();
-        var reflectCompositionActivity = sp.GetRequiredService<ReflectOnCompositionActivity>();
-
-        var composeResult = await composeActivity.RunAsync(new ComposeInput(dimensions.DimensionResults, gathered.TenantShape, ReportType, null, null));
-        var plan = composeResult.Plan;
-        for (var i = 0; i < MaxReviewIterations; i++)
-        {
-            var reflection = await reflectCompositionActivity.RunAsync(new ReflectOnCompositionInput(plan, dimensions.Assertions, dimensions.Findings, gathered.TenantShape));
-            if (reflection.Result.Verdict == ReflectionVerdict.Approve) break;
-            var revised = await composeActivity.RunAsync(new ComposeInput(dimensions.DimensionResults, gathered.TenantShape, ReportType, plan, reflection.Result.Issues));
-            plan = revised.Plan;
-        }
-        output.WriteLine($"Composition approved: hero={plan.Hero.Block}, blocks={plan.Blocks.Count}");
-
-        var narrateActivity = sp.GetRequiredService<NarrateActivity>();
-        var reflectNarrativeActivity = sp.GetRequiredService<ReflectOnNarrativeActivity>();
-
-        var narrateResult = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null));
-        var narrative = narrateResult.Narrative;
-        for (var i = 0; i < MaxReviewIterations; i++)
-        {
-            var reflection = await reflectNarrativeActivity.RunAsync(new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings));
-            if (reflection.Result.Verdict == ReflectionVerdict.Approve) break;
-            var revised = await narrateActivity.RunAsync(new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues));
-            narrative = revised.Narrative;
-        }
-        output.WriteLine($"Narrative approved: {narrative.Blocks.Count} blocks");
-
-        var publishGate = sp.GetRequiredService<PublishGate>();
-        var gateResult = await publishGate.EvaluateAsync(UserId, TenantId, narrative, dimensions.Assertions);
-        if (!gateResult.Approved)
-            throw new InvalidOperationException($"Publish gate refused - snapshot would not be a realistic input for the render comparison: {string.Join("; ", gateResult.InternalDiagnostics)}");
-        output.WriteLine("Publish gate: approved.");
-
-        // [DELIBERATE, SCOPED EXCEPTION - see IReportHtmlAgent.RenderAsync's locationRows doc
-        // comment] captured alongside the snapshot so a render-only run can reuse it without
-        // re-fetching dimensions.
-        var locationRows = dimensions.DimensionResults.TryGetValue("Location", out var locationJson)
-            ? JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson, SnapshotJsonOptions)?.Rows
-            : null;
-
-        var snapshot = new ReportSnapshot(
-            TenantId, $"Tenant {TenantId}", ReportType, Period, gathered.TenantShape, DateTime.UtcNow,
-            plan, narrative, dimensions.Assertions, dimensions.Findings, locationRows);
-
-        Directory.CreateDirectory(LabRoot);
-        await File.WriteAllTextAsync(SnapshotPath, JsonSerializer.Serialize(snapshot, SnapshotJsonOptions));
-        output.WriteLine($"Snapshot written to {SnapshotPath} - reuse it for every RenderWithXAsync run below, no need to capture again.");
-    }
+    // [DELETED 2026-09-11] CaptureSnapshotAsync (Phase 1 for the dynamic "compliance_health"
+    // path - ComposeActivity/ReflectOnCompositionActivity, 01_composition.md/
+    // 02_composition_reflection.md) - both deleted along with "compliance_health" itself.
+    // CaptureFixedHolisticSnapshotAsync immediately below is the surviving Phase 1 for the one
+    // report type this file's remaining methods still exercise. Any method further down that
+    // still reads SnapshotPath (the dynamic snapshot's file, as opposed to
+    // FixedHolisticSnapshotPath) now depends on a snapshot.json this file can no longer produce
+    // itself - this personal lab file (never wired into CI, never referenced elsewhere) was not
+    // otherwise touched, so those methods are left as historical/manual-only, same as before.
 
     /// <summary>
     /// PHASE 1 for the FIXED holistic template (matches the real product UI - see
-    /// FixedHolisticComposition's own doc comment). Same gather/fetch/score steps as
-    /// CaptureSnapshotAsync, but skips ComposeActivity/ReflectOnCompositionActivity entirely -
+    /// FixedHolisticComposition's own doc comment). Same gather/fetch/score steps the deleted
+    /// CaptureSnapshotAsync used, but skips ComposeActivity/ReflectOnCompositionActivity entirely -
     /// FixedHolisticComposition.Build() is deterministic, C#-only, always the same 6 blocks, so
     /// there is no LLM composition step to run or reflect on for this report type. Cheaper AND
     /// more reliable than the dynamic path: two LLM calls removed, and the "does the composition
@@ -647,6 +554,13 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         throw new InvalidOperationException(
             $"Every attempt (0..{MaxReviewIterations}) failed the deterministic gate chain. Last failure: {lastFailure?.Message}", lastFailure);
     }
+
+    // [DELETED 2026-09-11] GenerateDimensionSelectionWithEntityReportAsync - exercised the
+    // Entity-mixed render path (DimensionSelectionComposition.EntityMixedRenderKey), reverted the
+    // same day per final product direction: a real "Generate" click naming several dimensions now
+    // produces one independent report PER dimension (fanned out in RunEndpoints.cs), never one
+    // combined document. Entity picked with others now just means two ordinary single-dimension
+    // runs happen - GenerateFixedHolisticReportAsync above already covers Entity's own shape.
 
     /// <summary>
     /// [TEMPORARY, NOT COMMITTED] Real end-to-end run of the new dimension-specific "Users"

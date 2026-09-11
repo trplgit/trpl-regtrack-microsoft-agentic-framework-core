@@ -62,6 +62,12 @@ public sealed class GenerateReportEndpointTests
         Assert.Empty(cooldown.Calls);
     }
 
+    /// <summary>
+    /// [UPDATED 2026-09-11] The response is now ALWAYS <c>{ "reports": [...] }</c>, even for a
+    /// plain single-report request like this one (product decision: one wire shape, a client never
+    /// special-cases "was this a list or a single object" - see RunEndpoints.cs's own doc comment
+    /// on the fan-out).
+    /// </summary>
     [Fact]
     public async Task Generate_EnqueuesAndReturns202ForAnEligibleScopedCaller()
     {
@@ -77,9 +83,12 @@ public sealed class GenerateReportEndpointTests
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
 
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal(runId, json.RootElement.GetProperty("runId").GetString());
-        Assert.Equal("queued", json.RootElement.GetProperty("status").GetString());
-        Assert.Equal($"/api/insights/runs/{runId}/stream", json.RootElement.GetProperty("streamUrl").GetString());
+        var reports = json.RootElement.GetProperty("reports");
+        Assert.Equal(1, reports.GetArrayLength());
+        var report = reports[0];
+        Assert.Equal(runId, report.GetProperty("runId").GetString());
+        Assert.Equal("queued", report.GetProperty("status").GetString());
+        Assert.Equal($"/api/insights/runs/{runId}/stream", report.GetProperty("streamUrl").GetString());
     }
 
     /// <summary>
@@ -111,10 +120,12 @@ public sealed class GenerateReportEndpointTests
     }
 
     /// <summary>
-    /// [ADDED 2026-09-09] The multi-dimension report feature's API-side plumbing -
-    /// RequestedDimensions on the POST body forwards verbatim to the enqueuer, so a
-    /// "dimension_selection" request over the API behaves identically to the CLI's
-    /// --Insights:Dimensions flag. Previously this was CLI-only.
+    /// [REWRITTEN 2026-09-11] Product decision: picking several dimensions no longer produces one
+    /// combined multi-section report - it produces one INDEPENDENT report PER dimension, fanned
+    /// out in RunEndpoints.cs before anything is enqueued (see that file's own doc comment). What
+    /// used to be a single enqueue call carrying RequestedDimensions=["Nature","Act"] is now TWO
+    /// separate enqueue calls, one per dimension, each with a single-element RequestedDimensions
+    /// list - proving the fan-out actually happens, not just that the list is threaded through.
     /// </summary>
     [Fact]
     public async Task Generate_ForwardsRequestedDimensionsToTheEnqueuer()
@@ -125,17 +136,49 @@ public sealed class GenerateReportEndpointTests
 
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
+        // "Entity" deliberately excluded here - see ReportTypeRouterTests and
+        // Generate_EntityRequested_RoutesToFixedHolistic below for that redirect.
         var request = new GenerateReportRequest(
             Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
-            RequestedDimensions: ["Nature", "Entity"]);
+            RequestedDimensions: ["Nature", "Act"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(2, enqueuer.Calls.Count);
+        Assert.All(enqueuer.Calls, call => Assert.Equal("dimension_selection", call.ReportType));
+        Assert.Contains(enqueuer.Calls, call => call.RequestedDimensions is ["Nature"]);
+        Assert.Contains(enqueuer.Calls, call => call.RequestedDimensions is ["Act"]);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-11] Product rule: requesting Entity redirects the whole run to
+    /// fixed_holistic - Entity has no finalized dimension_selection template of its own, and the
+    /// full 6-tab dashboard is what the designer wants for it instead. See ReportTypeRouter.
+    /// </summary>
+    [Fact]
+    public async Task Generate_EntityRequested_RoutesToFixedHolistic()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-entity");
+        var cooldown = OpenCooldown();
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
+
+        var request = new GenerateReportRequest(
+            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            RequestedDimensions: ["Entity"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         var call = Assert.Single(enqueuer.Calls);
-        Assert.Equal("dimension_selection", call.ReportType);
-        Assert.NotNull(call.RequestedDimensions);
-        Assert.Equal(["Nature", "Entity"], call.RequestedDimensions);
+        Assert.Equal("fixed_holistic", call.ReportType);
+        Assert.Null(call.RequestedDimensions);
+        // The cooldown check must agree with what actually got enqueued, not the caller's
+        // original dimension_selection request.
+        Assert.Equal("fixed_holistic", Assert.Single(cooldown.Calls).ReportType);
     }
 
     /// <summary>
@@ -173,15 +216,18 @@ public sealed class GenerateReportEndpointTests
         var enqueuer = new FakeRunEnqueuer("insights-1490-dims");
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
+        // "Entity" deliberately excluded here (it now redirects to fixed_holistic - see
+        // Generate_EntityRequested_RoutesToFixedHolistic) - "Act" exercises the same
+        // different-dimensions-different-periods behaviour without tangling with that redirect.
         var natureRequest = new GenerateReportRequest(
             Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
             RequestedDimensions: ["Nature"]);
-        var entityRequest = new GenerateReportRequest(
+        var actRequest = new GenerateReportRequest(
             Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
-            RequestedDimensions: ["Entity"]);
+            RequestedDimensions: ["Act"]);
 
         await client.PostAsJsonAsync("/api/insights/reports", natureRequest);
-        await client.PostAsJsonAsync("/api/insights/reports", entityRequest);
+        await client.PostAsJsonAsync("/api/insights/reports", actRequest);
 
         Assert.Equal(2, cooldown.Calls.Count);
         Assert.Equal(2, enqueuer.Calls.Count);
@@ -190,7 +236,7 @@ public sealed class GenerateReportEndpointTests
         Assert.NotEqual(cooldown.Calls[0].Period, cooldown.Calls[1].Period);
         Assert.NotEqual(enqueuer.Calls[0].Period, enqueuer.Calls[1].Period);
         Assert.Contains("nature", cooldown.Calls[0].Period, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("entity", cooldown.Calls[1].Period, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("act", cooldown.Calls[1].Period, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -221,8 +267,12 @@ public sealed class GenerateReportEndpointTests
     }
 
     /// <summary>
-    /// Closed cooldown => 409 COOLDOWN_ACTIVE with nextAvailableUtc, and the run is NEVER
-    /// enqueued - the whole point of the check is to skip the LLM spend, not just warn about it.
+    /// [REWRITTEN 2026-09-11] Closed cooldown is now a PER-REPORT status, not a whole-response
+    /// refusal - product decision: one dimension on cooldown must not block a caller's OTHER
+    /// picks (best-effort, not all-or-nothing - see RunEndpoints.cs's own doc comment). Even for
+    /// this single-report request, the response is still 202 Accepted with a one-element
+    /// "reports" array whose entry reports "cooldown" - the run is still NEVER enqueued, which
+    /// remains the actual point of the check (skip the LLM spend, not just warn about it).
     /// </summary>
     [Fact]
     public async Task Generate_ClosedCooldown_RefusesWithoutEnqueueing()
@@ -237,11 +287,145 @@ public sealed class GenerateReportEndpointTests
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", Request());
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal("COOLDOWN_ACTIVE", json.RootElement.GetProperty("error").GetProperty("code").GetString());
-        Assert.Equal(nextAvailable, json.RootElement.GetProperty("nextAvailableUtc").GetDateTime());
+        var reports = json.RootElement.GetProperty("reports");
+        Assert.Equal(1, reports.GetArrayLength());
+        var report = reports[0];
+        Assert.Equal("cooldown", report.GetProperty("status").GetString());
+        Assert.Equal(nextAvailable, report.GetProperty("nextAvailableUtc").GetDateTime());
         Assert.Empty(enqueuer.Calls);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-11] The core fan-out promise: picking 3 dimensions where one is already on
+    /// cooldown must still generate the other 2 - best-effort, not all-or-nothing (explicit
+    /// product decision). One 202 response, one array entry per requested dimension, each with
+    /// its own independent status.
+    /// </summary>
+    [Fact]
+    public async Task Generate_ThreeDimensionsOneOnCooldown_GeneratesTheOtherTwoAnyway()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var nextAvailable = new DateTime(2026, 10, 8, 0, 0, 0, DateTimeKind.Utc);
+        // "Act"'s effective period carries "::dim=act" (ReportDimensionKey) - only that one is closed.
+        var cooldown = new FakeCooldownRepository(period =>
+            period.Contains("act", StringComparison.OrdinalIgnoreCase)
+                ? new CooldownResult(false, nextAvailable)
+                : new CooldownResult(true, null));
+        var enqueuer = new FakeRunEnqueuer("insights-1490-fanout");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
+
+        var request = new GenerateReportRequest(
+            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            RequestedDimensions: ["Location", "Nature", "Act"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var reports = json.RootElement.GetProperty("reports");
+        Assert.Equal(3, reports.GetArrayLength());
+
+        var byDimension = reports.EnumerateArray().ToDictionary(r => r.GetProperty("dimension").GetString()!);
+        Assert.Equal("queued", byDimension["Location"].GetProperty("status").GetString());
+        Assert.Equal("queued", byDimension["Nature"].GetProperty("status").GetString());
+        Assert.Equal("cooldown", byDimension["Act"].GetProperty("status").GetString());
+        Assert.Equal(nextAvailable, byDimension["Act"].GetProperty("nextAvailableUtc").GetDateTime());
+
+        // Only the 2 clear dimensions actually enqueued - the cooled-down one never did.
+        Assert.Equal(2, enqueuer.Calls.Count);
+        Assert.Contains(enqueuer.Calls, call => call.RequestedDimensions is ["Location"]);
+        Assert.Contains(enqueuer.Calls, call => call.RequestedDimensions is ["Nature"]);
+        Assert.DoesNotContain(enqueuer.Calls, call => call.RequestedDimensions is ["Act"]);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-11] The fan-out needs at least one dimension to loop over - an empty list is
+    /// now caught HERE, before anything is enqueued, rather than only deep inside the orchestrator
+    /// after an enqueue already happened (CLAUDE.md non-negotiable #2 - fail closed, fail loud).
+    /// </summary>
+    [Fact]
+    public async Task Generate_DimensionSelectionWithNoDimensions_RefusesBeforeEnqueueing()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var cooldown = OpenCooldown();
+        var enqueuer = new FakeRunEnqueuer("should-not-be-used");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
+
+        var request = new GenerateReportRequest(
+            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            RequestedDimensions: []);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertErrorCodeAsync(response, "NO_DIMENSIONS_REQUESTED");
+        Assert.Empty(cooldown.Calls);
+        Assert.Empty(enqueuer.Calls);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-11] A plain (non-dimension_selection) request was never a list to split -
+    /// exactly one unit, and its "dimension" field is null (there was never a caller-named
+    /// dimension for this entry to report back).
+    /// </summary>
+    [Fact]
+    public async Task Generate_FixedHolisticRequest_ReturnsOneReportWithNullDimension()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-fixed");
+
+        var request = new GenerateReportRequest(
+            Tenant, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var reports = json.RootElement.GetProperty("reports");
+        Assert.Equal(1, reports.GetArrayLength());
+        Assert.True(reports[0].GetProperty("dimension").ValueKind is JsonValueKind.Null);
+        Assert.Equal(FixedHolisticComposition.ReportType, reports[0].GetProperty("reportType").GetString());
+        Assert.Single(enqueuer.Calls);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-11] Regression guard for a real bug found live: the fan-out originally ran
+    /// each dimension's cooldown check concurrently (Task.WhenAll), which threw against the REAL
+    /// EF-backed ICooldownRepository the first time a caller sent 3 dimensions through the actual
+    /// dev host - "A second operation was started on this context instance before a previous
+    /// operation completed" (EF Core's ConcurrencyDetector; ICooldownRepository is a scoped,
+    /// DbContext-backed service, ONE instance per request). FakeCooldownRepository now detects the
+    /// same re-entrancy (see its own doc comment) - this test would throw if the fix (sequential
+    /// awaits) ever regressed back to concurrent.
+    /// </summary>
+    [Fact]
+    public async Task Generate_MultipleDimensions_ChecksCooldownSequentially_NeverThrowsFromConcurrentReuse()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var cooldown = OpenCooldown();
+        var enqueuer = new FakeRunEnqueuer("insights-1490-sequential");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
+
+        var request = new GenerateReportRequest(
+            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            RequestedDimensions: ["Location", "Nature", "Act"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(3, cooldown.Calls.Count);
+        Assert.Equal(3, enqueuer.Calls.Count);
     }
 
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)

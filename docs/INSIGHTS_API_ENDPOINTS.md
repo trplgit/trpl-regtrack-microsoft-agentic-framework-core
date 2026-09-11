@@ -23,7 +23,8 @@ collection. `API_CONTRACTS.md` remains the source of truth for *why*.
 |---|---|---|
 | `TENANT_NOT_ELIGIBLE` | 403 | Tenant not in the caller's eligible set |
 | `SCOPE_DENIED` | 403 | Entitled to the tenant but zero scope pairs |
-| `COOLDOWN_ACTIVE` | 409 | Body carries `nextAvailableUtc` |
+| `COOLDOWN_ACTIVE` | 409 | **Legacy shape, kept for reference only** — cooldown is now reported per-report inside a 202 response (see endpoint 3), never as a whole-request 409 |
+| `NO_DIMENSIONS_REQUESTED` | 400 | `reportType: "dimension_selection"` with an empty/missing `requestedDimensions` |
 | `REPORT_NOT_VISIBLE` | 404 | Report not found, wrong tenant, or `report_scope ⊄ viewer_scope`. **404, never 403** — existence is not revealed |
 | `GENERATION_FAILED` | — | Not on the HTTP request; surfaced via the run-status stream as `status: "failed"` |
 
@@ -65,13 +66,13 @@ Auth required.
 | Param | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `tenantId` | query | int | yes | server-validated against the caller's eligible set |
-| `reportType` | query | string | yes | `compliance_health` \| `fixed_holistic` \| `dimension_selection` |
+| `reportType` | query | string | yes | `fixed_holistic` \| `dimension_selection` |
 
 **200**
 ```jsonc
 {
   "reports": [
-    { "reportId": "6f1c…", "reportType": "compliance_health",
+    { "reportId": "6f1c…", "reportType": "fixed_holistic",
       "scopeDescriptor": "entity:92442", "scopeLabel": "Aquarelle",
       "period": "FY2025-26", "generatedAtUtc": "2026-09-10T08:16:00Z",
       "generatedByName": "R. Menon", "status": "complete" }
@@ -101,7 +102,7 @@ Auth required.
 ```jsonc
 {
   "tenantId": 1490,
-  "reportType": "compliance_health",
+  "reportType": "fixed_holistic",
   "scope": { "type": "tenant" },
   "period": "FY2025-26",
   "requestedDimensions": null
@@ -111,27 +112,57 @@ Auth required.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `tenantId` | int | yes | server-validated |
-| `reportType` | string | yes | `compliance_health` \| `fixed_holistic` \| `dimension_selection` |
+| `reportType` | string | yes | `fixed_holistic` \| `dimension_selection` |
 | `scope` | object | yes | `{ "type": "tenant" }` or `{ "type": "entity", "entityId": 92442 }` |
 | `period` | string | yes | e.g. `FY2025-26` |
-| `requestedDimensions` | string[] \| null | no | **only** for `dimension_selection` — names the dimensions this run scopes to (e.g. `["Location","Nature","Act"]`). One request with N dimensions = **one** run, **one** report, **one** file. Omit/`null` for every other report type. |
+| `requestedDimensions` | string[] \| null | no | **only** for `dimension_selection` — the dimensions to generate (e.g. `["Location","Nature","Act"]`). At least one required for this report type. Omit/`null` for `fixed_holistic`. |
 
-**Server sequence:** validate tenant eligibility → resolve scope (empty → `SCOPE_DENIED`) →
-cooldown check for `(scope, reportType, period[+dimensions])` (closed → `409` + `nextAvailableUtc`) →
-acquire the one-active-run-per-key lock → enqueue the Durable Task orchestration (~1 ms) → return.
+> **[PRODUCT DECISION 2026-09-11] Picking N dimensions produces N INDEPENDENT reports, not
+> one combined document.** Each requested dimension becomes its own orchestration run, its own
+> cooldown key, its own blob, its own `GeneratedReport` row — exactly as if the client had called
+> this endpoint once per dimension itself, except the server does the splitting for you in one
+> call. Picking `"Entity"` (alone or alongside others) still redirects that ONE unit to a full
+> `fixed_holistic` report (Entity has no dimension-specific template) — every other requested
+> dimension is completely unaffected by that redirect.
 
-**202 Accepted** (`Location: /api/insights/runs/{runId}/stream`)
+**Server sequence, per requested dimension (or once, for `fixed_holistic`):** validate tenant
+eligibility → resolve scope (empty → `SCOPE_DENIED`, whole request) → resolve Entity redirect →
+cooldown check for `(scope, resolvedReportType, period+dimension)` → if open, acquire the
+one-active-run-per-key lock and enqueue; if closed, report `"cooldown"` for that dimension only.
+**Best-effort, not all-or-nothing** — one dimension on cooldown does not block the others.
+
+**202 Accepted** — always `{ "reports": [...] }`, one entry per requested dimension (or a single
+one-element array for `fixed_holistic`/a single dimension — the shape never changes):
 ```jsonc
-{ "runId": "t1490-…", "status": "queued", "streamUrl": "/api/insights/runs/{runId}/stream" }
+{
+  "reports": [
+    { "dimension": "Location", "reportType": "dimension_selection", "status": "queued",
+      "runId": "insights-1490-...", "streamUrl": "/api/insights/runs/insights-1490-.../stream" },
+    { "dimension": "Entity", "reportType": "fixed_holistic", "status": "queued",
+      "runId": "insights-1490-...", "streamUrl": "/api/insights/runs/insights-1490-.../stream" },
+    { "dimension": "Act", "reportType": "dimension_selection", "status": "cooldown",
+      "nextAvailableUtc": "2026-10-08T00:00:00Z" }
+  ]
+}
 ```
 
-- `runId` is **deterministic** from `(tenant, scope, reportType, period[+dimensions])` — a second
-  identical request attaches to the running instance instead of starting a duplicate.
-- The cooldown is consumed **only** on a fully successful, published report; every failure leaves
-  the window open.
+| Field | Present when | Notes |
+|---|---|---|
+| `dimension` | always | the ORIGINAL caller-named dimension, `null` for a plain `fixed_holistic` request. Still `"Entity"` even when `reportType` below reads `"fixed_holistic"` for that entry — use this to map a result back to the checkbox the user ticked. |
+| `reportType` | always | the RESOLVED report type this unit actually runs as (post Entity-redirect) |
+| `status` | always | `"queued"` or `"cooldown"` — a genuine infra failure to enqueue still fails the whole HTTP request (500), it is not modelled as a per-item status |
+| `runId` / `streamUrl` | `status: "queued"` | poll/stream this the same way a single-report response always worked (endpoint 4) |
+| `nextAvailableUtc` | `status: "cooldown"` | when this dimension's window reopens |
 
-**409** — `COOLDOWN_ACTIVE`, body `{ "error": {...}, "nextAvailableUtc": "…" }`.
-**403** — `TENANT_NOT_ELIGIBLE` / `SCOPE_DENIED`.
+- Each `runId` is **deterministic** from `(tenant, scope, resolvedReportType, period+dimension)` —
+  a second identical request attaches to the already-running instance instead of starting a
+  duplicate, per dimension independently.
+- The cooldown is consumed **only** on a fully successful, published report; every failure leaves
+  that dimension's window open.
+
+**400** — `NO_DIMENSIONS_REQUESTED` (`dimension_selection` with an empty/missing list) — the whole
+request is refused before anything is enqueued.
+**403** — `TENANT_NOT_ELIGIBLE` / `SCOPE_DENIED` — whole-request refusals; nothing was generated.
 
 ---
 
@@ -243,13 +274,16 @@ ignored. **200** either way; **400** for invalid ids.
 
 | `reportType` | Composition | LLM steps | Notes |
 |---|---|---|---|
-| `compliance_health` | dynamic (Compose LLM decides blocks) | compose, reflect, narrate, reflect, render | the original MVP paid report |
 | `fixed_holistic` | deterministic C# (`FixedHolisticComposition`) | narrate, reflect, render | 6 fixed tabs; matches `holistic-insights-tenant1300.html` |
-| `dimension_selection` | deterministic C# (`DimensionSelectionComposition`) | narrate, reflect, render | one section per requested dimension; `requestedDimensions` required |
+| `dimension_selection` | deterministic C# (`DimensionSelectionComposition`) | narrate, reflect, render | ONE dimension per orchestration run (the API fans a multi-dimension request out into several of these, see endpoint 3); `requestedDimensions` required, always a single element by the time this runs |
 
-## CLI (no API yet — build-order item 15 pending)
+> `compliance_health` (the original dynamic, LLM-composed path) was removed 2026-09-11 - these two
+> are the only report types now.
 
-Run one paid report end-to-end without the API:
+## CLI (manual/local alternative to the API)
+
+Run one paid report end-to-end without going through the HTTP endpoint - always exactly one
+dimension per invocation, same as one unit of the API's own fan-out:
 
 ```
 dotnet run --project src/RegtrackInsights -- \

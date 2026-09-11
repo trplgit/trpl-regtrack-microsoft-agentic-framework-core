@@ -1,15 +1,19 @@
 using Insights.Agents;
 using Insights.Data;
+using Insights.Domain;
 using Xunit.Abstractions;
 
 namespace Insights.IntegrationTests;
 
 /// <summary>
-/// NOT part of the automated suite in spirit - spends real LLM tokens (compose, narrate, then
-/// reflect on the narrative) against real UAT dimension data, and runs the narrative through the
-/// real PublishGate too. Run explicitly:
+/// NOT part of the automated suite in spirit - spends real LLM tokens (narrate, then reflect on
+/// the narrative) against real UAT dimension data, and runs the narrative through the real
+/// PublishGate too. Run explicitly:
 ///   dotnet test tests/Insights.IntegrationTests --filter FullyQualifiedName~NarrativeReflectionAgentManualRunTests
 /// Requires: ConnectionStrings__RegTrack, MAF_ENDPOINT, MAF_MODEL, MAF_API_KEY
+/// [UPDATED 2026-09-11] Composition used to be a real LLM call here (MafCompositionAgent, since
+/// deleted along with "compliance_health") - now deterministic (FixedHolisticComposition.Build,
+/// zero tokens, zero I/O), matching the real orchestrator's own fixed_holistic path exactly.
 /// </summary>
 public sealed class NarrativeReflectionAgentManualRunTests(ITestOutputHelper output)
 {
@@ -31,14 +35,10 @@ public sealed class NarrativeReflectionAgentManualRunTests(ITestOutputHelper out
         var dimensionRepository = new SqlDimensionRepository(ConnectionString);
         var location = await dimensionRepository.GetLocationAsync(userId, customerId);
         var risk = await dimensionRepository.GetRiskAsync(userId, customerId);
-        var dimensionResults = new Dictionary<string, object> { ["Location"] = location, ["Risk"] = risk };
         var assertions = location.Assertions.Concat(risk.Assertions).ToList();
         var findings = location.Findings.Concat(risk.Findings).ToList();
 
-        var compositionInstructions = await File.ReadAllTextAsync(Path.Combine(promptsDir, "01_composition.md"));
-        var compositionAgent = new MafCompositionAgent(MafAgentFactory.CreateJsonAgent(
-            endpoint, model, apiKey, "CompositionAgent", "Decides report structure.", compositionInstructions));
-        var plan = (await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health")).Value;
+        var plan = FixedHolisticComposition.Build();
 
         var narrativeInstructions = await File.ReadAllTextAsync(Path.Combine(promptsDir, "03_narrative.md"));
         var narrativeAgent = new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(

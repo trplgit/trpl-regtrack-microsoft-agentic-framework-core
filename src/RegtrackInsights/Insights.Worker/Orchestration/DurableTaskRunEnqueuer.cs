@@ -1,4 +1,5 @@
 using DurableTask.Core;
+using DurableTask.Core.Exceptions;
 using Insights.Data;
 using Insights.Domain;
 
@@ -30,8 +31,25 @@ public sealed class DurableTaskRunEnqueuer(TaskHubClient client) : IInsightsRunE
         var runId = InsightsRunId.For(tenantId, scope.ToDescriptor(), reportType, period);
         var input = new InsightsReportOrchestrationInput(tenantId, reportType, scope, period, userId, priority, requestedDimensions);
 
-        await client.CreateOrchestrationInstanceAsync(
-            InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, runId, input);
+        /*  [BUG FOUND LIVE, 2026-09-11] The "one-active-run-per-key lock" this class and
+            InsightsRunId's own doc comment both describe ("a second enqueue for the same key
+            attaches to the running instance instead of starting a duplicate") is NOT something
+            DTFx does automatically on this call - the plain overload throws
+            OrchestrationAlreadyExistsException the instant an instance with this id is Pending or
+            Running, full stop. Confirmed live: a real retry against a key whose first attempt was
+            still in flight surfaced this exception as an unhandled 500, not a silent attach.
+            Since runId is already fully DETERMINISTIC from the key (not something this call
+            invents), "attaching" is simply: catch the conflict, and hand back the same id anyway
+            - the caller was always going to get told to poll/stream this exact id, whether this
+            call created it moments ago or minutes ago.                                          */
+        try
+        {
+            await client.CreateOrchestrationInstanceAsync(
+                InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, runId, input);
+        }
+        catch (OrchestrationAlreadyExistsException)
+        {
+        }
 
         return runId;
     }

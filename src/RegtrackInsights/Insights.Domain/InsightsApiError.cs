@@ -20,6 +20,16 @@ public enum InsightsErrorCode
     /// A 403 would confirm the report exists; a 404 reveals nothing.
     /// </summary>
     ReportNotVisible,
+
+    /// <summary>
+    /// 400. [ADDED 2026-09-11] "dimension_selection" requested with an empty/missing
+    /// RequestedDimensions list - malformed client request, not a scope/eligibility refusal.
+    /// Previously only caught deep inside the orchestrator (OrchestrationRefusedException
+    /// "NO_DIMENSIONS_REQUESTED", after an enqueue already happened); RunEndpoints.cs's fan-out
+    /// needs at least one dimension to loop over, so this is now caught here too, before anything
+    /// is enqueued - the orchestrator's own guard stays as defense-in-depth for direct/CLI callers.
+    /// </summary>
+    NoDimensionsRequested,
 }
 
 /// <summary>
@@ -35,6 +45,7 @@ public sealed record InsightsApiError(string Code, string Message)
         InsightsErrorCode.ScopeDenied => "SCOPE_DENIED",
         InsightsErrorCode.CooldownActive => "COOLDOWN_ACTIVE",
         InsightsErrorCode.ReportNotVisible => "REPORT_NOT_VISIBLE",
+        InsightsErrorCode.NoDimensionsRequested => "NO_DIMENSIONS_REQUESTED",
         _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unmapped error code."),
     };
 
@@ -44,6 +55,7 @@ public sealed record InsightsApiError(string Code, string Message)
         InsightsErrorCode.ScopeDenied => 403,
         InsightsErrorCode.CooldownActive => 409,
         InsightsErrorCode.ReportNotVisible => 404,
+        InsightsErrorCode.NoDimensionsRequested => 400,
         _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unmapped error code."),
     };
 }

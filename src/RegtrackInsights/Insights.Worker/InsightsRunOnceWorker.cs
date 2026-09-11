@@ -11,7 +11,7 @@ namespace Insights.Worker;
 /// <summary>
 /// On-demand runner for the paid orchestrator, mirroring FreeDigestRunOnceWorker's shape exactly.
 /// Does nothing unless Insights:RunOnce=true, so a bare `dotnet run` starts an idle host:
-///   dotnet run -- --Insights:RunOnce=true --Insights:TenantId=29 --Insights:UserId=38 --Insights:ReportType=compliance_health
+///   dotnet run -- --Insights:RunOnce=true --Insights:TenantId=29 --Insights:UserId=38 --Insights:ReportType=fixed_holistic
 /// This is the only way to start a paid report until build order item 15 (hub UI, not this slice)
 /// gives the real API endpoint something to enqueue against - see API_CONTRACTS.md 3.
 /// </summary>
@@ -37,7 +37,12 @@ public sealed class InsightsRunOnceWorker(
         {
             var tenantId = configuration.GetValue<int>("Insights:TenantId");
             var userId = configuration.GetValue<int>("Insights:UserId");
-            var reportType = configuration["Insights:ReportType"] ?? "compliance_health";
+            // No silent default any more - "compliance_health" (the old dynamic-composition
+            // fallback) was removed 2026-09-11; fixed_holistic and dimension_selection are the
+            // only two report types left, and CLAUDE.md non-negotiable #2 says guess neither.
+            var reportType = configuration["Insights:ReportType"]
+                ?? throw new InvalidOperationException(
+                    "--Insights:ReportType is required (fixed_holistic or dimension_selection) - there is no default any more.");
             var period = configuration["Insights:Period"] ?? "FY2025-26";
 
             // [ADDED 2026-09-08] --Insights:Dimensions=Location,Nature,Act - only meaningful when
@@ -45,9 +50,15 @@ public sealed class InsightsRunOnceWorker(
             // separated, trimmed, empty entries dropped; null (not empty) when the flag is absent at
             // all, matching InsightsReportOrchestrationInput.RequestedDimensions' own "null means
             // every other ReportType's existing behaviour, unchanged" contract.
-            var requestedDimensions = configuration["Insights:Dimensions"] is { Length: > 0 } dimensionsCsv
+            IReadOnlyList<string>? requestedDimensions = configuration["Insights:Dimensions"] is { Length: > 0 } dimensionsCsv
                 ? dimensionsCsv.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                 : null;
+
+            // Product rule (2026-09-11): --Insights:Dimensions=Entity routes to fixed_holistic
+            // instead - see ReportTypeRouter's own doc comment. Same rule RunEndpoints.cs applies
+            // on the API path; reassigns both reportType and requestedDimensions so everything
+            // below (the period fold, the instance id, the orchestration input) agrees.
+            (reportType, requestedDimensions) = ReportTypeRouter.Resolve(reportType, requestedDimensions);
 
             // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - no-op for
             // every ReportType except dimension_selection. Same fix RunEndpoints.cs applies on the

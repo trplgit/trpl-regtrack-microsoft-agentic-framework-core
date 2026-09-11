@@ -5,7 +5,7 @@ namespace Insights.Agents;
 /// <summary>
 /// Carries the current call's <see cref="LlmCallPriority"/> down into
 /// <see cref="ConcurrencyGatedChatClient"/> without changing MAF's <c>AIAgent.RunAsync</c> call
-/// shape or any of the five ICompositionAgent-style interfaces. Every paid agent is built ONCE as
+/// shape or any of the IReportHtmlAgent-style interfaces. Every paid agent is built ONCE as
 /// a singleton (see LlmConcurrencyGate's doc comment) and shared across every run regardless of
 /// lane, so priority cannot be baked into the chat client at construction time - it has to travel
 /// with the call itself.
