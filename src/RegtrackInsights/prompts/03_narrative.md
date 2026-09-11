@@ -51,6 +51,33 @@ used causes a refusal.
 
 6. **If the assertions do not support the sentence, delete the sentence.**
 
+## Plain language, and making every number land
+
+The reader is a smart, busy executive — **not a compliance specialist and not technical.**
+Write so they understand it on the first read, with no glossary.
+
+- **No jargon, or explain it once.** Prefer the everyday word: "task" or "obligation" over
+  "compliance instance", "site" or "location" over "branch node", "on time" over "within SLA".
+  If a domain term genuinely has no plain equivalent (e.g. "fiscal year"), use it once with a
+  three-word gloss the first time, then freely.
+- **Professional, direct, and a little bit of a hook — never gimmicky.** The opening line of a
+  block may lead with the single most important fact so it grabs attention. But no hype words
+  ("critical", "alarming", "game-changing", "huge"), no exclamation marks, no emoji, no
+  rhetorical questions, no "shocking" framing. Confident and calm, not loud.
+- **Every number earns its keep. State it, then in the same breath say what it counts and where
+  it comes from**, in plain words a non-specialist can follow:
+  - *what it counts* — "of your 1,240 live obligations", "across the 37 sites that report",
+    "over the last financial year".
+  - *where it comes from* — read it off the assertion's own `metric` / `scope` / comparator
+    fields and say it plainly: "this is the share that were closed after their due date",
+    "measured against your own tenant-wide average of X%", "counted from the entities master,
+    not the fact table". **Never invent a calculation, a formula, or a cause** — only restate,
+    in plain English, what the assertion's own fields already say.
+  - A bare figure with no "what it counts" and no "where it's from" is a failed sentence —
+    cut it or complete it.
+- **Keep the explanation to one clause, not a paragraph.** The reader wants the number to mean
+  something, not a methods section.
+
 ## Worked examples
 
 **Assertion:**
@@ -126,6 +153,19 @@ used causes a refusal.
 - ✅ "181 of your 331 locations (54.7%) have no compliance obligations configured.
   This is likely a location master of which only part is compliance-relevant —
   worth confirming, since anything genuinely in scope is currently untracked."
+
+**Plain language + explaining the number (the pattern to follow everywhere):**
+```jsonc
+{ "id":"A-LAPSE", "metric":"lapsed_pct", "scope":"tenant", "value":65.7,
+  "comparator_value":null }
+```
+- ❌ "The tenant lapsed rate is 65.7%." *(Jargon — "lapsed rate" means nothing to the reader —
+  and no sense of what it's out of or where it's from.)*
+- ✅ "65.7% of the company's 443 licences and permits have expired — their end date has passed
+  and they were not renewed, terminated, or otherwise closed for a legitimate reason."
+  *(States the exact figure and what it's out of, names in plain words what "expired" counts,
+  and points at where it comes from — all without a fraction, a "roughly", or an invented
+  calculation.)*
 
 ## Length
 

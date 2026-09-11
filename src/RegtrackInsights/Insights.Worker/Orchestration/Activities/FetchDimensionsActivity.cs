@@ -6,14 +6,20 @@ using Insights.Domain;
 namespace Insights.Worker.Orchestration.Activities;
 
 /// <summary>
-/// RequestedDimensions [ADDED 2026-09-08] - null/empty fetches all fourteen, unchanged from before
+/// RequestedDimensions [ADDED 2026-09-08] - null/empty fetches all fifteen, unchanged from before
 /// this field existed. Non-empty restricts to exactly the named dimensions (case-sensitive, must
 /// match the literal names TryFetchAsync below uses - "Location", "Entity", ... - same closed set
 /// DimensionFailureMetrics's own doc comment already documents). Powers the dimension-selection
 /// report type (DimensionSelectionComposition) and any future ad-hoc single/multi-dimension
 /// inspection tooling - one filter, not a second fetch path.
 /// </summary>
-public sealed record FetchDimensionsInput(int UserId, int CustomerId, IReadOnlyList<string>? RequestedDimensions = null);
+/// <param name="WindowStart">Start of the period-picker window for the two windowed dimensions
+/// (TimelinessFY, EvidenceIntegrity). Both WindowStart and WindowEnd must be supplied together or
+/// both left null; null/null means "current financial year to date" (see RunAsync). The picked
+/// dropdown option is resolved to a concrete pair by ReportPeriodResolver upstream.</param>
+public sealed record FetchDimensionsInput(
+    int UserId, int CustomerId, IReadOnlyList<string>? RequestedDimensions = null,
+    DateTime? WindowStart = null, DateTime? WindowEnd = null);
 
 // Trailing default, not required - every existing construction site (tests, manual runs) predates
 // design doc Sec.11.4 and already meant "nothing failed" implicitly. Matches
@@ -40,7 +46,7 @@ public sealed record FetchDimensionsOutput(
 }
 
 /// <summary>
-/// Nodes 3-4: the fourteen dimension calls, each of which already returns its own Assertions/Findings
+/// Nodes 3-4: the fifteen dimension calls, each of which already returns its own Assertions/Findings
 /// (already reconciled, already validated - see DimensionResult.Validate, called automatically by
 /// SqlDimensionRepository). This is "validating" in API_CONTRACTS.md's stage vocabulary because
 /// the reconciliation THROWs happen inside these calls, not as a separate step.
@@ -83,6 +89,18 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
         var failedDimensions = new List<string>();
         var requested = input.RequestedDimensions;
 
+        // The two windowed dimensions (TimelinessFY, EvidenceIntegrity) now REQUIRE a concrete
+        // [start, end) window - their deployed procs THROW on NULL. Until the period-picker UI is
+        // wired, or when the caller passes nothing, default to CURRENT FINANCIAL YEAR TO DATE
+        // (1 April of the current FY -> now). That keeps today's numbers: the proc's own
+        // year-over-year comparator then becomes "the same span one year earlier", i.e. the
+        // matching slice of the previous FY - equivalent to the old current-FY-vs-previous-FY view
+        // when the window is a full FY, and still meaningful mid-year.
+        var now = DateTime.UtcNow;
+        var (windowStart, windowEnd) = input is { WindowStart: { } ws, WindowEnd: { } we }
+            ? (ws, we)
+            : (new DateTime(ReportPeriodResolver.CurrentFyStartYear(now), 4, 1, 0, 0, 0, DateTimeKind.Utc), now);
+
         async Task TryFetchAsync<TControlTotals, TRow>(string name, Func<Task<DimensionResult<TControlTotals, TRow>>> fetch)
         {
             if (requested is { Count: > 0 } && !requested.Contains(name))
@@ -118,12 +136,13 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
         await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("BacklogAging", () => dimensionRepository.GetBacklogAgingAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("TimelinessFY", () => dimensionRepository.GetTimelinessFYAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("TimelinessFY", () => dimensionRepository.GetTimelinessFYAsync(input.UserId, input.CustomerId, windowStart, windowEnd, cancellationToken: CancellationToken.None));
         await TryFetchAsync("ForwardPipeline", () => dimensionRepository.GetForwardPipelineAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("EvidenceIntegrity", () => dimensionRepository.GetEvidenceIntegrityAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("EvidenceIntegrity", () => dimensionRepository.GetEvidenceIntegrityAsync(input.UserId, input.CustomerId, windowStart, windowEnd, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("ForwardRisk", () => dimensionRepository.GetForwardRiskAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
 
-        // All fourteen failing is not "partial" - there is nothing left to compose or narrate from,
-        // and a report that is nothing but fourteen placeholders is not the "correct, individually
+        // All fifteen failing is not "partial" - there is nothing left to compose or narrate from,
+        // and a report that is nothing but fifteen placeholders is not the "correct, individually
         // gate-passed numbers still reach the user" outcome Sec.11.4 describes. Fail loudly rather
         // than let this silently become a real-looking but content-free report.
         if (dimensionResults.Count == 0)

@@ -124,13 +124,15 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>> GetTimelinessFYAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<TimelinessFYControlTotals, TimelinessFYRow>(
             "TimelinessFY", "dbo.usp_Insights_Dimension_TimelinessFY",
             scopeDeniedCode: 51172,
-            reconciliationCodes: [],
+            reconciliationCodes: [51177],
             dictionaryGapCodes: [],
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
     public Task<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>> GetForwardPipelineAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
@@ -142,11 +144,26 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     public Task<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>> GetEvidenceIntegrityAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>(
             "EvidenceIntegrity", "dbo.usp_Insights_Dimension_EvidenceIntegrity",
             scopeDeniedCode: 51175,
-            reconciliationCodes: [51176],
+            reconciliationCodes: [51176, 51178],
+            dictionaryGapCodes: [],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
+
+    /*  sql/26 owns block 51190-51199: 51190 SCOPE DENIED, 51191 RECONCILIATION FAILED (per-branch
+        due counts not tying to the distinct-instance window total). No dictionary-gap code of its
+        own - EXEC dbo.usp_Insights_AssertStatusCoverage (sql/01) covers that path, same as every
+        other dimension. Deployed and live in production; never modified from this repo.           */
+    public Task<DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>> GetForwardRiskAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<ForwardRiskControlTotals, ForwardRiskRow>(
+            "ForwardRisk", "dbo.usp_Insights_Dimension_ForwardRisk",
+            scopeDeniedCode: 51190,
+            reconciliationCodes: [51191],
             dictionaryGapCodes: [],
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 

@@ -8,10 +8,29 @@
   ComplianceTransaction (every row, not just the latest), which is correct
   for this measure and never touches the view.
 
-  Emits SIX result sets. Error code 51172 (shared block 5117x).
+  Emits SIX result sets. Error codes 51172, 51177 (shared block 5117x + one
+  free code for the window-parameter guard - see CLAUDE.md Sec.5b free list).
 
-  Handles the complete-vs-partial-year trap: comparatives are suppressed
-  when either FY has no completed events (never a fabricated comparative).
+  -- [CHANGED] THE WINDOW IS NOW REQUIRED, ALWAYS CALLER-SUPPLIED --------
+  @WindowStart / @WindowEnd are MANDATORY. The caller always resolves a
+  period-picker choice (last 30/60/90 days, or a quarter of the current FY)
+  to a concrete [start, end) pair and passes it - there is no "no window",
+  no fiscal-year default any more.
+    - "current" period  = closure events whose ScheduleOn is in
+                          [@WindowStart, @WindowEnd).
+    - "previous" period = the SAME span shifted back exactly one year
+                          [@WindowStart - 1y, @WindowEnd - 1y). This is the
+                          year-over-year comparator - Q2 vs Q2 last year,
+                          last-90-days vs the 90 days a year ago.
+    - The comparator is still SUPPRESSED (OnTimePctPreviousFY / YoyChangePP
+      / FyTrend all NULL) when that prior span has no completed events -
+      never a fabricated comparative.
+    - @WindowStart/@WindowEnd NULL, or @WindowEnd <= @WindowStart -> THROW
+      51177 (fail loud).
+  The control_totals column names (CurrentFyLabel / OnTimePctCurrentFY /
+  ...) are unchanged for caller compatibility; their VALUES now describe the
+  supplied window and the same-window-last-year, not fiscal years. Labels
+  carry the real date ranges.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -21,7 +40,9 @@ IF OBJECT_ID('dbo.usp_Insights_Dimension_TimelinessFY', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_Dimension_TimelinessFY;
 GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_TimelinessFY
-    @UserID INT, @CustomerID INT, @AsOf DATETIME = NULL
+    @UserID INT, @CustomerID INT,
+    @WindowStart DATETIME, @WindowEnd DATETIME,
+    @AsOf DATETIME = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -32,15 +53,19 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
         THROW 51172, N'SCOPE DENIED - user has no authorised (branch, category) pairs for this tenant. Refusing to compute.', 1;
 
+    /*-- Window is REQUIRED. Caller always resolves a picker choice to dates. */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51177, N'TIMELINESS - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51177, N'TIMELINESS - @WindowEnd must be strictly after @WindowStart.', 1;
+
     EXEC dbo.usp_Insights_AssertStatusCoverage;
 
-    /*-- 1. FISCAL-YEAR BOUNDARIES ------------------------------------------*/
-    DECLARE @currentFyStartYear INT = CASE WHEN MONTH(@AsOf) >= 4 THEN YEAR(@AsOf) ELSE YEAR(@AsOf) - 1 END;
-    DECLARE @currentFyStart DATE = DATEFROMPARTS(@currentFyStartYear, 4, 1);
-    DECLARE @previousFyStart DATE = DATEADD(YEAR, -1, @currentFyStart);
-    DECLARE @previousFyEnd DATE = DATEADD(DAY, -1, @currentFyStart);
-    DECLARE @currentFyLabel VARCHAR(10) = CONCAT('FY', @currentFyStartYear, '-', RIGHT(CAST(@currentFyStartYear + 1 AS VARCHAR(4)), 2));
-    DECLARE @previousFyLabel VARCHAR(10) = CONCAT('FY', @currentFyStartYear - 1, '-', RIGHT(CAST(@currentFyStartYear AS VARCHAR(4)), 2));
+    /*-- 1. WINDOW + SAME-WINDOW-LAST-YEAR COMPARATOR ---------------------- */
+    DECLARE @prevWindowStart DATETIME = DATEADD(YEAR, -1, @WindowStart);
+    DECLARE @prevWindowEnd   DATETIME = DATEADD(YEAR, -1, @WindowEnd);
+    DECLARE @currentFyLabel VARCHAR(40) = CONCAT(CONVERT(VARCHAR(10), @WindowStart, 23), ' to ', CONVERT(VARCHAR(10), @WindowEnd, 23));
+    DECLARE @previousFyLabel VARCHAR(40) = CONCAT(CONVERT(VARCHAR(10), @prevWindowStart, 23), ' to ', CONVERT(VARCHAR(10), @prevWindowEnd, 23));
 
     /*-- 2. SCOPED CLOSURE EVENTS WITH A TIMELINESS CLASSIFICATION ---------
        Every completed transaction (not just the latest), bucketed by the
@@ -68,8 +93,8 @@ BEGIN
     IF OBJECT_ID('tempdb..#events') IS NOT NULL DROP TABLE #events;
     SELECT cso.ComplianceInstanceID, cso.ScheduleOn, d.Timeliness,
            CASE
-               WHEN cso.ScheduleOn >= @currentFyStart THEN 'current_fy'
-               WHEN cso.ScheduleOn >= @previousFyStart AND cso.ScheduleOn <= @previousFyEnd THEN 'previous_fy'
+               WHEN cso.ScheduleOn >= @WindowStart     AND cso.ScheduleOn < @WindowEnd     THEN 'current_fy'
+               WHEN cso.ScheduleOn >= @prevWindowStart AND cso.ScheduleOn < @prevWindowEnd THEN 'previous_fy'
                ELSE 'outside_window'
            END AS FyBucket
     INTO #events
@@ -78,7 +103,7 @@ BEGIN
     JOIN ComplianceTransaction t   ON t.ComplianceScheduleOnID = cso.ID
     JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = t.StatusId
     WHERE d.ClosureClass = 'completed' AND d.Timeliness IS NOT NULL
-      AND cso.ScheduleOn >= @previousFyStart AND cso.ScheduleOn <= @AsOf;
+      AND cso.ScheduleOn >= @prevWindowStart AND cso.ScheduleOn < @WindowEnd;
 
     /*-- 3. THE 2 REAL FY ROWS ----------------------------------------------*/
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
@@ -162,7 +187,7 @@ BEGIN
     SELECT 'A-CURRENT', 'ontime_pct', @currentFyLabel, @currentOnTimePct, NULL, NULL,
            @previousOnTimePct, @yoyChangePP,
            CASE WHEN @yoyChangePP > 0 THEN 'better' WHEN @yoyChangePP < 0 THEN 'worse' ELSE NULL END,
-           CASE WHEN @previousOnTimePct IS NULL THEN N'no previous-FY comparator - previous FY has no completed events with a known Timeliness classification' ELSE NULL END;
+           CASE WHEN @previousOnTimePct IS NULL THEN N'no year-over-year comparator - the same span one year earlier has no completed events with a known Timeliness classification' ELSE NULL END;
 
     SELECT 'assertions' AS ResultSet, * FROM #assert;
 
@@ -186,11 +211,18 @@ BEGIN
     /*-- 9. DATA-QUALITY NOTES ----------------------------------------------*/
     SELECT 'data_quality' AS ResultSet, Issue, Detail
     FROM (
-        SELECT 'no_completed_events_current_fy' AS Issue,
-               N'No completed closure events with a known Timeliness classification in the current FY - OnTimePctCurrentFY cannot be assessed and is not reported as 0%.' AS Detail
+        SELECT 'window' AS Issue,
+               CONCAT(N'On-time rate computed over the caller-supplied window ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' to ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. Year-over-year is the same span one year earlier (',
+                      CONVERT(VARCHAR(10), @prevWindowStart, 23), N' to ', CONVERT(VARCHAR(10), @prevWindowEnd, 23), N').') AS Detail
+        UNION ALL
+        SELECT 'no_completed_events_in_window',
+               N'No completed closure events with a known Timeliness classification in the supplied window - OnTimePctCurrentFY cannot be assessed and is not reported as 0%.'
         WHERE @currentCompleted = 0
         UNION ALL
-        SELECT 'no_completed_events_previous_fy', N'No completed closure events with a known Timeliness classification in the previous FY - year-over-year comparison suppressed.'
+        SELECT 'no_year_over_year_comparator',
+               N'The same span one year earlier has no completed closure events with a known Timeliness classification - year-over-year comparison suppressed.'
         WHERE @previousCompleted = 0
     ) q;
 

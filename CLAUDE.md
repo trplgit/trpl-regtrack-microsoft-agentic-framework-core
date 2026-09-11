@@ -108,6 +108,12 @@ Violating any of these is a build-breaking error, not a style preference.
   `tvfInsightsOverdueSchedules` includes them with `NeverTouched = 1`.
 - Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
   over a subquery. Use a `LEFT JOIN` and test for `NULL`.
+- Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an
+  aggregate. `SUM(CASE WHEN NOT EXISTS (...) THEN 1 ELSE 0 END)` raises Msg 130
+  at **CREATE PROCEDURE time** - so the procedure is never created, while the
+  `DROP` above it HAS succeeded and the object is simply **gone**. A trailing
+  `PRINT '... installed'` still fires, because a failed CREATE does not stop
+  later batches. Flag each row in a CTE first, then `SUM` the flags.
 
 ### Always
 - Filter `IsDeleted = 0` at **every** hop (User, Customer, CustomerBranch).

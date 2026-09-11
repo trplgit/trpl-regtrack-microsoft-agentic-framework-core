@@ -76,15 +76,31 @@ public interface IDimensionRepository
     Task<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>> GetBacklogAgingAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Timeliness by fiscal year. Current-FY vs previous-FY on-time rate, anchored on ScheduleOn (due date).</summary>
+    /// <summary>
+    /// Timeliness over a caller-supplied window (on-time closures whose ScheduleOn falls in
+    /// [windowStart, windowEnd)), compared to the SAME span one year earlier. The deployed
+    /// usp_Insights_Dimension_TimelinessFY (sql/23) now REQUIRES @WindowStart / @WindowEnd - the
+    /// caller resolves a period-picker choice (or the current-FY-to-date default) to concrete
+    /// dates via ReportPeriodResolver before calling. Passing NULL to the proc THROWs 51177.
+    /// </summary>
     Task<DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>> GetTimelinessFYAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
     /// <summary>Forward pipeline. Real due-next-90d counts by day-window - no "predicted at risk", no model exists yet.</summary>
     Task<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>> GetForwardPipelineAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Evidence integrity. Review-trail PROXY only - EvidenceInSql is always false, see EvidenceIntegrityControlTotals.</summary>
+    /// <summary>
+    /// Evidence integrity over a caller-supplied window (closures whose CLOSURE DATE - latest
+    /// ComplianceTransaction.Dated, not ScheduleOn - falls in [windowStart, windowEnd)). Review-
+    /// trail PROXY only - EvidenceInSql is always false, see EvidenceIntegrityControlTotals. The
+    /// deployed usp_Insights_Dimension_EvidenceIntegrity (sql/25) now REQUIRES @WindowStart /
+    /// @WindowEnd; passing NULL THROWs 51178.
+    /// </summary>
     Task<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>> GetEvidenceIntegrityAsync(
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Forward risk. The 90-day window split into carried_forward / clean_at_risk / healthy segments - a count of present facts, never a forecast. Deployed proc (sql/26).</summary>
+    Task<DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>> GetForwardRiskAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 }

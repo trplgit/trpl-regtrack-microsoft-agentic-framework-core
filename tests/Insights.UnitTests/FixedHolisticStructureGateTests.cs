@@ -47,14 +47,36 @@ public sealed class FixedHolisticStructureGateTests
         Assert.True(result.Approved, string.Join("; ", result.Violations));
     }
 
+    /// <summary>
+    /// [CHANGED 2026-09-10, tenant rule] A muted "not scored this run" component card is no
+    /// longer a legitimate fill - a component with no score is omitted entirely. Any
+    /// di-comp--muted is now itself a refusal.
+    /// </summary>
     [Fact]
-    public void Evaluate_Approves_WhenMutedComponentCardsCountTowardSeven()
+    public void Evaluate_Refuses_WhenAnyMutedComponentCardPresent()
     {
         var fourReal = string.Join("\n", Enumerable.Range(0, 4)
             .Select(_ => "<div class=\"di-comp\"><div class=\"di-comp__name\">X</div></div>"));
-        var threeMuted = string.Join("\n", Enumerable.Range(0, 3)
-            .Select(_ => "<div class=\"di-comp di-comp--muted\"><div class=\"di-comp__name\">Y</div></div>"));
-        var html = $"<div class=\"di-components\">{fourReal}\n{threeMuted}</div>";
+        var oneMuted = "<div class=\"di-comp di-comp--muted\"><div class=\"di-comp__name\">Evidence<small>Not scored this run</small></div></div>";
+        var html = $"<div class=\"di-components\">{fourReal}\n{oneMuted}</div>";
+
+        var result = FixedHolisticStructureGate.Evaluate(html);
+
+        Assert.False(result.Approved);
+        Assert.Contains(result.Violations, v => v.Contains("di-comp--muted", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [CHANGED 2026-09-10, tenant rule] Fewer than 7 REAL cards is now a legitimate silent-omit
+    /// (a component with no score this run is dropped, not muted) - approved, as long as at least
+    /// one real component backs the composite.
+    /// </summary>
+    [Fact]
+    public void Evaluate_Approves_WhenFewerThanSevenRealComponentCardsPresent()
+    {
+        var fiveCards = string.Join("\n", Enumerable.Range(0, 5)
+            .Select(_ => "<div class=\"di-comp\"><div class=\"di-comp__name\">X</div></div>"));
+        var html = $"<div class=\"di-components\">{fiveCards}</div>";
 
         var result = FixedHolisticStructureGate.Evaluate(html);
 
@@ -62,20 +84,32 @@ public sealed class FixedHolisticStructureGateTests
     }
 
     /// <summary>
-    /// [BUG FOUND LIVE] A real render shipped only 4 cards (Risk-weighted, Coverage, Overdue/
-    /// Backlog, People) - Timeliness, Licence and Evidence were silently dropped instead of muted.
+    /// A score hero with zero component cards is still malformed - the composite is built from at
+    /// least one component, so at least one must render.
     /// </summary>
     [Fact]
-    public void Evaluate_Refuses_WhenFewerThanSevenScoreComponentCardsPresent()
+    public void Evaluate_Refuses_WhenHeroPresentButZeroComponentCards()
     {
-        var fourCards = string.Join("\n", Enumerable.Range(0, 4)
-            .Select(_ => "<div class=\"di-comp\"><div class=\"di-comp__name\">X</div></div>"));
-        var html = $"<div class=\"di-components\">{fourCards}</div>";
-
-        var result = FixedHolisticStructureGate.Evaluate(html);
+        var result = FixedHolisticStructureGate.Evaluate("<div class=\"di-components\"><div class=\"di-components__head\"></div></div>");
 
         Assert.False(result.Approved);
-        Assert.Contains(result.Violations, v => v.Contains("7", StringComparison.Ordinal) && v.Contains("4", StringComparison.Ordinal));
+        Assert.Contains(result.Violations, v => v.Contains("0 .di-comp", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-10, tenant rule] No ghost/placeholder states may ship - a muted snapshot
+    /// tile, a di-blocked-note section, or the literal "Not available yet" copy each refuse the
+    /// whole document.
+    /// </summary>
+    [Theory]
+    [InlineData("<article class=\"di-snaptile di-snaptile--muted\"><div class=\"di-snaptile__num\">Not available yet</div></article>")]
+    [InlineData("<p class=\"di-blocked-note\">This section has no real data source yet in this run.</p>")]
+    [InlineData("<div class=\"di-comp di-comp--muted\"><small>Not scored this run</small></div>")]
+    public void Evaluate_Refuses_WhenAGhostOrPlaceholderStateIsPresent(string ghost)
+    {
+        var result = FixedHolisticStructureGate.Evaluate($"<section>{ghost}</section>");
+
+        Assert.False(result.Approved);
     }
 
     [Fact]

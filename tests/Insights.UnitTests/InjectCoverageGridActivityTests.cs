@@ -6,9 +6,14 @@ namespace Insights.UnitTests;
 
 public class InjectCoverageGridActivityTests
 {
+    // [FIX - stale fixture, found live 2026-09-09] Same root cause as CoverageGridInjectorTests:
+    // Inject() was narrowed on 2026-09-07 to match a `<section id="di-pane-3">` wrapper, not the
+    // bare `di-covgrid-root` div this fixture used - so this test's early-return path was being
+    // exercised, not the real injection logic, since the narrowing shipped.
     private const string DocumentWithPlaceholder =
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>" +
-        "<div id=\"di-covgrid-root\"></div></body></html>";
+        "<section class=\"di-pane\" id=\"di-pane-3\" aria-label=\"Coverage\"><div id=\"di-pane-3-body\"></div></section>" +
+        "</body></html>";
 
     [Fact]
     public async Task RunAsync_DocumentWithPlaceholderAndRealRows_InjectsOneTilePerLeafRow()

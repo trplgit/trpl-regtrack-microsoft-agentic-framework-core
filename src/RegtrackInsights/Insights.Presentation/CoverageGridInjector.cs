@@ -55,8 +55,16 @@ public static partial class CoverageGridInjector
         if (leafRows.Count == 0)
             return html; // Location degraded, or no leaf branches - never inject an empty/fabricated grid.
 
+        // [FIX - found live 2026-09-09] The real KPI card's "Ownerless obligations" pair splits
+        // leaf vs corporate-rollup - the rollup rows are real LocationRow data, just excluded from
+        // the tile grid because they are not leaf stores. Sum it here, from the FULL row set,
+        // before the leaf-only filter above discards everything else.
+        var rollupOwnerless = locationRows!
+            .Where(r => r.NodeType != EntityNodeType.Leaf)
+            .Sum(r => r.Ownerless);
+
         var counts = LocationCoverageClassifier.ComputeCounts(leafRows);
-        var paneBody = BuildPaneBody(counts, leafRows);
+        var paneBody = BuildPaneBody(counts, leafRows, rollupOwnerless);
 
         var match = PaneContentToken().Match(html);
         if (!match.Success)
@@ -72,17 +80,41 @@ public static partial class CoverageGridInjector
         return string.Concat(html.AsSpan(0, inner.Index), paneBody, html.AsSpan(inner.Index + inner.Length));
     }
 
-    private static string BuildPaneBody(CoverageStatusCounts counts, List<LocationRow> leafRows)
+    private static string BuildPaneBody(CoverageStatusCounts counts, List<LocationRow> leafRows, int rollupOwnerless)
     {
+        // [FIX - found live 2026-09-09, matched against the real product's own Coverage KPI card]
+        // "Mapped"/"Has ownerless" here used to show STORE counts (counts.Healthy / counts.HasOwnerless
+        // - the strict, mutually-exclusive classification bands the tile grid colours by). The real
+        // card's own two headline pairs mean something different: "Stores mapped" is (leaf total -
+        // unmapped) - i.e. every store carrying ANY real compliance mapping, not just the "zero
+        // flags" subset - and "Ownerless obligations" is a real OBLIGATION count (sum of each row's
+        // own Ownerless field), split leaf vs corporate-rollup. Both are real, already-available
+        // numbers; only the card was asking for the wrong ones under right-sounding labels.
+        var mappedStores = counts.Total - counts.Unmapped;
+        var mappedPct = counts.Total == 0 ? 0m : Math.Round(100m * mappedStores / counts.Total, 1);
+        var leafOwnerless = leafRows.Sum(r => r.Ownerless);
+        var totalOwnerless = leafOwnerless + rollupOwnerless;
+        var tone = mappedPct >= 95 ? "ok" : mappedPct >= 80 ? "warn" : "bad";
+        var toneLabel = tone switch { "ok" => "Broadly good", "warn" => "Needs attention", _ => "Coverage gap" };
+
         var sb = new StringBuilder();
         sb.Append("""<div class="di-pane__head"><span class="di-secnum" aria-hidden="true">03</span><h2 class="di-pane__title">Key indicators</h2></div>""");
         sb.Append("""<div class="di-kpigrid"><article class="di-kpi di-kpi--span12">""")
-          .Append("""<div class="di-kpi__head"><div class="di-kpi__headtext"><div class="di-kpi__eyebrow">Coverage</div><h3 class="di-kpi__title">Store mapping</h3></div></div>""")
+          .Append("""<div class="di-kpi__head"><div class="di-kpi__headtext"><div class="di-kpi__eyebrow">Coverage</div>""")
+          .Append($"""<h3 class="di-kpi__title">{mappedStores} / {counts.Total} stores mapped &middot; one box per location</h3></div>""")
+          .Append($"""<span class="di-kpi__tag di-kpi__tag--{tone}"><span class="di-kpi__dot"></span>{toneLabel}</span></div>""")
           .Append("""<div class="di-kpi__pairs">""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Mapped</div><div class="di-kpi__pair-val tnum">{counts.Healthy}</div></div>""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Has ownerless</div><div class="di-kpi__pair-val tnum">{counts.HasOwnerless}</div></div>""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div></div>""")
-          .Append("</div></article></div>");
+          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Stores mapped</div><div class="di-kpi__pair-val tnum">{mappedStores}</div><div class="di-kpi__pair-sub">{mappedPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}% of {counts.Total} leaf stores</div></div>""")
+          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Ownerless obligations</div><div class="di-kpi__pair-val tnum">{totalOwnerless}</div><div class="di-kpi__pair-sub">{leafOwnerless} on leaf stores{(rollupOwnerless > 0 ? $" &middot; {rollupOwnerless} on corporate rollup" : "")}</div></div>""");
+        // Peer-coverage gaps pair - OMITTED, not shown as a fake 0. UnderConfigured is always 0
+        // today: no procedure computes a real obligation-COUNT peer norm yet (see
+        // LocationCoverageClassifier's own doc comment). Render it the moment that ever changes.
+        if (counts.UnderConfigured > 0)
+            sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Peer-coverage gaps</div><div class="di-kpi__pair-val tnum">{counts.UnderConfigured}</div></div>""");
+        sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped stores</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
+          .Append("</div>")
+          .Append($"""<p class="di-kpi__narr">Each box is one leaf store, coloured by status. Click a box to open its detail panel. Use the status chips to focus the grid.{(rollupOwnerless > 0 ? $" The corporate-entity rollup node (which holds {rollupOwnerless} ownerless obligations) is not a leaf store and so is not shown as a tile." : "")}</p>""")
+          .Append("</article></div>");
 
         sb.Append("""<div class="di-covwrap"><div class="di-covmap"><div class="di-covfilter" role="toolbar" aria-label="Coverage status counts">""")
           .Append($"""<button type="button" class="di-covchip" data-filter="all">All <b class="tnum">{counts.Total}</b></button>""")

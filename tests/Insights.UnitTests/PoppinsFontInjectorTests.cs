@@ -48,11 +48,17 @@ public class PoppinsFontInjectorTests
     }
 
     [Fact]
-    public void Inject_ValidDocument_EmbedsBothWeights400And600()
+    public void Inject_ValidDocument_EmbedsAllThreeWeights400And500And600()
     {
+        // [ADDED 2026-09-09] Weight 500 joined 400/600 once a design system that actually uses
+        // it (Sambram's AI-INSIGHTS-BRAND-HANDOFF.md - .di-band/.di-tonetag/.di-kpi__num small
+        // are all weight 500) arrived. A declared weight with no embedded face doesn't error -
+        // it silently renders as the nearest available weight instead, per this file's own
+        // vendor/README.md note.
         var result = PoppinsFontInjector.Inject(ValidDocument);
 
         Assert.Contains("font-weight:400", result, StringComparison.Ordinal);
+        Assert.Contains("font-weight:500", result, StringComparison.Ordinal);
         Assert.Contains("font-weight:600", result, StringComparison.Ordinal);
     }
 

@@ -39,15 +39,25 @@ public sealed class PersistActivity(
 
     internal async Task<PersistOutput> RunAsync(PersistInput input)
     {
+        // The report id and its generation time are fixed HERE, before the blob write, because the
+        // blob PATH is built from them (<tenantId>/<reportType>/<yyyy>/<mm>/<reportId>.html.enc).
+        // EF's NEWID() / SYSUTCDATETIME() column defaults yield to a client-set value, so the SQL
+        // row carries the exact same id and timestamp the blob path encodes.
+        var reportId = Guid.NewGuid();
+        var generatedAtUtc = DateTime.UtcNow;
+
         var envelope = await encryptor.EncryptAsync(input.Html);
-        var location = await blobWriter.WriteAsync(envelope);
+        var location = await blobWriter.WriteAsync(
+            envelope, new BlobPathContext(input.TenantId, input.ReportType, generatedAtUtc, reportId));
 
         var report = new GeneratedReport
         {
+            Id = reportId,
             CustomerId = input.TenantId,
             ScopeDescriptor = input.ScopeDescriptor,
             ReportType = input.ReportType,
             Period = input.Period,
+            GeneratedAtUtc = generatedAtUtc,
             GeneratedByUserId = input.UserId,
             BlobContainer = location.Container,
             BlobPath = location.Path,

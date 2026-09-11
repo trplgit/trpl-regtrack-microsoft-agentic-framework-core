@@ -10,9 +10,14 @@ namespace Insights.Presentation;
 /// both invariants hold regardless of tenant data (CLAUDE.md Sec.11's "structural invariant, must
 /// THROW" category, not a data-sanity warning), and both were found violated by a real render:
 ///
-/// 1. The score-components row (.di-components) always has exactly 7 .di-comp cards, real or
-///    muted - never fewer. A real render silently dropped 3 (Timeliness, Licence, Evidence)
-///    instead of rendering them muted, despite the prompt already saying "never omit the card".
+/// 1. The score-components row (.di-components), when present, carries 1 to 7 REAL .di-comp
+///    cards and ZERO muted ones. [CHANGED 2026-09-10] The invariant used to be "exactly 7,
+///    real or muted, never fewer" - a component with no score this run rendered as a
+///    `di-comp--muted` "Not scored this run" ghost. The tenant-1300 rule omits a missing
+///    component entirely instead, so the count is now a 1..7 range and any `di-comp--muted`
+///    is itself a violation. (A real render once silently dropped 3 cards with no muted
+///    fallback and no omit rule either - that is still caught, as "0 cards" or a count below
+///    the real component total the composite was built from.)
 ///    [FIX, 2026-09-02] The check itself used to look for &lt;article class="di-component"&gt; -
 ///    a fictional convention matching neither the real product markup nor the prompt's own hero
 ///    section (which correctly copies detailed-insights.component.html's real &lt;div class="di-comp"&gt;
@@ -45,20 +50,30 @@ namespace Insights.Presentation;
 ///
 /// Regex-based, not a real HTML/CSS parser - same deliberate posture as ReportEmitNormalizer
 /// (see its own doc comment): a fast, auditable static check for the two specific violation
-/// classes found live, not a general-purpose HTML validator. Both checks are no-ops (approve) on
-/// a document that has neither a score hero nor any data-blocked pane - e.g. the dynamic
-/// (non-fixed-template) report shape - so this gate is safe to run unconditionally on every
-/// rendered report, not just the fixed-holistic variant.
+/// classes found live, not a general-purpose HTML validator.
+///
+/// [CORRECTED, BUG FOUND LIVE 2026-09-09] This comment used to claim both checks were no-ops on
+/// any document without a real fixed_holistic score hero, making Evaluate "safe to run
+/// unconditionally on every rendered report" - false in practice. A per-dimension render prompt
+/// (05_report_html_dimension_selection_department.md) legitimately reuses the real Angular
+/// product's own ".di-components" class for a non-score strip (confirmed by reading
+/// detailed-insights.component.html - the real component reuses that class for the Users role
+/// strip and the Departments occurrence-status strip too, not only the composite-score row), which
+/// this gate's class-name-only detection cannot tell apart from a real score hero. Evaluate itself
+/// is unchanged (still a pure function of the HTML string), but callers must not run it
+/// unconditionally any more - ValidateFixedHolisticStructureActivity now gates the call on
+/// ReportType == FixedHolisticComposition.ReportType instead.
 /// </summary>
 public static partial class FixedHolisticStructureGate
 {
-    private const int RequiredComponentCount = 7;
+    private const int MaxComponentSlots = 7;
 
     public static FixedHolisticStructureResult Evaluate(string html)
     {
         var violations = new List<string>();
 
         CheckScoreComponentCount(html, violations);
+        CheckNoGhostStates(html, violations);
         CheckBlockedTabBadges(html, violations);
         CheckCoveragePaneHasInteractiveGrid(html, violations);
 
@@ -68,6 +83,14 @@ public static partial class FixedHolisticStructureGate
     /// <summary>
     /// Only enforced when a score hero actually exists (.di-components wrapper present) - a report
     /// with no composite score at all (every dimension degraded) legitimately never renders it.
+    ///
+    /// [CHANGED 2026-09-10, tenant rule] The invariant used to be "exactly 7 cards, real OR
+    /// muted, never fewer" - a component with no score this run was to render as a
+    /// `di-comp--muted` "Not scored this run" ghost card. The tenant-1300 rule reverses that: a
+    /// missing component is OMITTED ENTIRELY, never shown as a failed/blank state. So the check
+    /// is now "1 to 7 REAL cards, and zero muted cards" - the score hero must carry at least the
+    /// one component that produced the composite, and never more than the 7 defined slots, but
+    /// any number in between is a legitimate silent-omit, not a dropped card.
     /// </summary>
     private static void CheckScoreComponentCount(string html, List<string> violations)
     {
@@ -75,8 +98,31 @@ public static partial class FixedHolisticStructureGate
             return;
 
         var count = DiComponentCardToken().Matches(html).Count;
-        if (count != RequiredComponentCount)
-            violations.Add($"score hero present but found {count} .di-component card(s), expected exactly {RequiredComponentCount} (real or muted, never fewer)");
+        if (count is < 1 or > MaxComponentSlots)
+            violations.Add($"score hero present but found {count} .di-comp card(s), expected 1 to {MaxComponentSlots} (one per component that has a real score this run - never zero, never more than the defined slots)");
+
+        if (MutedComponentCardToken().IsMatch(html))
+            violations.Add("score hero has a di-comp--muted / 'not scored this run' ghost card - a component with no score this run is omitted entirely, never rendered muted (tenant rule 2026-09-10)");
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-10, tenant rule] "we dnt want to show not avaible or balck card or tile -
+    /// the data is not there, let it silently fail, not showing the user that has failed." Every
+    /// missing tile/card/section is omitted outright; none of the old muted-placeholder shapes
+    /// (di-snaptile--muted, di-blocked-note, the literal "Not available yet" / "Not scored this
+    /// run" copy) may appear in a shipped fixed-holistic document. Deterministic backstop for the
+    /// prompt rule, same posture as the score-card count above.
+    /// </summary>
+    private static void CheckNoGhostStates(string html, List<string> violations)
+    {
+        if (html.Contains("di-snaptile--muted", StringComparison.Ordinal))
+            violations.Add("a di-snaptile--muted / ghost snapshot tile is present - a tile with no real backing number is omitted entirely, never rendered muted");
+
+        if (html.Contains("di-blocked-note", StringComparison.Ordinal))
+            violations.Add("a di-blocked-note is present - a card or section with no real data source this run is omitted entirely, never rendered with a 'not available' note");
+
+        if (GhostCopyToken().IsMatch(html))
+            violations.Add("the literal 'Not available yet' / 'Not scored this run' copy is present - missing data is omitted silently, never labelled as a failed state");
     }
 
     /// <summary>
@@ -157,8 +203,14 @@ public static partial class FixedHolisticStructureGate
         di-comp verbatim from detailed-insights.component.html, which uses a <div>, not <article>).
         Confirmed live: a real render with the correct real di-comp markup was refused 5/5 times by
         this exact regex never matching anything, reading as "found 0 .di-component card(s)". */
-    [GeneratedRegex(@"<div\s+class=""di-comp(?:\s+di-comp--muted)?""")]
+    [GeneratedRegex(@"<div\s+class=""di-comp""")]
     private static partial Regex DiComponentCardToken();
+
+    [GeneratedRegex(@"<div\s+class=""di-comp\s+di-comp--muted""")]
+    private static partial Regex MutedComponentCardToken();
+
+    [GeneratedRegex(@"Not\s+available\s+yet|Not\s+scored\s+this\s+run", RegexOptions.IgnoreCase)]
+    private static partial Regex GhostCopyToken();
 
     [GeneratedRegex(@"<section\b[^>]*\bid=""(?<id>di-pane-(?<n>\d+))""[^>]*\bdata-blocked=""true""")]
     private static partial Regex BlockedPaneToken();

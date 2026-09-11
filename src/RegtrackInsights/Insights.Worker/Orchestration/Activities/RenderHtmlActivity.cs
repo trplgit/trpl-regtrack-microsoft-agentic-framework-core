@@ -8,7 +8,8 @@ public sealed record RenderHtmlInput(
     CompositionPlan Plan, NarrativeResult Narrative, IReadOnlyList<Assertion> Assertions, string TenantName, string ReportType, DateTime GeneratedAt,
     LlmCallPriority Priority = LlmCallPriority.Interactive,
     IReadOnlyList<LocationRow>? LocationRows = null,
-    IReadOnlyDictionary<string, string>? DimensionRowsJson = null);
+    IReadOnlyDictionary<string, string>? DimensionRowsJson = null,
+    IReadOnlyDictionary<string, string>? DimensionControlTotalsJson = null);
 public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 
 /// <summary>
@@ -38,14 +39,25 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
 
     internal async Task<RenderHtmlOutput> RunAsync(RenderHtmlInput input)
     {
-        if (!htmlAgentsByReportType.TryGetValue(input.ReportType, out var htmlAgent))
+        // Design spec (docs/superpowers/specs/2026-09-09-per-dimension-render-template-design.md
+        // Sec.4.1) - a single-dimension request tries a dimension-specific key first
+        // ("{ReportType}:{DimensionName}"), falling back to the plain ReportType key when no
+        // dimension-specific template is registered yet (today's state for every dimension).
+        // The dimension name comes from the plan itself (Plan.Blocks[0].Block) - never a new
+        // field that could drift from what the plan actually says.
+        var specificKey = input.Plan.Blocks.Count == 1 ? $"{input.ReportType}:{input.Plan.Blocks[0].Block}" : null;
+
+        if ((specificKey is null || !htmlAgentsByReportType.TryGetValue(specificKey, out var htmlAgent))
+            && !htmlAgentsByReportType.TryGetValue(input.ReportType, out htmlAgent))
+        {
             throw new InvalidOperationException(
                 $"No render agent registered for ReportType '{input.ReportType}'. Registered: {string.Join(", ", htmlAgentsByReportType.Keys)}.");
+        }
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
-            input.LocationRows, input.DimensionRowsJson, CancellationToken.None);
+            input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);
         return new RenderHtmlOutput(result.Value, result.TotalTokens);
     }
 }

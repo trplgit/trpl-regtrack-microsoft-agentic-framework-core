@@ -34,7 +34,7 @@ public sealed class CompositeScoreCalculatorTests
             new() { UserID = 2, PerformerInstances = 30, ReviewerInstances = 0 },
             new() { UserID = 3, PerformerInstances = 10, ReviewerInstances = 80 },
         };
-        var licence = new LicenceControlTotals { TenantLapsedCorroboratedPct = 25m };
+        var licence = new LicenceControlTotals { TenantLapsedPct = 25m };
 
         var result = CompositeScoreCalculator.Compute(risk, location, users, licence, tenantOnTimePct: 70m);
 
@@ -50,7 +50,7 @@ public sealed class CompositeScoreCalculatorTests
     {
         // Risk and Location null (as if FetchDimensionsActivity degraded them) - Licence and
         // People still present. Composite must still compute from what remains.
-        var licence = new LicenceControlTotals { TenantLapsedCorroboratedPct = 10m };
+        var licence = new LicenceControlTotals { TenantLapsedPct = 10m };
         var users = new List<UsersRow> { new() { UserID = 1, PerformerInstances = 10, ReviewerInstances = 10 } };
 
         var result = CompositeScoreCalculator.Compute(risk: null, location: null, users, licence, tenantOnTimePct: null);
@@ -74,7 +74,7 @@ public sealed class CompositeScoreCalculatorTests
     [Fact]
     public void Compute_LicenceScore_IsInverseOfLapsedPct()
     {
-        var licence = new LicenceControlTotals { TenantLapsedCorroboratedPct = 30m };
+        var licence = new LicenceControlTotals { TenantLapsedPct = 30m };
         var result = CompositeScoreCalculator.Compute(risk: null, location: null, usersRows: null, licence, tenantOnTimePct: null);
 
         Assert.Equal(70m, result.Components.Single(c => c.DomainKpi == "licence").Score);
@@ -93,7 +93,7 @@ public sealed class CompositeScoreCalculatorTests
                 new RiskRow { RiskType = 7, OverduePct = 20m },  // the real critical tier
             ],
             [], [], [], []);
-        var licence = new LicenceControlTotals { TenantLapsedCorroboratedPct = 0m };
+        var licence = new LicenceControlTotals { TenantLapsedPct = 0m };
 
         var result = CompositeScoreCalculator.Compute(risk, location: null, usersRows: null, licence, tenantOnTimePct: null);
 
@@ -108,7 +108,7 @@ public sealed class CompositeScoreCalculatorTests
             new LocationRow { BranchID = 2, Flags = "" },              // healthy
             new LocationRow { BranchID = 3, Flags = "high_ownerless" }, // half credit
             new LocationRow { BranchID = 4, Flags = "no_obligations_configured" }); // zero credit
-        var licence = new LicenceControlTotals { TenantLapsedCorroboratedPct = 0m };
+        var licence = new LicenceControlTotals { TenantLapsedPct = 0m };
 
         var result = CompositeScoreCalculator.Compute(risk: null, location, usersRows: null, licence, tenantOnTimePct: null);
 

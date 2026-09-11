@@ -116,6 +116,51 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection"] = Build(
                     "DimensionSelectionReportHtmlAgent", "Renders a caller-selected subset of dimensions as self-contained HTML, no fixed tabs.",
                     "05_report_html_dimension_selection.md"),
+                // [ADDED 2026-09-09] Sambram's real, approved "dimension view" design system
+                // (AI-INSIGHTS-BRAND-HANDOFF.md Sec.6, single-section, no tabs, no donut) arrived
+                // AFTER the generic dimension_selection prompt above was built on Trent's design -
+                // Location gets its own specific-key override here rather than changing the
+                // generic prompt (which still serves every dimension without its own specific
+                // key, e.g. Nature/Entity/Risk/Act/Internal/Event, on Trent's system for now -
+                // flagged as a real, not-yet-closed gap, not a silent inconsistency).
+                ["dimension_selection:Location"] = Build(
+                    "DimensionSelectionLocationReportHtmlAgent", "Renders a single-Location-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
+                    "05_report_html_dimension_selection_location.md"),
+                // [ADDED 2026-09-09, REPLACED same day] Dimension-specific override for a
+                // single-"Users" request - RenderHtmlActivity's own doc comment explains the
+                // "{ReportType}:{DimensionName}" key-preference rule this depends on. First built
+                // to reproduce the real Angular "By User & Role" tabbed sub-page verbatim; replaced
+                // the same day with Sambram's real, approved "dimension view" design system
+                // (AI-INSIGHTS-BRAND-HANDOFF.md Sec.6 - single section, no tabs, no donut) once that
+                // handoff arrived - the tabbed shape never matched the approved AI-generation
+                // contract. Several real fields still have no backing (imprisonment-overdue
+                // combined lens, per-user risk mix, dept-head fan-out, an "Approver" role) - see
+                // the prompt file's own "Real vs. NOT AVAILABLE" table.
+                ["dimension_selection:Users"] = Build(
+                    "DimensionSelectionUserReportHtmlAgent", "Renders a single-Users-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
+                    "05_report_html_dimension_selection_user.md"),
+                // [ADDED 2026-09-09, REPLACED same day] Same reasoning as the Users entry
+                // immediately above. The Concentration tab and closure-status strip the earlier
+                // Angular-mirroring version carried (both honest not-available blocks, no real
+                // backing) don't exist as structural slots in Sambram's single-section shape at
+                // all any more - the gap is gone along with the tabs, not papered over.
+                ["dimension_selection:Departments"] = Build(
+                    "DimensionSelectionDepartmentReportHtmlAgent", "Renders a single-Departments-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
+                    "05_report_html_dimension_selection_department.md"),
+                // [ADDED 2026-09-10] Three more dimension-specific overrides, built the same way as
+                // the three above: Sambram's single-section visual system, content/analysis
+                // mimicked from the matching Trent report (03 Backlog Aging / 05 Acts & Regulators
+                // / 06 Licences). Each prompt file carries its own "Real vs. NOT AVAILABLE" table
+                // grounded in the real SQL (sql/22, sql/11, sql/21) - never guessed.
+                ["dimension_selection:BacklogAging"] = Build(
+                    "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a single-BacklogAging-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
+                    "05_report_html_dimension_selection_backlogaging.md"),
+                ["dimension_selection:Act"] = Build(
+                    "DimensionSelectionActReportHtmlAgent", "Renders a single-Act-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
+                    "05_report_html_dimension_selection_act.md"),
+                ["dimension_selection:Licence"] = Build(
+                    "DimensionSelectionLicenceReportHtmlAgent", "Renders a single-Licence-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
+                    "05_report_html_dimension_selection_licence.md"),
             };
         });
 
