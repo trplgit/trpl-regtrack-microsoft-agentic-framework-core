@@ -306,11 +306,19 @@ BEGIN
     BEGIN
         /*  [CORRECTED 2026-09-08] Management-role users, per BA ruling - both
             tiers. UserCustomerMapping cannot answer this: all 65 production
-            rows carry ProductID = NULL and IsActive = 1. See sql/01.          */
+            rows carry ProductID = NULL and IsActive = 1. See sql/01.
+
+            [CORRECTED 2026-09-10] FREE TIER ONLY subtracts durable opt-outs
+            (sql/16, InsightsDigestSuppression) - that table is scoped to the
+            weekly DIGEST EMAIL channel (unsubscribe / hard bounce), not to
+            paid-tier report viewing. Subtracting it for @Tier = 'paid' would
+            undercount a tenant's entitlement based on an unrelated channel's
+            opt-out. Opt-out SURVIVES tier changes (Sec.5.4).                 */
         SELECT @recipients = COUNT(DISTINCT m.UserID)
-        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m;
-        -- NOTE: subtract durable per-recipient opt-outs here once that store exists
-        --       (spec Sec.5.4 - opt-out must SURVIVE tier changes)
+        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m
+        WHERE @Tier = 'paid'
+           OR NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression s
+                          WHERE s.CustomerID = @CustomerID AND s.UserID = m.UserID);
 
         IF @recipients = 0
         BEGIN

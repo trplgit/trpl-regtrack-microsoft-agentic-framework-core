@@ -50,11 +50,40 @@ public sealed class FreeDigestSettings
     /// <summary>How often the weekly lane wakes to look for due tenants. Ticking often is safe - the per-recipient claim is the guarantee.</summary>
     public TimeSpan ScheduleCheckInterval { get; init; } = TimeSpan.FromMinutes(60);
 
-    /// <summary>Hour (UTC) before which the lane will not send, so digests do not arrive overnight.</summary>
-    public int ScheduleSendHourUtc { get; init; } = 6;
-
     /// <summary>Pause between tenants. The free lane is lowest priority (10.3) and must not starve a paying user's on-demand run.</summary>
     public TimeSpan SchedulePerTenantDelay { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// ADR-0001 (2026-09-10) - the two-phase free digest. FreeDigest:Schedule:TimeZone, a Windows/
+    /// ICU timezone id (default "India Standard Time" - confirmed IST per the product decision).
+    /// </summary>
+    public TimeZoneInfo ScheduleTimeZone { get; init; } = TimeZoneInfo.Local;
+
+    /// <summary>FreeDigest:Schedule:GenerateDay. The day the two-phase system generates artifacts. Default Sunday.</summary>
+    public DayOfWeek GenerateDay { get; init; } = DayOfWeek.Sunday;
+
+    /// <summary>FreeDigest:Schedule:SendDay. The day the two-phase system actually mails recipients. Default Monday.</summary>
+    public DayOfWeek SendDay { get; init; } = DayOfWeek.Monday;
+
+    /// <summary>FreeDigest:Schedule:SendHourLocal. Hour, in ScheduleTimeZone, the send window opens. Default 9 (9am).</summary>
+    public int SendHourLocal { get; init; } = 9;
+
+    /// <summary>
+    /// FreeDigest:Artifact:FreshnessDays. An artifact generated more than this many days ago is
+    /// never dispatched, even if found - a stale digest is a wrong digest (sql/29). Default 3:
+    /// generous enough to survive a Sunday generation run that finishes late, tight enough that a
+    /// forgotten artifact from three weeks ago can never suddenly get mailed.
+    /// </summary>
+    public int ArtifactFreshnessDays { get; init; } = 3;
+
+    /// <summary>FreeDigest:Artifact:RetentionDays. How long a dispatched (or never-dispatched) artifact's blob + index row survive before the purge sweep deletes them. ADR-0001 D7 - a placeholder pending a DPO-confirmed retention period.</summary>
+    public int ArtifactRetentionDays { get; init; } = 90;
+
+    /// <summary>Email:RateLimit:RequestsPerSecond. The shared ElasticEmail account is used by other services too - this is this project's good-citizen share, not a technical ceiling.</summary>
+    public int EmailRateLimitPerSecond { get; init; } = 5;
+
+    /// <summary>Email:RateLimit:AcquireTimeoutSeconds. A wedged/overwhelmed rate limiter must surface as a failed send, not hang an activity forever.</summary>
+    public TimeSpan EmailRateLimitAcquireTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>The address a digest should actually be delivered to, honouring <see cref="RecipientOverride"/>.</summary>
     public string ResolveDeliveryAddress(string resolvedRecipientEmail) =>

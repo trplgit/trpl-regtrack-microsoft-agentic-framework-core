@@ -13,9 +13,13 @@ public sealed record FreeDigestTenant(int CustomerId, string TenantName);
 /// <summary>
 /// One person who should receive the digest for a tenant.
 ///
-/// The enumeration predicate MIRRORS the one usp_Insights_FreeDigestGate counts with
-/// (ProductID = 18, UserCustomerMapping.IsActive = 0, User.IsDeleted = 0). If the two ever
-/// diverge, the gate's RecipientCount stops agreeing with the list and EXIT_NO_RECIPIENTS
-/// becomes unreliable - two sources of truth for the same question.
+/// Sourced from dbo.tvfInsightsManagementUsers, NOT UserCustomerMapping - that table's
+/// ProductID/IsActive columns cannot answer "who is a recipient" in production (all 65 rows
+/// carry ProductID = NULL, IsActive = 1; see sql/01). The gate (usp_Insights_FreeDigestGate)
+/// uses the same function, but this list is narrower and authoritative: the gate is an
+/// upper-bound cost pre-filter (no email/suppression check on its own count as of the fix
+/// that made both subtract opt-outs, 2026-09-10), while this list also excludes blank emails.
+/// The two counts CAN legitimately disagree - see SqlFreeDigestRepository.GetRecipientsAsync's
+/// doc comment for why that is safe rather than a bug to chase.
 /// </summary>
 public sealed record FreeDigestRecipient(long UserId, string Email, string? Name);

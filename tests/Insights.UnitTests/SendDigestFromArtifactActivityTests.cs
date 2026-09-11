@@ -12,12 +12,11 @@ namespace Insights.UnitTests;
 /// <summary>
 /// The send activity's two outcomes: claim won, so deliver; claim lost, so do not.
 ///
-/// These exist because a missing pair of braces once made the "already sent" return
-/// unconditional - the claim succeeded, the row was written, and the method returned as though
-/// somebody else had it. Valid C#, no compiler warning, and invisible in the orchestration output
-/// beyond "Sent: 0". A test at this level is the only thing that catches it.
+/// Ported from the legacy SendDigestActivityTests (SendDigestActivity was removed once no
+/// FreeDigestOrchestrator instances remained in-flight in the task hub) - the claim shape is
+/// identical, so the same regression coverage applies here.
 /// </summary>
-public sealed class SendDigestActivityTests
+public sealed class SendDigestFromArtifactActivityTests
 {
     private static FreeDigestSettings Settings() => new()
     {
@@ -29,12 +28,13 @@ public sealed class SendDigestActivityTests
         UnsubscribeSigningKey = "test-key",
     };
 
-    private static SendDigestInput Input() => new(
+    private static SendDigestFromArtifactInput Input() => new(
         TenantId: 23, TenantName: "ABC Training", UserId: 357,
         Email: "someone@example.com", Name: "Someone",
-        Body: "Your compliance calendar.", Source: "Llm", WeekEnding: "2026-08-23");
+        ArtifactHtml: $"<html><body>Your compliance calendar. {FreeDigestEmailRenderer.UnsubscribeSentinel}</body></html>",
+        WeekEnding: "2026-08-23");
 
-    private static (SendDigestActivity Activity, Mock<IFreeDigestRepository> Repo, Mock<IEmailSender> Sender) Build(bool claimWon)
+    private static (SendDigestFromArtifactActivity Activity, Mock<IFreeDigestRepository> Repo, Mock<IEmailSender> Sender) Build(bool claimWon)
     {
         var repo = new Mock<IFreeDigestRepository>();
         repo.Setup(r => r.TryClaimSendAsync(It.IsAny<int>(), It.IsAny<long>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
@@ -44,8 +44,7 @@ public sealed class SendDigestActivityTests
         sender.Setup(s => s.SendAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EmailSendResult("ElasticEmail"));
 
-        var activity = new SendDigestActivity(
-            repo.Object, new FreeDigestEmailRenderer("templates"), sender.Object, Settings(), new FreeDigestMetrics());
+        var activity = new SendDigestFromArtifactActivity(repo.Object, sender.Object, Settings(), new FreeDigestMetrics());
 
         return (activity, repo, sender);
     }
@@ -61,7 +60,7 @@ public sealed class SendDigestActivityTests
         Assert.True(result.Sent);
         Assert.Equal("ElasticEmail", result.ProviderUsed);
         sender.Verify(s => s.SendAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()), Times.Once);
-        repo.Verify(r => r.RecordOutcomeAsync(23, 357, It.IsAny<DateOnly>(), "sent", "llm", "ElasticEmail",
+        repo.Verify(r => r.RecordOutcomeAsync(23, 357, It.IsAny<DateOnly>(), "sent", null, "ElasticEmail",
             It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 

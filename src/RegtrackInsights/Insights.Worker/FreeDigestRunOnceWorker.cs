@@ -11,16 +11,22 @@ namespace Insights.Worker;
 /// <summary>
 /// On-demand runner for one tenant's digest, mirroring InsightsRunOnceWorker's shape.
 ///
-/// Enqueues the SAME orchestration the scheduler enqueues on a tenant's anchor day - there is no
-/// second code path. This exists only because the scheduler fires on the tenant's own day, and
-/// waiting until Tuesday to test tenant 23 is not a workflow.
+/// Enqueues the SAME orchestrations the scheduler enqueues - there is no second code path. This
+/// exists only because the scheduler fires on its own day/hour, and waiting until Monday 9am IST
+/// to test tenant 23's send is not a workflow.
 ///
 /// Does nothing unless FreeDigest:RunOnce=true, so a bare `dotnet run` starts an idle host:
-///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23
+///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23 --FreeDigest:Phase=generate
+///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23 --FreeDigest:Phase=send
+///
+/// [ADDED - ADR-0001, 2026-09-10] --FreeDigest:Phase selects which half of the two-phase digest to
+/// run: "generate" (default) enqueues FreeDigestGenerateOrchestrator, "send" enqueues
+/// FreeDigestSendOrchestrator.
 /// </summary>
 public sealed class FreeDigestRunOnceWorker(
     IServiceProvider services,
     IConfiguration configuration,
+    FreeDigestSettings settings,
     IHostApplicationLifetime lifetime,
     ILogger<FreeDigestRunOnceWorker> logger) : BackgroundService
 {
@@ -45,19 +51,49 @@ public sealed class FreeDigestRunOnceWorker(
                 return;
             }
 
+            var phase = configuration["FreeDigest:Phase"] ?? "generate";
+
+            /*  [ADDED, testing only] --FreeDigest:AsOf lets a manual GENERATE run target a week
+                that has not already claimed this tenant's recipients (dbo.InsightsFreeDigestLog is
+                shared across legacy/generate/send - a recipient already sent to this week via ANY
+                path correctly blocks a re-generate for the SAME week). SEND ignores this - it is
+                driven entirely by which artifact rows exist, never by a caller-supplied clock.    */
+            var asOf = configuration["FreeDigest:AsOf"];
+
             var client = scope.ServiceProvider.GetRequiredService<TaskHubClient>();
 
-            /*  Keyed on (tenant, week), exactly as the scheduler keys it. Running this twice in one
-                week attaches to - or is refused by - the existing instance rather than starting a
-                parallel one, which is the same one-active-run-per-key rule 4.5 states for paid.  */
-            var weekEnding = DigestWeek.EndingFor(DateTime.UtcNow).ToString("yyyy-MM-dd");
-            var instanceId = $"freedigest-{tenantId}-{weekEnding}";
+            /*  Keyed on (phase, tenant, week), exactly as the scheduler keys it. Running this
+                twice in one week attaches to - or is refused by - the existing instance rather
+                than starting a parallel one, the same one-active-run-per-key rule 4.5 states for
+                paid.                                                                            */
+            var weekEnding = DigestWeek.EndingFor(string.IsNullOrWhiteSpace(asOf) ? DateTime.UtcNow : DateTime.Parse(asOf)).ToString("yyyy-MM-dd");
 
-            logger.LogInformation("Enqueuing FreeDigestOrchestrator for tenant {TenantId} as {InstanceId}.", tenantId, instanceId);
+            OrchestrationInstance instance;
+            string instanceId;
 
-            var instance = await client.CreateOrchestrationInstanceAsync(
-                FreeDigestOrchestrator.Name, FreeDigestOrchestrator.Version, instanceId,
-                new FreeDigestOrchestrationInput(tenantId, null));
+            switch (phase.ToLowerInvariant())
+            {
+                case "generate":
+                    instanceId = $"freedigest-gen-{tenantId}-{weekEnding}";
+                    logger.LogInformation("Enqueuing FreeDigestGenerateOrchestrator for tenant {TenantId} as {InstanceId}.", tenantId, instanceId);
+                    instance = await client.CreateOrchestrationInstanceAsync(
+                        FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, instanceId,
+                        new FreeDigestGenerateOrchestrationInput(tenantId, asOf));
+                    break;
+
+                case "send":
+                    instanceId = $"freedigest-send-{tenantId}-{weekEnding}";
+                    logger.LogInformation("Enqueuing FreeDigestSendOrchestrator for tenant {TenantId} as {InstanceId}.", tenantId, instanceId);
+                    instance = await client.CreateOrchestrationInstanceAsync(
+                        FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, instanceId,
+                        new FreeDigestSendOrchestrationInput(tenantId, settings.ArtifactFreshnessDays));
+                    break;
+
+                default:
+                    logger.LogError("Unknown FreeDigest:Phase '{Phase}'. Expected generate or send.", phase);
+                    Environment.ExitCode = 1;
+                    return;
+            }
 
             var state = await client.WaitForOrchestrationAsync(instance, TimeSpan.FromMinutes(30), stoppingToken);
 

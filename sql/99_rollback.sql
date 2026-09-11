@@ -58,6 +58,16 @@ IF OBJECT_ID('dbo.usp_Insights_Dimension_Risk',        'P') IS NOT NULL DROP PRO
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Entity',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Entity;
 GO
 
+/*   Free-tier digest artifact procedures (sql/29)  */
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactDelete',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactDelete;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactsForPurge',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactsForPurge;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactMarkDispatched', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactMarkDispatched;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactsForDispatch',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactsForDispatch;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactRelease',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactRelease;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactComplete',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactComplete;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactClaim',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactClaim;
+GO
+
 /*   Free-tier send log + suppression procedures (sql/15, 16)  */
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestReleaseClaim',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestReleaseClaim;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestRecordOutcome', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestRecordOutcome;
@@ -94,6 +104,10 @@ IF OBJECT_ID('dbo.InsightsObjectBackup_20260904','U') IS NOT NULL DROP TABLE dbo
 IF OBJECT_ID('dbo.InsightsTenantTokenUsage',  'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;   -- created by the .NET layer's cost instrumentation; DDL not in this repo
 IF OBJECT_ID('dbo.InsightsFreeDigestLog',     'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestLog;
 IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.InsightsDigestSuppression;
+/*  sql/29 - NOTE: dropping this table discards every artifact index row.
+    Delete the corresponding "insights-digests" blob container contents
+    separately - this script only ever touches SQL, never blob storage.    */
+IF OBJECT_ID('dbo.InsightsFreeDigestArtifact', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestArtifact;
 
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;

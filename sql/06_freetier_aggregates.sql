@@ -84,13 +84,20 @@ BEGIN
             users, per BA ruling. Previously counted from UserCustomerMapping,
             where every production row has ProductID = NULL and IsActive = 1 -
             so this returned ZERO for every tenant and the digest could never
-            send. See sql/01 for the evidence.                                */
+            send. See sql/01 for the evidence.
+
+            [CORRECTED 2026-09-10] Now subtracts durable opt-outs (sql/16),
+            which did not exist when the TODO below was written. Opt-out
+            SURVIVES tier changes (Sec.5.4) - an upgrade/downgrade cycle must
+            not silently re-subscribe someone who asked to stop. Without this,
+            the gate's RecipientCount could show PROCEED with N recipients
+            while GetRecipientsAsync (the actual send list, which already
+            filters suppression) finds fewer or zero - a cheap query wasted on
+            a tenant that was never going to be mailed, not a wrong send.    */
         SELECT @recips = COUNT(DISTINCT m.UserID)
-        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m;
-        -- TODO: subtract per-recipient opt-outs once that store exists (Sec.5.4).
-        --       Opt-out is DURABLE and must SURVIVE tier changes - otherwise an
-        --       upgrade/downgrade cycle silently re-subscribes someone who asked
-        --       to stop.
+        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m
+        WHERE NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression s
+                          WHERE s.CustomerID = @CustomerID AND s.UserID = m.UserID);
 
         IF @recips = 0
             SELECT @decision = 'EXIT_NO_RECIPIENTS',

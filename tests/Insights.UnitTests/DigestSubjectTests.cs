@@ -16,8 +16,8 @@ public sealed class DigestSubjectTests
     [Fact]
     public void Subject_DiffersPerTenant_ForTheSameUserAndWeek()
     {
-        var a = SendDigestActivity.BuildSubject("Acme Holdings", Week);
-        var b = SendDigestActivity.BuildSubject("Beta Foods", Week);
+        var a = SendDigestFromArtifactActivity.BuildSubject("Acme Holdings", Week);
+        var b = SendDigestFromArtifactActivity.BuildSubject("Beta Foods", Week);
 
         Assert.NotEqual(a, b);
         Assert.Contains("Acme Holdings", a);
@@ -27,7 +27,7 @@ public sealed class DigestSubjectTests
     [Fact]
     public void Subject_CarriesTheWeekEnding()
     {
-        var subject = SendDigestActivity.BuildSubject("Acme Holdings", Week);
+        var subject = SendDigestFromArtifactActivity.BuildSubject("Acme Holdings", Week);
 
         Assert.Contains("24 Aug 2025", subject);
         Assert.StartsWith("RegTrack Insights: Acme Holdings", subject);
@@ -43,7 +43,7 @@ public sealed class DigestSubjectTests
     [InlineData("   ")]
     public void Subject_FallsBackCleanly_WhenTenantNameIsMissing(string? tenantName)
     {
-        var subject = SendDigestActivity.BuildSubject(tenantName, Week);
+        var subject = SendDigestFromArtifactActivity.BuildSubject(tenantName, Week);
 
         Assert.Equal("RegTrack Insights - week ending 24 Aug 2025", subject);
         Assert.DoesNotContain(":", subject);
@@ -52,7 +52,7 @@ public sealed class DigestSubjectTests
     [Fact]
     public void Subject_TrimsSurroundingWhitespaceInTheTenantName()
     {
-        var subject = SendDigestActivity.BuildSubject("  Acme Holdings  ", Week);
+        var subject = SendDigestFromArtifactActivity.BuildSubject("  Acme Holdings  ", Week);
 
         Assert.Equal("RegTrack Insights: Acme Holdings - week ending 24 Aug 2025", subject);
     }

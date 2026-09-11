@@ -132,9 +132,19 @@ public static class WorkerRegistration
         RegisterReportsDbContext(services, configuration);
 
         // Free digest lane (design doc 10.2) - resolve -> compose per scope group -> send per recipient.
+        // Shared by both GENERATE and SEND below.
         services.AddTransient<ResolveDigestRecipientsActivity>();
         services.AddTransient<ComposeDigestActivity>();
-        services.AddTransient<SendDigestActivity>();
+
+        // ADR-0001 (2026-09-10) - the two-phase digest. GENERATE (Sunday): claim -> compose ->
+        // persist. SEND (Monday): re-gate/re-resolve -> fetch -> send from the stored artifact.
+        services.AddTransient<ClaimDigestArtifactActivity>();
+        services.AddTransient<PersistDigestArtifactActivity>();
+        services.AddTransient<ReleaseDigestArtifactActivity>();
+        services.AddTransient<ResolveDigestDispatchActivity>();
+        services.AddTransient<FetchDigestArtifactActivity>();
+        services.AddTransient<SendDigestFromArtifactActivity>();
+        services.AddTransient<MarkDigestArtifactDispatchedActivity>();
 
         services.AddSingleton(sp =>
         {
@@ -151,11 +161,12 @@ public static class WorkerRegistration
             worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
                 InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)));
 
-            // Same explicit Name/Version treatment - FreeDigestOrchestrator likewise has no constructor
-            // dependencies, and these strings must match what the scheduler passes to
-            // CreateOrchestrationInstanceAsync.
+            // ADR-0001 (2026-09-10) - the two-phase digest's orchestrations. Same explicit
+            // Name/Version treatment as every other orchestration registered above.
             worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestOrchestrator.Name, FreeDigestOrchestrator.Version, typeof(FreeDigestOrchestrator)));
+                FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)));
+            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
+                FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)));
 
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
@@ -171,7 +182,10 @@ public static class WorkerRegistration
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
-                ActivityCreator<SendDigestActivity>(sp));
+                ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
+                ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),
+                ActivityCreator<FetchDigestArtifactActivity>(sp), ActivityCreator<SendDigestFromArtifactActivity>(sp),
+                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp));
 
             return worker;
         });
@@ -285,7 +299,7 @@ public static class WorkerRegistration
     /// queue-driven, the API host is public - CLAUDE.md 6), so the sharing mostly matters for this
     /// repo's own combined test/demo hosts, but it costs nothing either way.
     /// </summary>
-    private static void RegisterReportCodec(IServiceCollection services, IConfiguration configuration)
+    internal static void RegisterReportCodec(IServiceCollection services, IConfiguration configuration)
     {
         var regTrackConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
         var blobConnectionString = Require(configuration, "Azure:BlobConnectionString");
