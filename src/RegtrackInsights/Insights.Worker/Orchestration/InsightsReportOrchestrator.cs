@@ -273,8 +273,38 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         after node 8g. Once the render agent only authors the Tab 5 shell it stopped emitting the
         Tab 5 style block, so the injected `.di-fwd` bucket chart rendered with zero height. The
         CSS is 100% static - injected markup needs injected CSS, same as the age bar (8f) and
-        Coverage. New call-sequence node.                                                          */
-    public const string Version = "3.5";
+        Coverage. New call-sequence node.
+
+        Bumped 3.5 -> 3.6: "compliance_health" (dynamic LLM composition - ComposeActivity /
+        ReflectOnCompositionActivity) removed per explicit product direction 2026-09-11 -
+        fixed_holistic and dimension_selection are the only two report types now. Any OTHER
+        ReportType now throws OrchestrationRefusedException("UNSUPPORTED_REPORT_TYPE")
+        immediately, instead of scheduling ComposeActivity/ReflectOnCompositionActivity (a real
+        call-sequence change for that branch). [VERIFY BEFORE DEPLOY] every in-flight instance
+        that could have taken this branch already had a DIFFERENT guaranteed failure ahead of it
+        regardless - 05_report_html.md (compliance_health's own render prompt) was deleted
+        2026-09-01, so RenderHtmlActivity has had no agent registered for any ReportType outside
+        fixed_holistic/dimension_selection since then; no in-flight compliance_health instance
+        could have completed successfully after that date. Check for one anyway before deploying -
+        this bump makes its failure immediate (and free) instead of after spending real tokens.
+
+        [TRIED AND REVERTED SAME DAY] briefly widened the Entity redirect below from Entity-ALONE
+        to Entity-ANYWHERE (any RequestedDimensions list containing Entity, dropping every other
+        requested dimension) - reverted before shipping: that silently discarded the other picks,
+        never the actual intent. No version bump needed for the revert; 3.6's own call sequence for
+        every case is unchanged from what it always was.
+
+        [TRIED AND REVERTED SAME DAY] then tried a "stitch Entity into the same document" design
+        (ComputeScoreActivity + full fetch whenever Entity was combined with other dimensions, a
+        new render agent nesting a fixed_holistic mini-dashboard for Entity's block alongside plain
+        sections for the rest) - reverted before shipping per final product direction: a real
+        "Generate" click naming several dimensions produces one INDEPENDENT report PER dimension,
+        not one combined document. That fan-out happens in RunEndpoints.cs, BEFORE anything is
+        enqueued - every real "dimension_selection" orchestration instance now only ever has 0 or 1
+        requested dimensions, same as this file's pre-existing Entity-ALONE redirect already
+        assumed. No version bump needed for this revert either; nothing built on the interim design
+        ever shipped. */
+    public const string Version = "3.6";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
     // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
@@ -305,6 +335,13 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         // consistently, so this single rewrite is the whole fix - no other line needs to know
         // Entity was ever mentioned. Sambram never built a per-dimension Entity template for this
         // reason - the real product doesn't have one to model it on.
+        //
+        // [TRIED AND REVERTED SAME DAY, 2026-09-11] briefly widened to "Entity anywhere in the
+        // list redirects the WHOLE request, dropping every other requested dimension" - reverted:
+        // that silently discarded the other picks. Back to Entity-ALONE-only until a real design
+        // for "Entity renders as its own fixed_holistic-style section, others keep their normal
+        // dimension_selection sections, in ONE combined document" exists - a bigger change than
+        // this single-ReportType-per-run rewrite can express.
         if (input.ReportType == DimensionSelectionComposition.ReportType
             && input.RequestedDimensions is ["Entity"])
         {
@@ -408,24 +445,21 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             }
             else
             {
-                var composeResult = await context.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0",
-                    new ComposeInput(dimensions.DimensionResults, gathered.TenantShape, input.ReportType, null, null, input.Priority));
-                ChargeAndCheck(composeResult.TotalTokens);
-                plan = composeResult.Plan;
-
-                for (var i = 0; i < maxReflectionIterations; i++)
-                {
-                    var reflection = await context.ScheduleTask<ReflectOnCompositionOutput>(typeof(ReflectOnCompositionActivity).Name, "1.0",
-                        new ReflectOnCompositionInput(plan, dimensions.Assertions, dimensions.Findings, gathered.TenantShape, input.Priority));
-                    ChargeAndCheck(reflection.TotalTokens);
-                    if (reflection.Result.Verdict == ReflectionVerdict.Approve)
-                        break;
-
-                    var revised = await context.ScheduleTask<ComposeOutput>(typeof(ComposeActivity).Name, "1.0",
-                        new ComposeInput(dimensions.DimensionResults, gathered.TenantShape, input.ReportType, plan, reflection.Result.Issues, input.Priority));
-                    ChargeAndCheck(revised.TotalTokens);
-                    plan = revised.Plan;
-                }
+                // [REMOVED 2026-09-11] "compliance_health" (the original dynamic, LLM-composed
+                // path - ComposeActivity/ReflectOnCompositionActivity, 01_composition.md/
+                // 02_composition_reflection.md) is gone: fixed_holistic and dimension_selection
+                // are the only two report types now, per explicit product direction. This was
+                // ALREADY a guaranteed-to-fail dead end in practice before this change -
+                // 05_report_html.md (compliance_health's own render prompt) was deleted
+                // 2026-09-01, so RenderHtmlActivity has had no agent registered for any ReportType
+                // outside those two since then (see its own doc comment); a compliance_health
+                // request would spend real Compose/Reflect tokens and THEN throw
+                // "No render agent registered". Failing here, before spending any tokens, is
+                // CLAUDE.md non-negotiable #2 (fail closed, fail loud) applied to the same gap.
+                throw new OrchestrationRefusedException(
+                    "UNSUPPORTED_REPORT_TYPE",
+                    "This report type is not supported.",
+                    internalDiagnostics: [$"ReportType '{input.ReportType}' is neither '{FixedHolisticComposition.ReportType}' nor '{DimensionSelectionComposition.ReportType}' - dynamic composition (compliance_health) was removed 2026-09-11."]);
             }
 
             SetStage(InsightsRunStage.Narrating);

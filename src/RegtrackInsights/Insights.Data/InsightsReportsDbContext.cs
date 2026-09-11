@@ -14,6 +14,9 @@ public sealed class InsightsReportsDbContext(DbContextOptions<InsightsReportsDbC
 {
     public DbSet<GeneratedReport> GeneratedReports => Set<GeneratedReport>();
 
+    /// <summary>sql/30_report_request.sql - the fan-out reqId -> runId grouping (see IReportRequestRepository).</summary>
+    public DbSet<ReportRequestUnit> ReportRequestUnits => Set<ReportRequestUnit>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<GeneratedReport>(entity =>
@@ -23,6 +26,13 @@ public sealed class InsightsReportsDbContext(DbContextOptions<InsightsReportsDbC
             entity.Property(r => r.Id).HasDefaultValueSql("NEWID()");
             entity.Property(r => r.GeneratedAtUtc).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.Property(r => r.KeyVaultObjectSalt).HasDefaultValue("0");
+        });
+
+        modelBuilder.Entity<ReportRequestUnit>(entity =>
+        {
+            entity.ToTable("InsightsReportRequest");
+            entity.HasKey(u => new { u.ReqId, u.RunId });
+            entity.Property(u => u.CreatedAtUtc).HasDefaultValueSql("SYSUTCDATETIME()");
         });
     }
 }

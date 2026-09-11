@@ -10,14 +10,17 @@
     "bearer": [{ "key": "token", "value": "{{bearerToken}}", "type": "string" }]
   },
   "variable": [
-    { "key": "baseUrl", "value": "https://localhost:5001", "type": "string" }
+    { "key": "baseUrl", "value": "http://localhost:5199", "type": "string" }
   ],
   "item": [
     {
       "name": "1. List eligible tenants",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "X-Insights-UserId", "value": "{{devUserId}}", "description": "ONLY needed against tools/Insights.ApiDevHost (local dev harness) - stands in for the real auth token, which is checked by the real RegTrack API instead once these endpoints land there." }
+        ],
         "url": { "raw": "{{baseUrl}}/api/insights/tenants", "host": ["{{baseUrl}}"], "path": ["api", "insights", "tenants"] },
         "description": "No params. 200 with { tenants: [...] }. Empty array is a 200, not an error (secure-deny state). tier: pro|basic. scopeClass: tenant_wide|functional|entity_scoped."
       },
@@ -53,19 +56,20 @@
       }
     },
     {
-      "name": "3. Generate a report",
+      "name": "3. Generate a report (fixed_holistic, single report)",
       "request": {
         "method": "POST",
         "header": [
           { "key": "Content-Type", "value": "application/json" },
-          { "key": "Accept", "value": "application/json" }
+          { "key": "Accept", "value": "application/json" },
+          { "key": "X-Insights-UserId", "value": "{{devUserId}}", "description": "Dev harness only - see note on request 1." }
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"tenantId\": {{tenantId}},\n  \"reportType\": \"{{reportType}}\",\n  \"scope\": { \"type\": \"tenant\" },\n  \"period\": \"{{period}}\",\n  \"requestedDimensions\": null\n}"
+          "raw": "{\n  \"tenantId\": {{tenantId}},\n  \"reportType\": \"fixed_holistic\",\n  \"scope\": { \"type\": \"tenant\" },\n  \"period\": \"{{period}}\",\n  \"requestedDimensions\": null\n}"
         },
         "url": { "raw": "{{baseUrl}}/api/insights/reports", "host": ["{{baseUrl}}"], "path": ["api", "insights", "reports"] },
-        "description": "reportType: compliance_health | fixed_holistic | dimension_selection.\nscope: { \"type\": \"tenant\" } OR { \"type\": \"entity\", \"entityId\": 92442 }.\nrequestedDimensions: ONLY for dimension_selection - e.g. [\"Location\",\"Nature\",\"Act\"]. One request with N dimensions = one run = one report = one file. null for every other type.\n\n202 -> { runId, status: \"queued\", streamUrl }.  409 COOLDOWN_ACTIVE + nextAvailableUtc.  403 TENANT_NOT_ELIGIBLE / SCOPE_DENIED."
+        "description": "reportType: fixed_holistic | dimension_selection.\nscope: { \"type\": \"tenant\" } OR { \"type\": \"entity\", \"entityId\": 92442 }.\nrequestedDimensions: null for fixed_holistic (this example).\n\n[2026-09-11] Response is ALWAYS an array, even for this single-report request:\n202 -> { \"reports\": [ { dimension: null, reportType, status: \"queued\", runId, streamUrl } ] }.\n400 NO_DIMENSIONS_REQUESTED (dimension_selection with an empty list).  403 TENANT_NOT_ELIGIBLE / SCOPE_DENIED (whole-request refusals - nothing generated)."
       },
       "event": [
         {
@@ -75,33 +79,51 @@
             "exec": [
               "pm.test('202 Accepted', () => pm.response.code === 202);",
               "const b = pm.response.json();",
-              "if (b.runId) { pm.collectionVariables.set('runId', b.runId); console.log('runId ->', b.runId); }"
+              "const first = (b.reports || [])[0];",
+              "if (first && first.runId) { pm.collectionVariables.set('runId', first.runId); console.log('runId ->', first.runId); }"
             ]
           }
         }
       ]
     },
     {
-      "name": "3b. Generate - dimension_selection (multi-dimension)",
+      "name": "3b. Generate - dimension_selection (fans out into N independent reports)",
       "request": {
         "method": "POST",
         "header": [
           { "key": "Content-Type", "value": "application/json" },
-          { "key": "Accept", "value": "application/json" }
+          { "key": "Accept", "value": "application/json" },
+          { "key": "X-Insights-UserId", "value": "{{devUserId}}", "description": "Dev harness only - see note on request 1." }
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"tenantId\": {{tenantId}},\n  \"reportType\": \"dimension_selection\",\n  \"scope\": { \"type\": \"tenant\" },\n  \"period\": \"{{period}}\",\n  \"requestedDimensions\": [\"Location\", \"Nature\", \"Act\"]\n}"
+          "raw": "{\n  \"tenantId\": {{tenantId}},\n  \"reportType\": \"dimension_selection\",\n  \"scope\": { \"type\": \"tenant\" },\n  \"period\": \"{{period}}\",\n  \"requestedDimensions\": [\"Location\", \"Entity\", \"Act\"]\n}"
         },
         "url": { "raw": "{{baseUrl}}/api/insights/reports", "host": ["{{baseUrl}}"], "path": ["api", "insights", "reports"] },
-        "description": "3 dimensions in ONE request -> ONE run, ONE report, ONE HTML file with 3 sections. Not 3 runs."
-      }
+        "description": "[PRODUCT DECISION 2026-09-11] 3 dimensions in ONE request -> 3 INDEPENDENT reports, not one combined document. Each becomes its own orchestration run, own cooldown key, own report. \"Entity\" here still redirects that ONE unit to a full fixed_holistic report - Location/Act are unaffected plain dimension_selection reports.\n\n202 -> { \"reports\": [\n  { dimension: \"Location\", reportType: \"dimension_selection\", status: \"queued\", runId, streamUrl },\n  { dimension: \"Entity\",   reportType: \"fixed_holistic\",      status: \"queued\", runId, streamUrl },\n  { dimension: \"Act\",      reportType: \"dimension_selection\", status: \"cooldown\", nextAvailableUtc }\n] }\n\nBest-effort: one dimension on cooldown never blocks the others. Use dimension/reportType per entry to map a result back to the checkbox the user ticked."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202 Accepted', () => pm.response.code === 202);",
+              "const b = pm.response.json();",
+              "(b.reports || []).forEach(r => console.log(r.dimension, '->', r.reportType, r.status, r.runId || r.nextAvailableUtc));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "4. Run progress (SSE stream)",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Accept", "value": "text/event-stream" }],
+        "header": [
+          { "key": "Accept", "value": "text/event-stream" },
+          { "key": "X-Insights-UserId", "value": "{{devUserId}}", "description": "Dev harness only - see note on request 1." }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/insights/runs/{{runId}}/stream",
           "host": ["{{baseUrl}}"],
@@ -114,7 +136,10 @@
       "name": "5. Open a report (content)",
       "request": {
         "method": "GET",
-        "header": [{ "key": "Accept", "value": "application/json" }],
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "X-Insights-UserId", "value": "{{devUserId}}", "description": "Dev harness only - see note on request 1." }
+        ],
         "url": {
           "raw": "{{baseUrl}}/api/insights/reports/{{reportId}}/content?tenantId={{tenantId}}",
           "host": ["{{baseUrl}}"],

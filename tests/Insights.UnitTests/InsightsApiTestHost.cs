@@ -27,7 +27,8 @@ internal static class InsightsApiTestHost
         IScopeRepository? scope = null,
         IInsightsRunEnqueuer? enqueuer = null,
         IReportContentService? content = null,
-        ICooldownRepository? cooldown = null)
+        ICooldownRepository? cooldown = null,
+        IReportRequestRepository? requests = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -47,6 +48,7 @@ internal static class InsightsApiTestHost
                     services.AddSingleton(content);
                 if (cooldown is not null)
                     services.AddSingleton(cooldown);
+                services.AddSingleton(requests ?? new FakeReportRequestRepository());
             });
             web.Configure(app =>
             {
@@ -92,14 +94,29 @@ internal sealed class FakeTenantDirectory(params EligibleTenant[] eligible) : IT
     }
 }
 
-internal sealed class FakeRunStatusReader(InsightsRunStatus? status) : IRunStatusReader
+internal sealed class FakeRunStatusReader : IRunStatusReader
 {
+    private readonly Func<string, InsightsRunStatus?> _statusForRunId;
+
+    public FakeRunStatusReader(InsightsRunStatus? status) => _statusForRunId = _ => status;
+
+    private FakeRunStatusReader(Func<string, InsightsRunStatus?> statusForRunId) => _statusForRunId = statusForRunId;
+
+    /// <summary>
+    /// Per-runId responses - needed to test the fan-out reqId stream endpoint's aggregation, where
+    /// several runIds under one reqId can each be in a DIFFERENT state at the same poll tick. A
+    /// named factory, not a public constructor overload: `new FakeRunStatusReader(null)` (every
+    /// existing single-status test) would be ambiguous between InsightsRunStatus? and
+    /// Func&lt;string, InsightsRunStatus?&gt; - both accept a null literal equally well.
+    /// </summary>
+    public static FakeRunStatusReader PerRunId(Func<string, InsightsRunStatus?> statusForRunId) => new(statusForRunId);
+
     public int CallCount { get; private set; }
 
     public Task<InsightsRunStatus?> GetStatusAsync(string runId, CancellationToken cancellationToken = default)
     {
         CallCount++;
-        return Task.FromResult(status);
+        return Task.FromResult(_statusForRunId(runId));
     }
 }
 
@@ -139,18 +156,79 @@ internal sealed class FakeReportContentService(ReportContentResult? result) : IR
     }
 }
 
-/// <summary>Answers with a fixed CooldownResult, and RECORDS what it was asked - same reasoning as the other fakes.</summary>
-internal sealed class FakeCooldownRepository(CooldownResult result) : ICooldownRepository
+/// <summary>
+/// Answers with a fixed CooldownResult (or, via the second constructor, a per-call result keyed
+/// on the effective period - needed to test the fan-out's best-effort behaviour, where different
+/// dimensions in the SAME request can land open or closed independently), and RECORDS what it was
+/// asked - same reasoning as the other fakes.
+///
+/// [BUG FOUND LIVE, 2026-09-11] Also DETECTS re-entrancy, the same shape as EF Core's real
+/// ConcurrencyDetector - production's ICooldownRepository (EfCooldownRepository) is EF-backed and
+/// registered scoped, so RunEndpoints.cs's fan-out sharing ONE instance across several dimensions
+/// in the same request is exactly production's shape too. The original fan-out ran those calls
+/// concurrently (Task.WhenAll), which threw live against a real DbContext ("A second operation was
+/// started on this context instance before a previous operation completed") the first time a real
+/// caller tried 3 dimensions in Postman. This fake reproduces that failure mode so a future
+/// regression (reintroducing concurrent calls) fails a fast unit test instead of only a real request.
+/// </summary>
+internal sealed class FakeCooldownRepository : ICooldownRepository
 {
+    private readonly Func<string, CooldownResult> _resultForPeriod;
+    private int _inFlight;
+
+    public FakeCooldownRepository(CooldownResult result) : this(_ => result) { }
+
+    public FakeCooldownRepository(Func<string, CooldownResult> resultForPeriod) => _resultForPeriod = resultForPeriod;
+
     public List<(int CustomerId, string ReportType, string ScopeDescriptor, string Period)> Calls { get; } = [];
 
-    public Task<CooldownResult> CheckAsync(
+    public async Task<CooldownResult> CheckAsync(
         int customerId, string reportType, string scopeDescriptor, string period,
         CancellationToken cancellationToken = default)
     {
-        Calls.Add((customerId, reportType, scopeDescriptor, period));
-        return Task.FromResult(result);
+        if (Interlocked.CompareExchange(ref _inFlight, 1, 0) != 0)
+        {
+            throw new InvalidOperationException(
+                "A second operation was started on this context instance before a previous operation completed " +
+                "(FakeCooldownRepository simulating EF Core's real ConcurrencyDetector - see this class's own doc comment).");
+        }
+
+        try
+        {
+            Calls.Add((customerId, reportType, scopeDescriptor, period));
+            // Real room for a concurrency bug to manifest - a synchronous fake (no await point)
+            // would never actually overlap two "concurrent" calls even if the caller used
+            // Task.WhenAll, since nothing yields control between them.
+            await Task.Delay(5, cancellationToken);
+            return _resultForPeriod(period);
+        }
+        finally
+        {
+            Volatile.Write(ref _inFlight, 0);
+        }
     }
+}
+
+/// <summary>
+/// In-memory stand-in for the fan-out reqId grouping (sql/30_report_request.sql) - records every
+/// SaveAsync call and answers GetRunIdsAsync from what was saved, never touching a real DbContext.
+/// </summary>
+internal sealed class FakeReportRequestRepository : IReportRequestRepository
+{
+    public List<(Guid ReqId, IReadOnlyList<string> RunIds)> SaveCalls { get; } = [];
+    private readonly Dictionary<Guid, List<string>> _byReqId = [];
+
+    public Task SaveAsync(Guid reqId, IReadOnlyList<string> runIds, CancellationToken cancellationToken = default)
+    {
+        SaveCalls.Add((reqId, runIds));
+        if (!_byReqId.TryGetValue(reqId, out var existing))
+            _byReqId[reqId] = existing = [];
+        existing.AddRange(runIds);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<string>> GetRunIdsAsync(Guid reqId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<string>>(_byReqId.TryGetValue(reqId, out var runIds) ? runIds : []);
 }
 
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>

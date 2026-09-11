@@ -52,6 +52,26 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// [ADDED 2026-09-11] Isolates JUST the Key Vault half of PersistActivity from the rest of the
+    /// pipeline - no scope, no dimensions, no LLM narrate/render, nothing else that could also
+    /// throw. AdalKeyVaultReportEncryptor.EncryptAsync is the exact first line PersistActivity
+    /// calls; today's real runs fail there with "Operation returned an invalid status code
+    /// 'Forbidden'" and someone just claimed an IP whitelist fix for it - this proves whether that
+    /// fix actually took effect, in seconds, instead of waiting ~10 minutes for a full real run to
+    /// reach the same line again.
+    /// </summary>
+    [Fact]
+    public async Task CheckKeyVaultAccessInIsolation()
+    {
+        var encryptor = new Insights.Persistence.AdalKeyVaultReportEncryptor(ConnectionString);
+
+        var envelope = await encryptor.EncryptAsync("<html><body>isolation check</body></html>");
+
+        Assert.NotEmpty(envelope.Content);
+        output.WriteLine($"Key Vault access OK - key {envelope.KeyVaultObjectName}, version {envelope.KeyVaultObjectVersion}.");
+    }
+
+    /// <summary>
     /// Build order item 11 (docs/superpowers/plans/2026-08-21-durable-task-orchestrator.md, Task 1
     /// step 2): provisions the dedicated task-hub database, separate from vitComplianceSystem, on
     /// the same UAT server. Idempotent (IF NOT EXISTS) so it is safe to re-run, e.g. after a dev
@@ -589,53 +609,11 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
         output.WriteLine($"ForceFlush returned: {flushed}");
     }
 
-    /// <summary>
-    /// THROWAWAY - real tenant 29 (all 9 dimensions, exactly what FetchDimensionsActivity fetches),
-    /// one real composition call, printing the ACTUAL token count. Built to answer one question
-    /// fast: item 17's new per-run budget just refused a real tenant-29 run at the composing stage
-    /// (Budget:PerRunTokenCeiling = 250,000) - is that a real, oversized payload for this tenant
-    /// (flagged in CLAUDE.md as 89% of estate under a soft-deleted parent - a large tenant), or a
-    /// bug in the token-counting plumbing? Isolates composition alone instead of waiting through
-    /// the full ~5-minute pipeline again.
-    /// Requires ConnectionStrings__RegTrack, MAF_ENDPOINT, MAF_MODEL, MAF_API_KEY.
-    /// </summary>
-    [Fact]
-    public async Task MeasureRealComposeTokenUsage_Tenant29()
-    {
-        var endpoint = RequireEnv("MAF_ENDPOINT");
-        var model = RequireEnv("MAF_MODEL");
-        var apiKey = RequireEnv("MAF_API_KEY");
-        const int userId = 38, customerId = 29;
-
-        var repository = new Insights.Data.SqlDimensionRepository(ConnectionString);
-        var location = await repository.GetLocationAsync(userId, customerId);
-        var entity = await repository.GetEntityAsync(userId, customerId);
-        var risk = await repository.GetRiskAsync(userId, customerId);
-        var nature = await repository.GetNatureAsync(userId, customerId);
-        var departments = await repository.GetDepartmentsAsync(userId, customerId);
-        var act = await repository.GetActAsync(userId, customerId);
-        var users = await repository.GetUsersAsync(userId, customerId);
-        var @internal = await repository.GetInternalAsync(userId, customerId);
-        var @event = await repository.GetEventAsync(userId, customerId);
-
-        var dimensionResults = new Dictionary<string, object>
-        {
-            ["Location"] = location, ["Entity"] = entity, ["Risk"] = risk, ["Nature"] = nature,
-            ["Departments"] = departments, ["Act"] = act, ["Users"] = users, ["Internal"] = @internal, ["Event"] = @event,
-        };
-
-        var totalChars = dimensionResults.Values.Sum(v => System.Text.Json.JsonSerializer.Serialize(v).Length);
-        output.WriteLine($"Serialized dimension payload: {totalChars:N0} chars across 9 dimensions.");
-
-        var instructions = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "prompts", "01_composition.md"));
-        var compositionAgent = new Insights.Agents.MafCompositionAgent(Insights.Agents.MafAgentFactory.CreateJsonAgent(
-            endpoint, model, apiKey, "CompositionAgent", "Decides report structure.", instructions));
-
-        var result = await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health");
-
-        output.WriteLine($"ACTUAL total tokens for ONE compose call: {result.TotalTokens:N0}");
-        output.WriteLine($"Budget:PerRunTokenCeiling is 250,000 - this ONE call is {(result.TotalTokens / 250_000.0):P1} of the whole-run budget.");
-    }
+    // [DELETED 2026-09-11] MeasureRealComposeTokenUsage_Tenant29 - measured real token usage of a
+    // single ComposeActivity (LLM) call against tenant 29's per-run budget. Moot along with
+    // "compliance_health" itself: composition is now a deterministic, zero-token pure function
+    // (FixedHolisticComposition.Build/DimensionSelectionComposition.Build) for every ReportType,
+    // so there is no LLM call left to measure here.
 
     /// <summary>
     /// THROWAWAY - deploys sql/19 (GeneratedReport.LastViewedUtc) directly against real UAT (no

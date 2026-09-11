@@ -1,19 +1,26 @@
 using Insights.Agents;
 using Insights.Data;
+using Insights.Domain;
 using Insights.Presentation;
 using Xunit.Abstractions;
 
 namespace Insights.IntegrationTests;
 
 /// <summary>
-/// NOT part of the automated suite in spirit - spends real LLM tokens (compose, narrate, render)
-/// against real UAT dimension data, and saves the rendered HTML to the scratchpad so it can
-/// actually be opened in a browser. Run explicitly:
+/// NOT part of the automated suite in spirit - spends real LLM tokens (narrate, render) against
+/// real UAT dimension data, and saves the rendered HTML to the scratchpad so it can actually be
+/// opened in a browser. Run explicitly:
 ///   dotnet test tests/Insights.IntegrationTests --filter FullyQualifiedName~ReportHtmlAgentManualRunTests
 /// Requires: ConnectionStrings__RegTrack, MAF_ENDPOINT, MAF_MODEL, MAF_API_KEY
 /// Optional: REPORT_HTML_OUTPUT_PATH (defaults to a scratch file under the test output directory)
 /// Optional: INSIGHTS_USER_ID, INSIGHTS_CUSTOMER_ID (default 36, 23 - validated (userId, customerId)
 /// pairs for other tenants are listed in DimensionRepositoryTests.ValidatedTenants)
+/// [UPDATED 2026-09-11] Composition used to be a real LLM call here (MafCompositionAgent, since
+/// deleted along with "compliance_health") - now deterministic (FixedHolisticComposition.Build,
+/// zero tokens, zero I/O). Render now uses fixed_holistic's real prompt
+/// (05_report_html_fixed_holistic.md) - the old 05_report_html.md ("compliance_health"'s prompt)
+/// was itself already deleted 2026-09-01, so this test's real render call would have failed with a
+/// file-not-found before this fix regardless of the composition change.
 /// </summary>
 public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
 {
@@ -36,16 +43,13 @@ public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
         var dimensionRepository = new SqlDimensionRepository(ConnectionString);
         var location = await dimensionRepository.GetLocationAsync(userId, customerId);
         var risk = await dimensionRepository.GetRiskAsync(userId, customerId);
-        var dimensionResults = new Dictionary<string, object> { ["Location"] = location, ["Risk"] = risk };
         var assertions = location.Assertions.Concat(risk.Assertions).ToList();
         var findings = location.Findings.Concat(risk.Findings).ToList();
 
         async Task<string> LoadPromptAsync(string fileName) =>
             await File.ReadAllTextAsync(Path.Combine(promptsDir, fileName));
 
-        var compositionAgent = new MafCompositionAgent(MafAgentFactory.CreateJsonAgent(
-            endpoint, model, apiKey, "CompositionAgent", "Decides report structure.", await LoadPromptAsync("01_composition.md")));
-        var plan = (await compositionAgent.ComposeAsync(dimensionResults, tenantShape: "multi_entity", reportType: "compliance_health")).Value;
+        var plan = FixedHolisticComposition.Build();
 
         var narrativeAgent = new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.", await LoadPromptAsync("03_narrative.md")));
@@ -53,8 +57,8 @@ public sealed class ReportHtmlAgentManualRunTests(ITestOutputHelper output)
         output.WriteLine($"Composed + narrated {narrative.Blocks.Count} blocks");
 
         var htmlAgent = new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
-            endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.", await LoadPromptAsync("05_report_html.md")));
-        var html = (await htmlAgent.RenderAsync(plan, narrative, assertions, tenantName: $"Tenant {customerId} (UAT)", reportType: "compliance_health", generatedAt: DateTime.UtcNow)).Value;
+            endpoint, model, apiKey, "ReportHtmlAgent", "Renders the approved report as self-contained HTML.", await LoadPromptAsync("05_report_html_fixed_holistic.md")));
+        var html = (await htmlAgent.RenderAsync(plan, narrative, assertions, tenantName: $"Tenant {customerId} (UAT)", reportType: FixedHolisticComposition.ReportType, generatedAt: DateTime.UtcNow, locationRows: location.Rows)).Value;
 
         var outputPath = Environment.GetEnvironmentVariable("REPORT_HTML_OUTPUT_PATH")
             ?? Path.Combine(AppContext.BaseDirectory, "rendered-report.html");

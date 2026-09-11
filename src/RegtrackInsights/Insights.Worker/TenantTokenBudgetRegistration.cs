@@ -12,12 +12,21 @@ namespace Insights.Worker;
 /// PaidKeepWarmRegistration documents for its own dependencies.
 ///
 /// Call AFTER AddInsightsData (needs ConnectionStrings:RegTrack).
+///
+/// [FIX, 2026-09-11] InsightsTenantTokenUsage is a WRITE, same table class as GeneratedReport -
+/// same ConnectionStrings:RegTrackReportsWrite override RegisterReportsDbContext already falls
+/// back to (WorkerRegistration.cs), for the same reason: least-privilege DB accounts split reads
+/// (broad EXECUTE on the usp_Insights_* procs) from writes (INSERT/UPDATE on specific tables
+/// only) - confirmed live when the write-scoped account's first real run failed with EXECUTE
+/// permission denied on usp_Insights_EligibleTenants, a READ this repository has no business
+/// running under a write-only credential in the first place.
 /// </summary>
 public static class TenantTokenBudgetRegistration
 {
     public static IServiceCollection AddInsightsTenantTokenBudget(this IServiceCollection services, IConfiguration configuration)
     {
-        var connectionString = Require(configuration, "ConnectionStrings:RegTrack");
+        var connectionString = configuration["ConnectionStrings:RegTrackReportsWrite"]
+            ?? Require(configuration, "ConnectionStrings:RegTrack");
         services.AddScoped<ITenantTokenBudgetRepository>(_ => new SqlTenantTokenBudgetRepository(connectionString));
 
         /*  Eager, not a factory lambda - same trap PaidKeepWarmRegistration/FreeDigestRegistration

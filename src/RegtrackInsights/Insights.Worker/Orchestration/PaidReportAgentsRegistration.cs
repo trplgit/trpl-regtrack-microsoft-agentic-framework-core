@@ -66,13 +66,11 @@ public static class PaidReportAgentsRegistration
         // one), but it is needless duplication of an identical singleton.
         services.TryAddSingleton<IPromptLoader>(_ => new FilePromptLoader(promptDirectory));
 
-        services.AddSingleton<ICompositionAgent>(sp => new MafCompositionAgent(MafAgentFactory.CreateJsonAgent(
-            endpoint, model, apiKey, "CompositionAgent", "Decides report structure.",
-            LoadPromptSync(sp, "01_composition.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
-
-        services.AddSingleton<ICompositionReflectionAgent>(sp => new MafCompositionReflectionAgent(MafAgentFactory.CreateJsonAgent(
-            endpoint, model, apiKey, "CompositionReflectionAgent", "Critiques the composition plan.",
-            LoadPromptSync(sp, "02_composition_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+        // [REMOVED 2026-09-11] ICompositionAgent/ICompositionReflectionAgent (01_composition.md,
+        // 02_composition_reflection.md) only ever served "compliance_health"'s dynamic LLM
+        // composition path - deleted along with it. fixed_holistic and dimension_selection both
+        // build their CompositionPlan deterministically in C# (FixedHolisticComposition.Build /
+        // DimensionSelectionComposition.Build), zero LLM calls, so nothing replaces this.
 
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",

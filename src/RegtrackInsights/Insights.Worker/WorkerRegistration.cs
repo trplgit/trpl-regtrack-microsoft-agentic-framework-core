@@ -109,8 +109,6 @@ public static class WorkerRegistration
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
         services.AddTransient<ComputeScoreActivity>();
-        services.AddTransient<ComposeActivity>();
-        services.AddTransient<ReflectOnCompositionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
         services.AddTransient<PublishGateActivity>();
@@ -174,7 +172,6 @@ public static class WorkerRegistration
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
                 ActivityCreator<ComputeScoreActivity>(sp),
-                ActivityCreator<ComposeActivity>(sp), ActivityCreator<ReflectOnCompositionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
@@ -250,8 +247,11 @@ public static class WorkerRegistration
         RegisterReportsDbContext(services, configuration);
 
         var blobConnectionString = Require(configuration, "Azure:BlobConnectionString");
-        var blobContainer = Require(configuration, "Azure:BlobContainer");
-        services.AddSingleton<IReportViewPublisher>(_ => new AzureReportViewPublisher(blobConnectionString, blobContainer));
+        // Own container, not Azure:BlobContainer - AzureReportViewPublisher's own doc comment
+        // (2026-09-11 decision) explains why: a lifecycle-delete rule scoped to this container
+        // can't reach past a prefix boundary into the permanent encrypted artifacts.
+        var tempBlobContainer = Require(configuration, "Azure:TempBlobContainer");
+        services.AddSingleton<IReportViewPublisher>(_ => new AzureReportViewPublisher(blobConnectionString, tempBlobContainer));
 
         // Reports:SasLifetimeMinutes - already scaffolded in appsettings.json (=10) ahead of this
         // being wired. Required, not optional-with-a-guessed-default: a view link's lifetime is a
@@ -289,6 +289,11 @@ public static class WorkerRegistration
         // InsightsReportsDbContext, so it cannot be a singleton.
         services.AddScoped<ICooldownRepository>(sp =>
             new EfCooldownRepository(sp.GetRequiredService<InsightsReportsDbContext>(), cooldownDays));
+
+        // Fan-out reqId grouping (sql/30_report_request.sql) - same captive-dependency reasoning
+        // as ICooldownRepository directly above: holds a scoped InsightsReportsDbContext.
+        services.AddScoped<IReportRequestRepository>(sp =>
+            new EfReportRequestRepository(sp.GetRequiredService<InsightsReportsDbContext>()));
 
         return services;
     }

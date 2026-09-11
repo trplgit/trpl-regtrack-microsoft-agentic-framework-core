@@ -35,8 +35,6 @@ public class PaidReportAgentsRegistrationTests
         services.AddInsightsPaidReportAgents(BuildConfiguration());
         var provider = services.BuildServiceProvider();
 
-        Assert.NotNull(provider.GetRequiredService<ICompositionAgent>());
-        Assert.NotNull(provider.GetRequiredService<ICompositionReflectionAgent>());
         Assert.NotNull(provider.GetRequiredService<INarrativeAgent>());
         Assert.NotNull(provider.GetRequiredService<INarrativeReflectionAgent>());
 

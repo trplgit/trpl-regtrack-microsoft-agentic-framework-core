@@ -45,6 +45,7 @@ public static class RunEndpoints
             [FromServices] IScopeRepository scope,
             [FromServices] ICooldownRepository cooldown,
             [FromServices] IInsightsRunEnqueuer enqueuer,
+            [FromServices] IReportRequestRepository requests,
             CancellationToken cancellationToken) =>
         {
             // Same ordering as the stream endpoint: authorise against the AUTHENTICATED caller
@@ -63,35 +64,54 @@ public static class RunEndpoints
                 return InsightsResults.Error(InsightsErrorCode.ScopeDenied, "No entities are currently in your Insights scope.");
             }
 
-            // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - folds
-            // RequestedDimensions into the period used for BOTH the cooldown check and the
-            // enqueue below, so a dimension_selection request for Nature and one for Entity
-            // against the identical caller-supplied period are treated as separate keys. This is
-            // a stand-in for the real fix (a GeneratedReport.RequestedDimensions column,
-            // sql/28_generated_report_dimension_key.sql, not yet deployed) - no-op for every
-            // report type except dimension_selection.
-            var effectivePeriod = ReportDimensionKey.ForCooldownAndRunId(request.Period, request.RequestedDimensions);
+            /*  [PRODUCT DECISION 2026-09-11] Picking several dimensions no longer produces ONE
+                combined multi-section document - it produces one INDEPENDENT report PER
+                dimension, each its own orchestration run, its own cooldown key, its own blob and
+                GeneratedReport row. This is where that fan-out happens - the only place it
+                happens; everything downstream of this method (the orchestrator, the render
+                agents, persistence) is completely unaware a request ever named more than one
+                dimension, because it never sees more than one at a time.
 
-            // Step 3 (design doc Sec.2.4's 30-day cooldown) - keyed to (scope, reportType, period),
-            // NOT to this caller, so a colleague at the same scope who generated it yesterday locks
-            // this call too. [IMPLEMENTED 2026-09-08 - was a KNOWN LIMITATION pending build order
-            // item 14 (GeneratedReport persistence); item 14 shipped, so there is now a real report
-            // history to check this against.]
-            var cooldownResult = await cooldown.CheckAsync(
-                request.TenantId, request.ReportType, request.Scope.ToDescriptor(), effectivePeriod, cancellationToken);
-            if (!cooldownResult.IsOpen)
-                return InsightsResults.CooldownActive(cooldownResult.NextAvailableUtc!.Value);
+                "dimension_selection" fans out to one unit per requested dimension. Every other
+                ReportType (today, only "fixed_holistic") is always exactly one unit - there was
+                never a list to split.                                                          */
+            IReadOnlyList<string?> dimensionsToGenerate = request.ReportType == DimensionSelectionComposition.ReportType
+                ? request.RequestedDimensions ?? []
+                : [(string?)null];
 
-            // Step 4 (the one-active-run-per-key lock) is free: EnqueueAsync derives the run id
-            // from (tenant, scope, reportType, period), so a second call for the same key attaches
-            // to the already-running instance instead of starting a duplicate. effectivePeriod
-            // (not request.Period) is what makes that key correctly per-dimension - see above.
-            var runId = await enqueuer.EnqueueAsync(
-                request.TenantId, request.ReportType, request.Scope, effectivePeriod, caller.UserId, cancellationToken,
-                requestedDimensions: request.RequestedDimensions);
+            if (request.ReportType == DimensionSelectionComposition.ReportType && dimensionsToGenerate.Count == 0)
+            {
+                return InsightsResults.Error(
+                    InsightsErrorCode.NoDimensionsRequested,
+                    "At least one dimension must be selected for a dimension_selection report.");
+            }
 
-            var streamUrl = $"/api/insights/runs/{runId}/stream";
-            return Results.Accepted(streamUrl, new { runId, status = "queued", streamUrl });
+            // [BUG FOUND LIVE, 2026-09-11] Originally Task.WhenAll over the units, reasoning that
+            // EnqueueAsync's own idempotency made concurrent calls for the same key safe to race -
+            // true for EnqueueAsync, but ICooldownRepository (EfCooldownRepository, EF Core-backed)
+            // is a SCOPED service sharing ONE DbContext instance for the whole request. Two units'
+            // CheckAsync calls running concurrently hit that same DbContext from two threads at
+            // once, which EF Core's own concurrency detector correctly refuses:
+            // "A second operation was started on this context instance before a previous operation
+            // completed." Sequential instead - each unit's cooldown check + enqueue is a fast SQL/
+            // DTFx call, not an LLM call, so there is no real latency cost to serialising them.
+            var reports = new List<GeneratedReportUnit>(dimensionsToGenerate.Count);
+            foreach (var dimension in dimensionsToGenerate)
+            {
+                reports.Add(await GenerateOneReportAsync(request, dimension, caller.UserId, cooldown, enqueuer, cancellationToken));
+            }
+
+            // [ADDED 2026-09-11] One umbrella id for the whole fan-out, so the frontend can poll
+            // ONE thing for combined progress instead of tracking N runIds itself. Only units that
+            // actually queued get a row - a "cooldown" unit has no RunId to track. If every unit
+            // hit cooldown, reqId groups zero rows and its own stream endpoint reports "not found",
+            // same as any other reqId nobody ever enqueued anything under.
+            var reqId = Guid.NewGuid();
+            var queuedRunIds = reports.Where(r => r.RunId is not null).Select(r => r.RunId!).ToList();
+            if (queuedRunIds.Count > 0)
+                await requests.SaveAsync(reqId, queuedRunIds, cancellationToken);
+
+            return Results.Accepted(value: new { reqId, reports });
         });
 
         app.MapGet("/api/insights/runs/{runId}/stream", async (
@@ -138,7 +158,95 @@ public static class RunEndpoints
             return Results.Empty;
         });
 
+        app.MapGet("/api/insights/requests/{reqId:guid}/stream", async (
+            Guid reqId,
+            HttpContext http,
+            [FromServices] IInsightsCaller caller,
+            [FromServices] ITenantDirectoryRepository tenants,
+            [FromServices] IReportRequestRepository requests,
+            [FromServices] IRunStatusReader runs,
+            CancellationToken cancellationToken) =>
+        {
+            var runIds = await requests.GetRunIdsAsync(reqId, cancellationToken);
+
+            /*  AUTH ORDERING DIFFERS FROM THE SINGLE-RUN ENDPOINT ABOVE, DELIBERATELY.
+
+                That endpoint authorises BEFORE checking existence because a runId is DERIVED and
+                therefore guessable (InsightsRunId's own doc comment) - answering "not found" vs
+                "not eligible" differently would let a guessed runId double as an oracle for real
+                tenant ids.
+
+                reqId carries no such risk: it is Guid.NewGuid(), 122 bits of real randomness, never
+                derived from anything guessable. A caller cannot construct another tenant's reqId,
+                so "no such reqId" leaks nothing an attacker could act on - existence-check-first is
+                safe here specifically because guessing one is not a real attack surface.          */
+            if (runIds.Count == 0)
+                return InsightsResults.Error(InsightsErrorCode.ReportNotVisible, "No such report request.");
+
+            if (!InsightsRunId.TryParse(runIds[0], out var tenantId))
+                return InsightsResults.Error(InsightsErrorCode.ReportNotVisible, "No such report request.");
+
+            var tenant = await tenants.IsEligibleAsync(caller.UserId, tenantId, cancellationToken);
+            if (tenant is null)
+                return InsightsResults.TenantNotEligible();
+
+            await StreamRequestAsync(http, runs, reqId, runIds, cancellationToken);
+
+            return Results.Empty;
+        });
+
         return app;
+    }
+
+    /// <summary>
+    /// One independent report generation - cooldown check, then enqueue, for exactly one
+    /// (reportType, dimension) unit. Called once per fanned-out dimension by the POST handler
+    /// above (or once with <paramref name="dimension"/> null for a non-dimension_selection
+    /// request) - this is the ONLY place a "dimension_selection" ReportType and a single dimension
+    /// ever meet; everything it calls (ReportTypeRouter, cooldown, the enqueuer) already worked
+    /// this way for a single-dimension request, unchanged.
+    ///
+    /// Never throws on a business-level refusal (cooldown active) - that is reported back in the
+    /// unit's own Status field so one dimension on cooldown does not prevent the caller's OTHER
+    /// picks from generating (2026-09-11 product decision: best-effort, not all-or-nothing). A
+    /// real infrastructure failure (DB unreachable, etc.) still propagates and fails the whole
+    /// request - only the expected "not open yet" business outcome is modelled as data here.
+    /// </summary>
+    private static async Task<GeneratedReportUnit> GenerateOneReportAsync(
+        GenerateReportRequest request, string? dimension, int callerUserId,
+        ICooldownRepository cooldown, IInsightsRunEnqueuer enqueuer, CancellationToken cancellationToken)
+    {
+        // Product rule (2026-09-11): a caller requesting Entity gets routed to fixed_holistic
+        // instead - see ReportTypeRouter's own doc comment. Everything below uses the RESOLVED
+        // reportType/requestedDimensions, never request.ReportType/dimension directly, so the
+        // cooldown key, the run id, and the orchestration input all agree on what actually runs.
+        var (reportType, requestedDimensions) = ReportTypeRouter.Resolve(
+            request.ReportType, dimension is null ? null : [dimension]);
+
+        // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - folds
+        // RequestedDimensions into the period used for BOTH the cooldown check and the enqueue
+        // below, so each fanned-out dimension gets its OWN cooldown/run-id key even though they
+        // all share the caller's one Period value. No-op for every report type except
+        // dimension_selection.
+        var effectivePeriod = ReportDimensionKey.ForCooldownAndRunId(request.Period, requestedDimensions);
+
+        // Step 3 (design doc Sec.2.4's 30-day cooldown) - keyed to (scope, reportType, period),
+        // NOT to this caller, so a colleague at the same scope who generated it yesterday locks
+        // this call too.
+        var cooldownResult = await cooldown.CheckAsync(
+            request.TenantId, reportType, request.Scope.ToDescriptor(), effectivePeriod, cancellationToken);
+        if (!cooldownResult.IsOpen)
+            return new GeneratedReportUnit(dimension, reportType, "cooldown", NextAvailableUtc: cooldownResult.NextAvailableUtc);
+
+        // Step 4 (the one-active-run-per-key lock) is free: EnqueueAsync derives the run id from
+        // (tenant, scope, reportType, period), so a second call for the same key attaches to the
+        // already-running instance instead of starting a duplicate. effectivePeriod (not
+        // request.Period) is what makes that key correctly per-dimension - see above.
+        var runId = await enqueuer.EnqueueAsync(
+            request.TenantId, reportType, request.Scope, effectivePeriod, callerUserId, cancellationToken,
+            requestedDimensions: requestedDimensions);
+
+        return new GeneratedReportUnit(dimension, reportType, "queued", runId, $"/api/insights/runs/{runId}/stream");
     }
 
     private static async Task StreamAsync(
@@ -252,6 +360,104 @@ public static class RunEndpoints
         await http.Response.WriteAsync(frame, cancellationToken);
         await http.Response.Body.FlushAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// Same shape as StreamAsync above (poll, emit only on change, MaxStreamDuration ceiling,
+    /// "reconnect" frame on deadline) but for the fan-out's combined status rather than one run's
+    /// stage detail - kept as a PARALLEL set of methods rather than forcing StreamAsync to handle
+    /// both payload shapes: a single run's frame (runId/stage/stagesComplete/message) and a
+    /// request's (reqId/status only) are genuinely different contracts, and sharing one generic
+    /// method across them would cost more in indirection than the duplication here does.
+    /// </summary>
+    private static async Task StreamRequestAsync(
+        HttpContext http, IRunStatusReader runs, Guid reqId, IReadOnlyList<string> runIds, CancellationToken cancellationToken)
+    {
+        http.Response.Headers.ContentType = "text/event-stream";
+        http.Response.Headers.CacheControl = "no-cache";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+
+        var initial = await AggregateStatusAsync(runs, runIds, cancellationToken);
+        await WriteRequestFrameAsync(http, eventName: null, reqId, initial, cancellationToken);
+
+        if (IsTerminalRequestStatus(initial))
+            return;
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(MaxStreamDuration);
+
+        var previous = initial;
+
+        try
+        {
+            while (!deadline.IsCancellationRequested)
+            {
+                await Task.Delay(PollInterval, deadline.Token);
+
+                var current = await AggregateStatusAsync(runs, runIds, deadline.Token);
+
+                if (current != previous)
+                {
+                    await WriteRequestFrameAsync(http, eventName: null, reqId, current, deadline.Token);
+                    previous = current;
+                }
+
+                if (IsTerminalRequestStatus(current))
+                    return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                await TryWriteFinalRequestFrameAsync(http, reqId, previous);
+        }
+    }
+
+    /// <summary>
+    /// One status read per sub-run, then RequestStatusAggregator's worst-first rollup. A sub-run
+    /// the instance store has no record of yet (freshly enqueued, before its first checkpoint)
+    /// reports null here - treated as "queued", the same "no stage yet" window a single run's own
+    /// GetStatusAsync already models, not a genuine absence (SaveAsync only ever stores a runId
+    /// this same request just successfully enqueued).
+    /// </summary>
+    private static async Task<string> AggregateStatusAsync(
+        IRunStatusReader runs, IReadOnlyList<string> runIds, CancellationToken cancellationToken)
+    {
+        var subStatuses = new List<string>(runIds.Count);
+        foreach (var runId in runIds)
+        {
+            var status = await runs.GetStatusAsync(runId, cancellationToken);
+            subStatuses.Add(status?.Status ?? "queued");
+        }
+
+        return RequestStatusAggregator.Aggregate(subStatuses);
+    }
+
+    private static bool IsTerminalRequestStatus(string status) => status is "completed" or "error";
+
+    private static async Task TryWriteFinalRequestFrameAsync(HttpContext http, Guid reqId, string last)
+    {
+        try
+        {
+            await WriteRequestFrameAsync(http, eventName: "reconnect", reqId, last, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // The client is gone. Nothing to report and nowhere to report it.
+        }
+    }
+
+    private static async Task WriteRequestFrameAsync(
+        HttpContext http, string? eventName, Guid reqId, string status, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(new { reqId, status });
+
+        var frame = eventName is null
+            ? "data: " + payload + "\n\n"
+            : "event: " + eventName + "\ndata: " + payload + "\n\n";
+
+        await http.Response.WriteAsync(frame, cancellationToken);
+        await http.Response.Body.FlushAsync(cancellationToken);
+    }
 }
 
 /// <summary>
@@ -268,3 +474,25 @@ public static class RunEndpoints
 public sealed record GenerateReportRequest(
     int TenantId, string ReportType, InsightsScopeRequest Scope, string Period,
     IReadOnlyList<string>? RequestedDimensions = null);
+
+/// <summary>
+/// [ADDED 2026-09-11] One entry per independent report the fan-out (see
+/// RunEndpoints.MapInsightsRunEndpoints's own doc comment on the POST handler) generated or
+/// attempted for this request. The wire response is now ALWAYS <c>{ "reports": [...] }</c> - even
+/// a plain single-report (fixed_holistic, or a dimension_selection request naming exactly one
+/// dimension) request returns a one-element array, so a client never special-cases "was this a
+/// list or a single object".
+/// </summary>
+/// <param name="Dimension">
+/// The ORIGINAL dimension name the caller picked (before any redirect - e.g. still "Entity", even
+/// though <paramref name="ReportType"/> below will read "fixed_holistic" for that entry). Null for
+/// a request that was never a dimension list to begin with (a plain "fixed_holistic" request).
+/// </param>
+/// <param name="ReportType">The RESOLVED report type this unit actually runs as (post Entity-redirect).</param>
+/// <param name="Status">"queued" or "cooldown" - never an HTTP-error shape; a genuine failure to enqueue still throws and fails the whole request.</param>
+/// <param name="RunId">Present only when Status is "queued".</param>
+/// <param name="StreamUrl">Present only when Status is "queued" - same shape as the pre-fan-out single-report response.</param>
+/// <param name="NextAvailableUtc">Present only when Status is "cooldown".</param>
+public sealed record GeneratedReportUnit(
+    string? Dimension, string ReportType, string Status,
+    string? RunId = null, string? StreamUrl = null, DateTime? NextAvailableUtc = null);

@@ -8,6 +8,15 @@ namespace Insights.Domain;
 /// present and has its own fixed pane meanings - Coverage is always pane 3, etc. - neither of
 /// which holds here).
 ///
+/// [PRODUCT DECISION 2026-09-11] A real "Generate" click naming several dimensions no longer
+/// produces ONE multi-section document - it produces one INDEPENDENT report PER dimension (each
+/// its own orchestration run, its own blob, its own GeneratedReport row), fanned out at
+/// RunEndpoints.cs before anything is enqueued (see that file's own doc comment). This function
+/// itself is unchanged and still technically accepts a multi-dimension list - every real
+/// production caller now only ever passes exactly one, since fan-out already split the request
+/// before InsightsReportOrchestrator ever sees it. Multi-dimension calls remain valid for
+/// ad-hoc/lab use (see ModelComparisonLabTests), just no longer how the shipped product works.
+///
 /// Zero LLM involvement in structure, same reasoning as FixedHolisticComposition: which
 /// dimensions appear and in what order is not a judgement call once the caller has already named
 /// them explicitly - there is nothing for a composition agent to decide.

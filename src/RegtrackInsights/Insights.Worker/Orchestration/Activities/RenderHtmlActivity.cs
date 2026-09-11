@@ -32,6 +32,17 @@ public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 /// key today (fixed_holistic's), which still expects FixedHolisticComposition's exact 6-block plan
 /// and will not match a dynamically-composed one - same pre-existing gap, not addressed here.
 /// </summary>
+/// <summary>
+/// [TRIED AND REVERTED, 2026-09-11] Briefly grew a third lookup tier for a "dimension_selection
+/// request combined with Entity" case (Entity's block rendered as a nested fixed_holistic
+/// mini-dashboard inside a multi-section document) - reverted the same day per product direction:
+/// a real "Generate" click naming several dimensions now produces one INDEPENDENT report PER
+/// dimension (RunEndpoints.cs fans out before enqueueing), so this activity never sees a
+/// multi-dimension dimension_selection plan from production again - every real
+/// "dimension_selection" Plan.Blocks.Count is 0 or 1. The single-dimension specific-key lookup
+/// below already covers Entity-alone (which the orchestrator's own Entity-ALONE redirect turns
+/// into a plain "fixed_holistic" request before this activity ever runs).
+/// </summary>
 public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAgent> htmlAgentsByReportType)
     : AsyncTaskActivity<RenderHtmlInput, RenderHtmlOutput>
 {

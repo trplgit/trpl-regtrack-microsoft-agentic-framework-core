@@ -25,6 +25,18 @@ public sealed class AzureDigestArtifactStore(
     {
         var envelope = await encryptor.EncryptAsync(html, cancellationToken);
         var pathContext = new BlobPathContext(identity.CustomerId, DigestReportType, identity.WeekEnding, identity.ArtifactId);
+
+        // [MERGE FIX, 2026-09-11 - FLAG FOR TANVI] AzureReportBlobWriter.WriteAsync now requires a
+        // BlobPathContext (tenant/type/year/month path layout, added on developer-charannagarj
+        // this same week) - this call predated that and passed only the envelope, matching the old
+        // flat opaque-GUID scheme this class's own doc comment above still describes. No real
+        // TenantId reaches this method - PersistDigestArtifactActivity's input carries only a
+        // display TenantName, never a numeric id - so TenantId is a 0 SENTINEL here, not a real
+        // tenant. This changes a digest blob's path from a flat "{guid}.html.enc" to
+        // "0/digest/{yyyy}/{mm}/{guid}.html.enc". If digests should stay fully flat/tenant-agnostic
+        // instead, AzureReportBlobWriter needs a path-building option that does not assume a real
+        // tenant - please confirm which is intended before this ships.
+        var pathContext = new BlobPathContext(TenantId: 0, ReportType: "digest", GeneratedAtUtc: DateTime.UtcNow, ReportId: Guid.NewGuid());
         var location = await blobWriter.WriteAsync(envelope, pathContext, cancellationToken);
 
         return new DigestArtifactContent(
