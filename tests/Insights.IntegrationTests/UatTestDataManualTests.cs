@@ -52,6 +52,26 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// [ADDED 2026-09-11] Isolates JUST the Key Vault half of PersistActivity from the rest of the
+    /// pipeline - no scope, no dimensions, no LLM narrate/render, nothing else that could also
+    /// throw. AdalKeyVaultReportEncryptor.EncryptAsync is the exact first line PersistActivity
+    /// calls; today's real runs fail there with "Operation returned an invalid status code
+    /// 'Forbidden'" and someone just claimed an IP whitelist fix for it - this proves whether that
+    /// fix actually took effect, in seconds, instead of waiting ~10 minutes for a full real run to
+    /// reach the same line again.
+    /// </summary>
+    [Fact]
+    public async Task CheckKeyVaultAccessInIsolation()
+    {
+        var encryptor = new Insights.Persistence.AdalKeyVaultReportEncryptor(ConnectionString);
+
+        var envelope = await encryptor.EncryptAsync("<html><body>isolation check</body></html>");
+
+        Assert.NotEmpty(envelope.Content);
+        output.WriteLine($"Key Vault access OK - key {envelope.KeyVaultObjectName}, version {envelope.KeyVaultObjectVersion}.");
+    }
+
+    /// <summary>
     /// Build order item 11 (docs/superpowers/plans/2026-08-21-durable-task-orchestrator.md, Task 1
     /// step 2): provisions the dedicated task-hub database, separate from vitComplianceSystem, on
     /// the same UAT server. Idempotent (IF NOT EXISTS) so it is safe to re-run, e.g. after a dev

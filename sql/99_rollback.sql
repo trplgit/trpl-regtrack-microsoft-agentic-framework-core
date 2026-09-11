@@ -101,6 +101,7 @@ GO
     match the '%Insights%' pattern the verification step below uses. Left in
     place they make the rollback report itself incomplete.                   */
 IF OBJECT_ID('dbo.InsightsObjectBackup_20260904','U') IS NOT NULL DROP TABLE dbo.InsightsObjectBackup_20260904;  -- pre-deployment definition snapshot, UAT only
+IF OBJECT_ID('dbo.InsightsReportRequest',     'U') IS NOT NULL DROP TABLE dbo.InsightsReportRequest;   -- sql/30, fan-out reqId -> runId grouping
 IF OBJECT_ID('dbo.InsightsTenantTokenUsage',  'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;   -- created by the .NET layer's cost instrumentation; DDL not in this repo
 IF OBJECT_ID('dbo.InsightsFreeDigestLog',     'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestLog;
 IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.InsightsDigestSuppression;

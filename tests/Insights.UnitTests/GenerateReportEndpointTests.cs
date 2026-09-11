@@ -92,6 +92,33 @@ public sealed class GenerateReportEndpointTests
     }
 
     /// <summary>
+    /// [ADDED 2026-09-11] The fan-out umbrella id - every unit that actually queued gets grouped
+    /// under one reqId in IReportRequestRepository, so the frontend can poll ONE thing for combined
+    /// progress (GET /api/insights/requests/{reqId}/stream) instead of tracking N runIds itself.
+    /// </summary>
+    [Fact]
+    public async Task Generate_ReturnsAReqId_AndSavesTheQueuedRunIdUnderIt()
+    {
+        const string runId = "insights-1490-abc123";
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer(runId);
+        var requests = new FakeReportRequestRepository();
+
+        var client = await InsightsApiTestHost.StartAsync(
+            Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown(), requests: requests);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", Request());
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var reqId = json.RootElement.GetProperty("reqId").GetGuid();
+
+        var saveCall = Assert.Single(requests.SaveCalls);
+        Assert.Equal(reqId, saveCall.ReqId);
+        Assert.Equal([runId], saveCall.RunIds);
+    }
+
+    /// <summary>
     /// The enqueued userId is the AUTHENTICATED caller, never anything from the request body - the
     /// contract's POST body has no userId field at all, so this is enforced by construction, but
     /// pin it anyway: a future body change must not accidentally reopen the IDOR the rest of this

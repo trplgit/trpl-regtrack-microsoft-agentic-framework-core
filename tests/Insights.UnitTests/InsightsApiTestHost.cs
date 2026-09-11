@@ -27,7 +27,8 @@ internal static class InsightsApiTestHost
         IScopeRepository? scope = null,
         IInsightsRunEnqueuer? enqueuer = null,
         IReportContentService? content = null,
-        ICooldownRepository? cooldown = null)
+        ICooldownRepository? cooldown = null,
+        IReportRequestRepository? requests = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -47,6 +48,7 @@ internal static class InsightsApiTestHost
                     services.AddSingleton(content);
                 if (cooldown is not null)
                     services.AddSingleton(cooldown);
+                services.AddSingleton(requests ?? new FakeReportRequestRepository());
             });
             web.Configure(app =>
             {
@@ -92,14 +94,29 @@ internal sealed class FakeTenantDirectory(params EligibleTenant[] eligible) : IT
     }
 }
 
-internal sealed class FakeRunStatusReader(InsightsRunStatus? status) : IRunStatusReader
+internal sealed class FakeRunStatusReader : IRunStatusReader
 {
+    private readonly Func<string, InsightsRunStatus?> _statusForRunId;
+
+    public FakeRunStatusReader(InsightsRunStatus? status) => _statusForRunId = _ => status;
+
+    private FakeRunStatusReader(Func<string, InsightsRunStatus?> statusForRunId) => _statusForRunId = statusForRunId;
+
+    /// <summary>
+    /// Per-runId responses - needed to test the fan-out reqId stream endpoint's aggregation, where
+    /// several runIds under one reqId can each be in a DIFFERENT state at the same poll tick. A
+    /// named factory, not a public constructor overload: `new FakeRunStatusReader(null)` (every
+    /// existing single-status test) would be ambiguous between InsightsRunStatus? and
+    /// Func&lt;string, InsightsRunStatus?&gt; - both accept a null literal equally well.
+    /// </summary>
+    public static FakeRunStatusReader PerRunId(Func<string, InsightsRunStatus?> statusForRunId) => new(statusForRunId);
+
     public int CallCount { get; private set; }
 
     public Task<InsightsRunStatus?> GetStatusAsync(string runId, CancellationToken cancellationToken = default)
     {
         CallCount++;
-        return Task.FromResult(status);
+        return Task.FromResult(_statusForRunId(runId));
     }
 }
 
@@ -190,6 +207,28 @@ internal sealed class FakeCooldownRepository : ICooldownRepository
             Volatile.Write(ref _inFlight, 0);
         }
     }
+}
+
+/// <summary>
+/// In-memory stand-in for the fan-out reqId grouping (sql/30_report_request.sql) - records every
+/// SaveAsync call and answers GetRunIdsAsync from what was saved, never touching a real DbContext.
+/// </summary>
+internal sealed class FakeReportRequestRepository : IReportRequestRepository
+{
+    public List<(Guid ReqId, IReadOnlyList<string> RunIds)> SaveCalls { get; } = [];
+    private readonly Dictionary<Guid, List<string>> _byReqId = [];
+
+    public Task SaveAsync(Guid reqId, IReadOnlyList<string> runIds, CancellationToken cancellationToken = default)
+    {
+        SaveCalls.Add((reqId, runIds));
+        if (!_byReqId.TryGetValue(reqId, out var existing))
+            _byReqId[reqId] = existing = [];
+        existing.AddRange(runIds);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<string>> GetRunIdsAsync(Guid reqId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<string>>(_byReqId.TryGetValue(reqId, out var runIds) ? runIds : []);
 }
 
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>

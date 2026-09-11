@@ -127,7 +127,8 @@ public sealed class InsightsApiManualRunTests(ITestOutputHelper output)
                 ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
                 ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
                 ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
-                ["Azure:BlobContainer"] = "insights-reports-temp",
+                ["Azure:BlobContainer"] = "insights-reports",
+                ["Azure:TempBlobContainer"] = "insights-reports-temp",
                 // Item 14 read path (design doc Sec.9.3) - the SAS lifetime for GET .../content.
                 ["Reports:SasLifetimeMinutes"] = "10",
                 // Cooldown gate (design doc Sec.2.4) - required by AddInsightsReportContentService

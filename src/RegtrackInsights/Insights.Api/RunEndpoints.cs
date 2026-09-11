@@ -45,6 +45,7 @@ public static class RunEndpoints
             [FromServices] IScopeRepository scope,
             [FromServices] ICooldownRepository cooldown,
             [FromServices] IInsightsRunEnqueuer enqueuer,
+            [FromServices] IReportRequestRepository requests,
             CancellationToken cancellationToken) =>
         {
             // Same ordering as the stream endpoint: authorise against the AUTHENTICATED caller
@@ -100,7 +101,17 @@ public static class RunEndpoints
                 reports.Add(await GenerateOneReportAsync(request, dimension, caller.UserId, cooldown, enqueuer, cancellationToken));
             }
 
-            return Results.Accepted(value: new { reports });
+            // [ADDED 2026-09-11] One umbrella id for the whole fan-out, so the frontend can poll
+            // ONE thing for combined progress instead of tracking N runIds itself. Only units that
+            // actually queued get a row - a "cooldown" unit has no RunId to track. If every unit
+            // hit cooldown, reqId groups zero rows and its own stream endpoint reports "not found",
+            // same as any other reqId nobody ever enqueued anything under.
+            var reqId = Guid.NewGuid();
+            var queuedRunIds = reports.Where(r => r.RunId is not null).Select(r => r.RunId!).ToList();
+            if (queuedRunIds.Count > 0)
+                await requests.SaveAsync(reqId, queuedRunIds, cancellationToken);
+
+            return Results.Accepted(value: new { reqId, reports });
         });
 
         app.MapGet("/api/insights/runs/{runId}/stream", async (
@@ -144,6 +155,43 @@ public static class RunEndpoints
             await StreamAsync(http, runs, runId, initial, cancellationToken);
 
             /*  Nothing further to write - StreamAsync owns the response body from here.          */
+            return Results.Empty;
+        });
+
+        app.MapGet("/api/insights/requests/{reqId:guid}/stream", async (
+            Guid reqId,
+            HttpContext http,
+            [FromServices] IInsightsCaller caller,
+            [FromServices] ITenantDirectoryRepository tenants,
+            [FromServices] IReportRequestRepository requests,
+            [FromServices] IRunStatusReader runs,
+            CancellationToken cancellationToken) =>
+        {
+            var runIds = await requests.GetRunIdsAsync(reqId, cancellationToken);
+
+            /*  AUTH ORDERING DIFFERS FROM THE SINGLE-RUN ENDPOINT ABOVE, DELIBERATELY.
+
+                That endpoint authorises BEFORE checking existence because a runId is DERIVED and
+                therefore guessable (InsightsRunId's own doc comment) - answering "not found" vs
+                "not eligible" differently would let a guessed runId double as an oracle for real
+                tenant ids.
+
+                reqId carries no such risk: it is Guid.NewGuid(), 122 bits of real randomness, never
+                derived from anything guessable. A caller cannot construct another tenant's reqId,
+                so "no such reqId" leaks nothing an attacker could act on - existence-check-first is
+                safe here specifically because guessing one is not a real attack surface.          */
+            if (runIds.Count == 0)
+                return InsightsResults.Error(InsightsErrorCode.ReportNotVisible, "No such report request.");
+
+            if (!InsightsRunId.TryParse(runIds[0], out var tenantId))
+                return InsightsResults.Error(InsightsErrorCode.ReportNotVisible, "No such report request.");
+
+            var tenant = await tenants.IsEligibleAsync(caller.UserId, tenantId, cancellationToken);
+            if (tenant is null)
+                return InsightsResults.TenantNotEligible();
+
+            await StreamRequestAsync(http, runs, reqId, runIds, cancellationToken);
+
             return Results.Empty;
         });
 
@@ -304,6 +352,104 @@ public static class RunEndpoints
             // Present only on failure, and user-safe by construction - see InsightsRunStatus.
             message = status.Message,
         });
+
+        var frame = eventName is null
+            ? "data: " + payload + "\n\n"
+            : "event: " + eventName + "\ndata: " + payload + "\n\n";
+
+        await http.Response.WriteAsync(frame, cancellationToken);
+        await http.Response.Body.FlushAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Same shape as StreamAsync above (poll, emit only on change, MaxStreamDuration ceiling,
+    /// "reconnect" frame on deadline) but for the fan-out's combined status rather than one run's
+    /// stage detail - kept as a PARALLEL set of methods rather than forcing StreamAsync to handle
+    /// both payload shapes: a single run's frame (runId/stage/stagesComplete/message) and a
+    /// request's (reqId/status only) are genuinely different contracts, and sharing one generic
+    /// method across them would cost more in indirection than the duplication here does.
+    /// </summary>
+    private static async Task StreamRequestAsync(
+        HttpContext http, IRunStatusReader runs, Guid reqId, IReadOnlyList<string> runIds, CancellationToken cancellationToken)
+    {
+        http.Response.Headers.ContentType = "text/event-stream";
+        http.Response.Headers.CacheControl = "no-cache";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+
+        var initial = await AggregateStatusAsync(runs, runIds, cancellationToken);
+        await WriteRequestFrameAsync(http, eventName: null, reqId, initial, cancellationToken);
+
+        if (IsTerminalRequestStatus(initial))
+            return;
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(MaxStreamDuration);
+
+        var previous = initial;
+
+        try
+        {
+            while (!deadline.IsCancellationRequested)
+            {
+                await Task.Delay(PollInterval, deadline.Token);
+
+                var current = await AggregateStatusAsync(runs, runIds, deadline.Token);
+
+                if (current != previous)
+                {
+                    await WriteRequestFrameAsync(http, eventName: null, reqId, current, deadline.Token);
+                    previous = current;
+                }
+
+                if (IsTerminalRequestStatus(current))
+                    return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                await TryWriteFinalRequestFrameAsync(http, reqId, previous);
+        }
+    }
+
+    /// <summary>
+    /// One status read per sub-run, then RequestStatusAggregator's worst-first rollup. A sub-run
+    /// the instance store has no record of yet (freshly enqueued, before its first checkpoint)
+    /// reports null here - treated as "queued", the same "no stage yet" window a single run's own
+    /// GetStatusAsync already models, not a genuine absence (SaveAsync only ever stores a runId
+    /// this same request just successfully enqueued).
+    /// </summary>
+    private static async Task<string> AggregateStatusAsync(
+        IRunStatusReader runs, IReadOnlyList<string> runIds, CancellationToken cancellationToken)
+    {
+        var subStatuses = new List<string>(runIds.Count);
+        foreach (var runId in runIds)
+        {
+            var status = await runs.GetStatusAsync(runId, cancellationToken);
+            subStatuses.Add(status?.Status ?? "queued");
+        }
+
+        return RequestStatusAggregator.Aggregate(subStatuses);
+    }
+
+    private static bool IsTerminalRequestStatus(string status) => status is "completed" or "error";
+
+    private static async Task TryWriteFinalRequestFrameAsync(HttpContext http, Guid reqId, string last)
+    {
+        try
+        {
+            await WriteRequestFrameAsync(http, eventName: "reconnect", reqId, last, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // The client is gone. Nothing to report and nowhere to report it.
+        }
+    }
+
+    private static async Task WriteRequestFrameAsync(
+        HttpContext http, string? eventName, Guid reqId, string status, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(new { reqId, status });
 
         var frame = eventName is null
             ? "data: " + payload + "\n\n"
