@@ -65,7 +65,8 @@ BEGIN
         s.BranchID,
         s.CategoryId,
         c.Imprisonment,
-        c.RiskType
+        c.RiskType,
+        c.Frequency          -- D-3: 97.8% of no-schedule instances have Frequency NULL
     INTO #inst
     FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s
     JOIN Compliance c ON c.ID = s.ComplianceID;
@@ -412,7 +413,14 @@ SELECT
             reference tenant). NoOwnerAnywhere is the absolute failure.          */
         (SELECT COUNT(*) FROM #ownership WHERE NoInstanceOwner = 1) AS NoInstanceOwnerInstances,
         (SELECT COUNT(*) FROM #ownership WHERE NoOwnerAnywhere = 1) AS NoOwnerAnywhereInstances,
-        (SELECT COUNT(*) FROM #ownership WHERE HasNoSchedules  = 1) AS InstancesWithNoSchedules;
+        (SELECT COUNT(*) FROM #ownership WHERE HasNoSchedules  = 1) AS InstancesWithNoSchedules,
+        /*  D-3: two populations needing DIFFERENT action. Root cause established
+            2026-09-08 - no frequency means the scheduler has nothing to generate
+            from, so these are master data, not a job failure.                  */
+        (SELECT COUNT(*) FROM #ownership o JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+          WHERE o.HasNoSchedules = 1 AND i.Frequency IS NULL)     AS NoSchedules_NoFrequency,
+        (SELECT COUNT(*) FROM #ownership o JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+          WHERE o.HasNoSchedules = 1 AND i.Frequency IS NOT NULL) AS NoSchedules_HasFrequency;
 
     /*===================================================================
       6. ROWS
@@ -655,17 +663,31 @@ SELECT
            N'MUST NOT be presented as a top performer. Lifetime closure events are far below configured obligations.'
     FROM #assert WHERE AssertionId LIKE 'A-ONB-%';
 
+    /*  [FIX] '[0-9]%' not '%'. 'A-SPOF-%' also matches 'A-SPOF-AGG', so the
+        AGGREGATE assertion leaked into the INDIVIDUAL finding - producing a
+        duplicate, and the nonsense headline "tenant depends on a single person
+        for performance or review". Seen in live SSMS output 2026-09-08.
+        sql/05 already used the correct pattern for A-GHOST; SPOF and OWN were
+        missed.                                                                */
     INSERT #find
     SELECT 'F-SPOF','medium',
            CONCAT(N'', ScopeLabel, N' depends on a single person for performance or review'),
            AssertionId, NULL
-    FROM #assert WHERE AssertionId LIKE 'A-SPOF-%';
+    FROM #assert WHERE AssertionId LIKE 'A-SPOF-[0-9]%';
 
+    /*  [FIX] Two defects. (1) '[0-9]%' not '%' - see the SPOF note above.
+        (2) The headline said "no assigned owner", which CONTRADICTS this
+        procedure's own data_quality declaration: most of these DO have a
+        performer named on each schedule, they lack an instance-level owner.
+        Wording corrected and the guard attached.                              */
     INSERT #find
     SELECT 'F-OWN','high',
-           CONCAT(N'', ScopeLabel, N' has ', Value, N'% of obligations with no assigned owner'),
-           AssertionId, NULL
-    FROM #assert WHERE AssertionId LIKE 'A-OWN-%';
+           CONCAT(N'', ScopeLabel, N' has ', Value, N'% of obligations with no INSTANCE-LEVEL owner'),
+           AssertionId,
+           N'NOT "nobody is doing this" - most of these have a performer named on each '
+         + N'schedule. They lack an owner on the obligation itself. See NoOwnerAnywhere '
+         + N'for the stricter measure.'
+    FROM #assert WHERE AssertionId LIKE 'A-OWN-[0-9]%';
 
     INSERT #find
     SELECT 'F-GHOST','high',
@@ -693,8 +715,10 @@ SELECT
     INSERT #find
     SELECT 'F-OWN-AGG','high',
            CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' locations (', VsComparatorPP,
-                  N'%) have 10%+ of obligations with no assigned owner'),
-           AssertionId, NULL
+                  N'%) have 10%+ of obligations with no INSTANCE-LEVEL owner'),
+           AssertionId,
+           N'NOT "nobody is doing this" - most have a performer named on each schedule. '
+         + N'They lack an owner on the obligation itself.'
     FROM #assert WHERE AssertionId='A-OWN-AGG';
 
     SELECT 'findings' AS ResultSet, * FROM #find;
@@ -709,11 +733,29 @@ SELECT
              + N'Branches in a state with fewer than 2 obligation-carrying peers get NULL, never a '
              + N'self-comparison.' AS Detail
         UNION ALL
-        SELECT 'instances_with_no_schedules' AS Issue,
-               CONCAT(N'', (SELECT COUNT(*) FROM #ownership WHERE HasNoSchedules = 1),
-                      N' obligation(s) are configured but have NEVER generated a schedule. They cannot be '
-                    + N'overdue - and cannot be done either. They inflate the denominator, so the true '
-                    + N'overdue rate on schedulable work is higher than the headline figure.') AS Detail
+        SELECT 'no_schedules_missing_frequency' AS Issue,
+               CONCAT(N'', (SELECT COUNT(*) FROM #ownership o JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+                            WHERE o.HasNoSchedules = 1 AND i.Frequency IS NULL),
+                      N' obligation(s) have never generated a schedule because the compliance master '
+                    + N'carries NO FREQUENCY - the scheduler has nothing to generate from. This is '
+                    + N'MASTER DATA, not a job failure: set Frequency on the compliance records or '
+                    + N'deconfigure the obligations. Route to the compliance library team.') AS Detail
+        WHERE EXISTS (SELECT 1 FROM #ownership o JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+                      WHERE o.HasNoSchedules = 1 AND i.Frequency IS NULL)
+        UNION ALL
+        SELECT 'no_schedules_despite_frequency',
+               CONCAT(N'', (SELECT COUNT(*) FROM #ownership o JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+                            WHERE o.HasNoSchedules = 1 AND i.Frequency IS NOT NULL),
+                      N' obligation(s) have a frequency yet STILL no schedule. This is the genuine '
+                    + N'defect - small enough to inspect individually. Investigate before the '
+                    + N'frequency backlog above.')
+        WHERE EXISTS (SELECT 1 FROM #ownership o JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+                      WHERE o.HasNoSchedules = 1 AND i.Frequency IS NOT NULL)
+        UNION ALL
+        SELECT 'true_overdue_denominator',
+               N'Obligations that cannot generate a schedule cannot be overdue, but they DO count in '
+             + N'ScopedInstances. The overdue rate on schedulable work is therefore higher than the '
+             + N'headline figure. Quote both, or quote the headline with this caveat attached.'
         WHERE EXISTS (SELECT 1 FROM #ownership WHERE HasNoSchedules = 1)
         UNION ALL
         SELECT 'ownership_has_two_mechanisms',

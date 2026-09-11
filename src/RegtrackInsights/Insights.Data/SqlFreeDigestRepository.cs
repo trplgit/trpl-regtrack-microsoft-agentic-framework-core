@@ -114,39 +114,55 @@ public sealed class SqlFreeDigestRepository(string connectionString) : IFreeDige
     {
         await using var connection = new SqlConnection(connectionString);
 
-        /*  This predicate MIRRORS usp_Insights_FreeDigestGate's recipient count exactly -
-            ProductID 18, UserCustomerMapping.IsActive = 0 (INVERTED), User.IsDeleted = 0.
-            If the two drift apart the gate's EXIT_NO_RECIPIENTS stops meaning anything.
+        /*  [CORRECTED 2026-09-10] Recipients come from dbo.tvfInsightsManagementUsers, NOT
+            UserCustomerMapping - that table cannot answer this question in production. All 65
+            production rows carry ProductID = NULL and IsActive = 1 (see sql/01), so the old
+            predicate (ProductID = 18, IsActive = 0) matched nothing, ever. The gate
+            (usp_Insights_FreeDigestGate) was corrected to the TVF on 2026-09-08; this method
+            was missed until confirmed live against tenant 1300 (gate: 13 recipients via the
+            TVF, this query: 0 via UserCustomerMapping).
+
+            DISTINCT on UserID happens in a DERIVED TABLE, before the join to [User] - not as
+            SELECT DISTINCT over the final columns. The TVF returns one row per (user, branch,
+            category) - 236K+ rows for a large tenant against a few hundred actual users.
+            Deduplicating on the key before the join makes one-row-per-user STRUCTURAL, not an
+            accident of Email/Name happening to be functionally dependent on the id today.
+
+            No ProductID filter: ComplianceCategoryMgmtUser (which the TVF reads) has no
+            ProductID column. Product entitlement is checked upstream by both callers
+            (ResolveDigestRecipientsActivity, ResolveDigestDispatchActivity) before this method
+            runs - this list intentionally answers "who", not "is this tenant entitled".
 
             Users with a null or blank email are excluded HERE rather than left to fail at the
-            provider: a send failure looks like an outage, a missing address is a data gap.    */
+            provider: a send failure looks like an outage, a missing address is a data gap.
+
+            DURABLE OPT-OUTS are filtered HERE, not only in the gate, even though the gate (as
+            of 2026-09-10) now also subtracts them from its count: the gate exits
+            EXIT_NO_RECIPIENTS only when EVERY recipient has opted out. When only SOME have, the
+            gate proceeds, and without this clause the list below would still contain them - an
+            unsubscribed user on a multi-recipient tenant would keep receiving the digest. Keyed
+            (CustomerID, UserID), so opting out of one tenant leaves a conglomerate user
+            subscribed to the others.
+
+            This query and the gate's can still disagree in count - the gate's is an upper-bound
+            cost pre-filter (no email check), this list is authoritative. That is safe: an empty
+            list here still exits before any LLM spend (ResolveDigestRecipientsActivity).       */
         const string sql = """
-            SELECT DISTINCT
-                u.ID AS UserId,
-                u.Email,
-                LTRIM(RTRIM(CONCAT(u.FirstName, N' ', u.LastName))) AS Name
-            FROM UserCustomerMapping ucm
-            JOIN [User] u ON u.ID = ucm.UserID
-            WHERE ucm.CustomerID = @CustomerID
-              AND ucm.ProductID = @FreeProductId
-              AND ucm.IsActive = 0
-              AND u.IsDeleted = 0
+            SELECT u.ID AS UserId,
+                   u.Email,
+                   LTRIM(RTRIM(CONCAT(u.FirstName, N' ', u.LastName))) AS Name
+            FROM (SELECT DISTINCT m.UserID FROM dbo.tvfInsightsManagementUsers(@CustomerID) m) mu
+            JOIN [User] u ON u.ID = mu.UserID
+            WHERE u.IsDeleted = 0
               AND NULLIF(LTRIM(RTRIM(u.Email)), N'') IS NOT NULL
-              -- [TRAP] DURABLE OPT-OUTS, and the reason this clause has to be HERE and not
-              -- only in the gate. usp_Insights_FreeDigestGate subtracts suppressed users from
-              -- its COUNT, so it exits EXIT_NO_RECIPIENTS when EVERY recipient has opted out.
-              -- But when only SOME have, the gate proceeds - and without this clause the list
-              -- below still contained them, so an unsubscribed user on a multi-recipient tenant
-              -- kept receiving the digest. Keyed (CustomerID, UserID), so opting out of one
-              -- tenant leaves a conglomerate user subscribed to the others.
               AND NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression s
-                              WHERE s.CustomerID = ucm.CustomerID
-                                AND s.UserID     = ucm.UserID)
+                              WHERE s.CustomerID = @CustomerID
+                                AND s.UserID     = u.ID)
             ORDER BY u.ID;
             """;
 
         var rows = await connection.QueryAsync<FreeDigestRecipient>(
-            new CommandDefinition(sql, new { CustomerID = customerId, FreeProductId = FreeProductId }, cancellationToken: cancellationToken));
+            new CommandDefinition(sql, new { CustomerID = customerId }, cancellationToken: cancellationToken));
 
         return rows.AsList();
     }

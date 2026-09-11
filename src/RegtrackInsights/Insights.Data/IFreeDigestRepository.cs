@@ -45,9 +45,17 @@ public interface IFreeDigestRepository
     /// <summary>
     /// The people who should receive this tenant's digest.
     ///
-    /// Uses the SAME predicate usp_Insights_FreeDigestGate counts with, so the returned count
-    /// agrees with the gate's RecipientCount. Users with no usable email address are excluded
-    /// here rather than failing at send time.
+    /// [CORRECTED 2026-09-10] Sourced from dbo.tvfInsightsManagementUsers, the SAME function the
+    /// gate counts with - NOT UserCustomerMapping. That table's ProductID/IsActive columns
+    /// cannot answer "who is a recipient" in production: all 65 rows carry ProductID = NULL,
+    /// IsActive = 1 (see sql/01), so the old predicate matched nothing, ever, on any tenant. The
+    /// gate was corrected on 2026-09-08; this method was missed until confirmed live.
+    ///
+    /// This list is deliberately NARROWER than the gate's RecipientCount, not identical to it:
+    /// it additionally excludes users with no usable email address. Both now subtract durable
+    /// opt-outs (sql/16). The two counts can still disagree - that is safe, not a bug to chase,
+    /// because an empty list here still exits before any LLM spend (the gate is an upper-bound
+    /// cost pre-filter, this list is authoritative).
     /// </summary>
     Task<IReadOnlyList<FreeDigestRecipient>> GetRecipientsAsync(int customerId, CancellationToken cancellationToken = default);
 

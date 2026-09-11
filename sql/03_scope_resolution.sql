@@ -1,5 +1,7 @@
 /*===========================================================================
   RegTrack Insights - Phase 1a, Step 3
+  Error block 51010-51019.  Convention: x0 = SCOPE DENIED,
+  x1-x4 = RECONCILIATION FAILED, x5-x9 = DICTIONARY / MASTER DATA GAP.
   SCOPE RESOLUTION  (the security boundary)
 
   Spec reference : RegTrack_Insights_System_Design_v1.md Sec.5.5
@@ -23,12 +25,6 @@
   - Category resolves ONLY via ComplianceInstance -> Compliance -> Act.ComplianceCategoryId
     (Compliance, ComplianceInstance and ComplianceSubType have NO category column)
   - EMPTY SCOPE => DENY. Never "no restriction" - that inverts the security model.
-  - [FIX] CustomerBranch.Status is a SECOND active flag, separate from IsDeleted.
-    Status = 0 = deactivated: obligations remain tagged to the branch but are not
-    reported, and no schedules/alerts/escalations are generated for them
-    (CLAUDE.md Sec.5). "Active branch" below now means IsDeleted = 0 AND Status = 1
-    everywhere - this is the single choke point every dimension scopes through,
-    so fixing it here fixes the estate definition for the whole engine at once.
   - tenant_wide requires BOTH axes. On a reference tenant, 3 users had all 16
     branches but only 1 had all 9 categories. The other 2 are FUNCTIONAL heads
     (all locations, one function) and must not be classified as tenant-wide CCOs.
@@ -63,8 +59,7 @@ RETURN
     JOIN Customer       cu ON cu.ID = cb.CustomerID
     WHERE ea.UserID      = @UserID
       AND cb.CustomerID  = @CustomerID
-      AND cb.IsDeleted   = 0        -- active branch
-      AND cb.Status      = 1        -- active branch, second flag - see header
+      AND cb.IsDeleted = 0 AND cb.Status = 1        -- active branch
       AND cu.IsDeleted   = 0        -- active tenant
 );
 GO
@@ -153,8 +148,7 @@ RETURN
          ON sp.BranchID   = i.CustomerBranchID
         AND sp.CategoryId = a.ComplianceCategoryId
     WHERE cb.CustomerID = @CustomerID
-      AND cb.IsDeleted  = 0
-      AND cb.Status     = 1
+      AND cb.IsDeleted = 0 AND cb.Status = 1
       AND i.IsDeleted   = 0
       AND c.IsDeleted   = 0
 );
@@ -182,7 +176,8 @@ BEGIN
         function on an expression containing an aggregate or a subquery"). It fires
         at CREATE PROCEDURE time, so the procedure is NEVER created - and because a
         failed CREATE does not stop later batches, the trailing PRINT still says
-        "installed". Same trap as usp_Insights_StatusDataQuality in sql/01.
+        "installed". Worse: the DROP above HAS succeeded, so the object is simply
+        gone. Same trap as usp_Insights_StatusDataQuality in sql/01.
 
         EXISTS is legal in a SELECT list, so flag each row first, then SUM the flags. */
     ;WITH scoped AS (SELECT * FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID)),
@@ -232,25 +227,51 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
+    /*  Management-role users of an ENTITLED tenant who have NO EntitiesAssignment
+        scope. They would receive an empty report, so they must be found before
+        go-live rather than after the first send.
+
+        [CORRECTED 2026-09-08] Previously read UserCustomerMapping, where every
+        production row carries ProductID = NULL and IsActive = 1 - so this check
+        returned nothing for every tenant and silently passed. Recipients are now
+        management-role users (BA ruling); see sql/01.
+
+        [PERF] The CROSS APPLY iterates ENTITLED customers only - currently one.
+        Applying it across every CustomerBranch row would call the function tens
+        of thousands of times.                                                   */
+    ;WITH entitled AS (
+        SELECT pm.CustomerID,
+               MAX(CASE WHEN pm.ProductID = 19 THEN 19 ELSE 18 END) AS ProductID
+        FROM ProductMapping pm
+        WHERE pm.ProductID IN (18, 19)
+          AND pm.IsActive = 0                 -- [TRAP] INVERTED: 0 = ENABLED
+        GROUP BY pm.CustomerID),
+    mgmt AS (
+        SELECT DISTINCT e.CustomerID, e.ProductID, m.UserID
+        FROM entitled e
+        CROSS APPLY dbo.tvfInsightsManagementUsers(e.CustomerID) m)
     SELECT
-        ucm.CustomerID,
-        ucm.UserID,
-        ucm.ProductID,
-        CASE ucm.ProductID WHEN 18 THEN 'RegInsights Basic'
-                           WHEN 19 THEN 'RegInsights Pro' END AS ProductName,
-        u.IsActive  AS UserIsActive,
-        N'Mapped to RegInsights but has no EntitiesAssignment scope rows - '
-      + N'will receive an empty report. Configure scope before go-live.' AS Issue
-    FROM UserCustomerMapping ucm
-    JOIN [User]   u  ON u.ID  = ucm.UserID
-    JOIN Customer cu ON cu.ID = ucm.CustomerID
-    WHERE ucm.ProductID IN (18, 19)
-      AND ucm.IsActive = 0            -- INVERTED: 0 = enabled
-      AND u.IsDeleted  = 0
-      AND cu.IsDeleted = 0
-      AND NOT EXISTS (
-            SELECT 1 FROM dbo.tvfInsightsScopePairs(ucm.UserID, ucm.CustomerID)
-      );
+        mg.CustomerID,
+        mg.UserID,
+        mg.ProductID,
+        CASE mg.ProductID WHEN 18 THEN 'RegInsights Basic'
+                          WHEN 19 THEN 'RegInsights Pro' END AS ProductName,
+        cu.Name    AS CustomerName,
+        u.IsActive AS UserIsActive,
+        N'Management-role user of an entitled tenant with NO EntitiesAssignment '
+      + N'scope rows - will receive an empty report. Configure scope before go-live.' AS Issue
+    FROM mgmt mg
+    JOIN [User]   u  ON u.ID  = mg.UserID  AND u.IsDeleted  = 0
+    JOIN Customer cu ON cu.ID = mg.CustomerID AND cu.IsDeleted = 0
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM EntitiesAssignment ea
+        JOIN CustomerBranch cb ON cb.ID = ea.BranchID
+        WHERE ea.UserID     = mg.UserID
+          AND cb.CustomerID = mg.CustomerID
+          AND cb.IsDeleted  = 0
+          AND cb.Status     = 1)
+    ORDER BY mg.CustomerID, mg.UserID;
 END
 GO
 

@@ -79,6 +79,12 @@ builder.Services.AddInsightsObservability(builder.Configuration);
 //   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23
 builder.Services.AddHostedService<FreeDigestRunOnceWorker>();
 
+// DIAGNOSTIC ONLY - decrypts a tenant's stored digest artifact(s) straight to local .html
+// files, reusing the same Key Vault decrypt path production uses. Does nothing unless
+// FreeDigest:DumpOnce=true:
+//   dotnet run -- --FreeDigest:DumpOnce=true --FreeDigest:CustomerId=29
+builder.Services.AddHostedService<FreeDigestArtifactDumpWorker>();
+
 // One-shot runner for the paid orchestrator. Does nothing unless Insights:RunOnce=true:
 //   dotnet run -- --Insights:RunOnce=true --Insights:TenantId=29 --Insights:UserId=38
 builder.Services.AddHostedService<InsightsRunOnceWorker>();

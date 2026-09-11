@@ -470,6 +470,65 @@ GO
 
     [PERF] Materialise this into an indexed temp table in every caller. Do not
     join it to another inline TVF directly - see CLAUDE.md Sec.5.               */
+/*  MANAGEMENT USERS - who receives a digest, and who may generate a report.
+
+    BA RULING 2026-09-08:
+      free tier (18) : every management-role user of an entitled tenant receives
+                       the weekly email, scoped to the entities they can access.
+      paid tier (19) : every management-role user may generate insights, scoped
+                       the same way.
+
+    [CORRECTED] The gate procedures previously counted recipients from
+    UserCustomerMapping. That table cannot answer the question: all 65 rows in
+    production carry ProductID = NULL and IsActive = 1, and it is evidently used
+    as an ad-hoc management list for a handful of tenants. Recipient count was
+    therefore ZERO for every tenant, permanently - the free digest could never
+    send to anyone, and nothing reported that as a fault.
+
+    ComplianceCategoryMgmtUser is the real source: UserId x CatId x
+    CustomerBranchID - the SAME 2-D grain the scope model already uses.
+    Measured on PRODUCTION tenants (1300 is a test account and was not relied on):
+        Trent   1216 : 227 management users, 236,156 scope rows
+        Jakson  1403 :  82 management users, of which only 56 are ACTIVE
+        V-Mart  1472 :  29 management users
+        Gargi   1817 :   9 management users, of which 7 are active
+
+    [TRAP] User.IsActive is NOT inverted (unlike ProductMapping.IsActive):
+    1 = active, 0 = deactivated. A deactivated user cannot log in, so must not
+    receive a digest - Jakson would otherwise have emailed 26 people who cannot
+    open the product. Deleted AND deactivated are both excluded here.
+
+    [OPEN - BA] This function returns the management-role scope. It is NARROWER
+    than the user's general EntitiesAssignment scope on 14 of 15 users measured:
+    e.g. user 22426 holds 41 branches x sparse categories = 155 pairs here,
+    against 50 branches x 8 categories = 400 pairs in EntitiesAssignment.
+    Which governs the report is a DISCLOSURE decision, not a technical one, and
+    is recorded in docs/OPEN_DECISIONS.md. Until it is settled, the dimensions
+    continue to use tvfInsightsScopePairs (EntitiesAssignment) unchanged.       */
+IF OBJECT_ID('dbo.tvfInsightsManagementUsers', 'IF') IS NOT NULL
+    DROP FUNCTION dbo.tvfInsightsManagementUsers;
+GO
+CREATE FUNCTION dbo.tvfInsightsManagementUsers (@CustomerID INT)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT DISTINCT
+        ccmu.UserId              AS UserID,
+        ccmu.CustomerBranchID    AS BranchID,
+        ccmu.CatId               AS CategoryId
+    FROM ComplianceCategoryMgmtUser ccmu
+    JOIN CustomerBranch cb ON cb.ID = ccmu.CustomerBranchID
+                          AND cb.CustomerID = @CustomerID
+                          AND cb.IsDeleted  = 0
+                          AND cb.Status     = 1          -- deactivated branches confer nothing
+    JOIN [User] u ON u.ID = ccmu.UserId
+                 AND u.IsDeleted = 0                     -- deleted: not a recipient
+                 AND u.IsActive  = 1                     -- DEACTIVATED: not a recipient either
+    WHERE ccmu.UserId > 0
+);
+GO
+
 IF OBJECT_ID('dbo.tvfInsightsOwnership', 'IF') IS NOT NULL
     DROP FUNCTION dbo.tvfInsightsOwnership;
 GO

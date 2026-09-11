@@ -37,6 +37,14 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="8.0.1" />
   </ItemGroup>
+  <!--
+    ADR-0001 (2026-09-10) - the free digest's 5-req/sec outbound email limit, shared-account-safe
+    (RateLimitedEmailSender). TokenBucketRateLimiter ships in the runtime for net7.0+, but this
+    project still needs the explicit package reference to compile against it.
+  -->
+  <ItemGroup Label="Rate limiting">
+    <PackageVersion Include="System.Threading.RateLimiting" Version="8.0.0" />
+  </ItemGroup>
   <ItemGroup Label="Test">
     <PackageVersion Include="coverlet.collector" Version="6.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />

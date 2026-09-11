@@ -2,16 +2,16 @@
 
 Your compliance calendar for the week ending {{WeekEnding}}:
 
-Due in the next 7 days:      {{DueNext7}}
-  of which critical:         {{CriticalDueNext7}}
-  carrying personal liability: {{ImprisonmentDueNext7}}
+Due in the next 7 days:      **{{DueNext7}}**
+  of which critical:         **{{CriticalDueNext7}}**
+  carrying personal liability: **{{ImprisonmentDueNext7}}**
 
 On the horizon (next 30 days):
-  Total due:                 {{DueNext30}}
-  Carrying personal liability: {{ImprisonmentDueNext30}}
-  Licences due to lapse:     {{LicencesLapsingNext30}}
+  Total due:                 **{{DueNext30}}**
+  Carrying personal liability: **{{ImprisonmentDueNext30}}**
+  Licences due to lapse:     **{{LicencesLapsingNext30}}**
 
-Completed last week:         {{CompletedLast7}}
+Completed last week:         **{{CompletedLast7}}**
 
 This digest shows what is coming. RegInsights Pro shows which locations,
 which people, and which laws are driving it.
