@@ -32,7 +32,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new RecordTenantTokenUsageOutput());
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -101,7 +101,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new RecordTenantTokenUsageOutput());
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -192,7 +192,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new RecordTenantTokenUsageOutput());
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -231,7 +231,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new RecordTenantTokenUsageOutput());
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -315,7 +315,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new RecordTenantTokenUsageOutput());
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
 
         FetchDimensionsInput? capturedFetchInput = null;
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -406,7 +406,7 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new RecordTenantTokenUsageOutput());
         context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity"));
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
         context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
         context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))

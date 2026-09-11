@@ -71,7 +71,7 @@ public static class CompositeScoreCalculator
             // "flat" is a declared placeholder, not a claim of stability - see the data-quality
             // note the caller should attach alongside this.
             "flat",
-            "PROVISIONAL - not yet reviewed with the business. Weighted composite of up to seven " +
+            "Weighted composite of up to seven " +
             "KPI scores (0-100). Weights: risk 0.20, licence 0.15, coverage 0.15, people 0.15, " +
             "timeliness 0.15, overdue/backlog 0.10, evidence 0.10. A component with no real data " +
             "source yet is scored null rather than zero, and the remaining weights are " +
