@@ -208,20 +208,16 @@ hero, `<h1>`/banner/kicker all forbidden (§6, Output constraint 1). Left: brand
           Trend: {real Trend text}
         </span>
       </div>
-      <!-- HERO VERDICT IS THREE LINES (§6, production run):
+      <!-- HERO VERDICT IS TWO LINES (§6, production run):
            1. di-hero__title  - a 600 headline STATING THE CLAIM in plain words. It must NOT
               repeat the score number or the band word the donut + pill already show.
            2. di-headline     - a 400 sentence whose key FIGURES only are wrapped in
               <em class="tnum"> (the em is 600, band-text colour - warn #b45708 / bad #b3261e).
               The rest of the sentence is NOT coloured. Never paint the whole sentence.
-           3. di-method       - the muted method line. ONE short sentence, exactly this, verbatim -
-              do NOT append the raw A-SCORE-composite caveat string (Band/Trend/PROVISIONAL... are
-              already shown by the donut, pill and trend glyph; repeating them here reads as slop):
-              "Provisional - the score has not yet been reviewed with the business; method in
-              OverallHealth.Method." -->
+           No third "method" line - Band/Trend are already shown by the donut, pill and trend
+           glyph; a caveat about review status does not belong on the customer-facing hero. -->
       <h2 class="di-hero__title">{real 600 claim headline, from narrative prose - e.g. "People continuity and licence lapses are holding the score down"}</h2>
       <p class="di-headline">{one real sentence, from narrative prose only, key figures wrapped <em class="tnum">…</em>, citing only numbers in this run's assertions}</p>
-      <p class="di-method">Provisional &mdash; the score has not yet been reviewed with the business; method in OverallHealth.Method.</p>
     </div>
   </div>
 
@@ -243,7 +239,7 @@ hero, `<h1>`/banner/kicker all forbidden (§6, Output constraint 1). Left: brand
            coverage, overdue_backlog, people_continuity, timeliness, licence,
            evidence.
            Name humanised (risk_weighted -> "Risk-weighted", overdue_backlog ->
-           "Overdue backlog", people_continuity -> "People continuity", coverage
+           "Overdue", people_continuity -> "People", coverage
            -> "Coverage", licence -> "Licence", timeliness -> "Timeliness",
            evidence -> "Evidence"); score = the assertion's real `value`; weight
            = its real `comparator_value`; tone = the SAME 3-band rule as the
@@ -258,7 +254,6 @@ hero, `<h1>`/banner/kicker all forbidden (§6, Output constraint 1). Left: brand
         <div class="di-comp__row"><b class="tnum">{real score}</b><span>{real score} &times; {real weight}</span></div>
       </div>
     </div>
-    <p class="di-components__note">Component scoring is provisional &mdash; not yet reviewed with the business.</p>
   </div>
 </section>
 ```
@@ -502,6 +497,21 @@ the real value:
 - If a tab, card, or tile represents a **critical** finding, its tag/eyebrow tone is
   `--bad` (red) and stays red — do not soften it to amber or grey.
 
+## Jargon gets an info icon (2026-09-11)
+
+A business reader does not know what "pp" (percentage points), "SPOF", "YoY", or
+similar compliance/metrics shorthand means. The FIRST time such a term appears in a
+card (headline, narrative sentence, KPI label, or metric chip), follow it
+immediately with `<i class="di-info" title="{one short plain-language sentence
+explaining the term}">?</i>` — e.g. `9.7pp<i class="di-info" title="Percentage
+points - the size of the gap between two percentages, not a percent change.">?</i>`.
+One icon per distinct term per card is enough; do not repeat it on every later
+occurrence in the same card. Never wrap a plain number or a real business word
+(risk, licence, backlog) — only genuine shorthand a non-specialist would have to
+look up.
+
+`.di-info{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;margin-left:3px;border-radius:50%;background:var(--c-content-mist);border:1px solid var(--c-border);color:var(--c-text-3);font-size:9px;font-weight:700;font-style:normal;line-height:1;cursor:help;vertical-align:middle}`
+
 ## Tab 1 — Snapshot (`di-snapgrid`/`di-snaptile`, up to 7 tiles)
 
 ```html
@@ -531,7 +541,7 @@ the real value:
   </div>
 </section>
 ```
-**Jump targets, exact tab numbers** (must match the tab-nav radios above verbatim): Licence·lapses / Risk-weighted content -> `di-tab-2`; Backlog·overdue / Coverage·stores -> `di-tab-3`; People·SPOF / Timeliness / Evidence·review-trail -> `di-tab-4`; Forward·next-90-days -> `di-tab-5`. No tile jumps to `di-tab-6` (Actions) or back to `di-tab-1`. If a jump's target tab renders no cards this run, still link it - the tab still exists.
+**Jump targets, exact tab numbers** (must match the tab-nav radios above verbatim): Licence·lapses / Risk-weighted content -> `di-tab-2`; Backlog·overdue / Coverage·locations -> `di-tab-3`; People·SPOF / Timeliness / Evidence·review-trail -> `di-tab-4`; Forward·next-90-days -> `di-tab-5`. No tile jumps to `di-tab-6` (Actions) or back to `di-tab-1`. If a jump's target tab renders no cards this run, still link it - the tab still exists.
 
 Add to your `<style>` block (copied from the real product's own `.di-snaptile__jump`/`.di-snaptile__dot`, using this document's token names): `.di-snaptile__jump{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--fs-di-chip);color:var(--c-text-3);cursor:pointer;text-decoration:none}` `.di-snaptile__jump:hover{color:var(--c-brand)}` `.di-snaptile__dot{width:6px;height:6px;border-radius:999px;background:var(--c-grey);display:inline-block}` `.di-snaptile--bad .di-snaptile__dot{background:#b3261e}` `.di-snaptile--warn .di-snaptile__dot{background:#b45708}` `.di-snaptile--ok .di-snaptile__dot{background:#1e8a4a}`.
 
@@ -555,7 +565,7 @@ OMIT it (no muted tile, no placeholder). Aim is up to 7 real tiles; a clean run 
    render this tile in any form.
 2. **Licence · confirmed lapses** — REAL. Source: `LicenceControlTotals`/Licence dimension row data (lapsed licences).
 3. **Backlog · overdue** — REAL. Source: Location dimension's tenant overdue count/pct.
-4. **Coverage · stores mapped** — REAL. Source: Location dimension's `BranchesReported` / ghost-entity data.
+4. **Coverage · locations mapped** — REAL. Source: Location dimension's `BranchesReported` / ghost-entity data.
 5. **People · SPOF** — REAL. Source: Users dimension (top-3/reviewer concentration, same data the composite score's `people_continuity` component uses).
 6. **Timeliness · on-time closure** — REAL. **[FIX - found live, 2026-09-09]** This used to point
    at `A-TIMELINESS`/`TenantOnTimePct` from the Location dimension - that assertion **has never
@@ -657,7 +667,7 @@ never compare the bar's shape (which you do not author any more, see above) agai
 run. If `BacklogAgingControlTotals.SumOfRows` is 0 (the `zero_overdue`
 data_quality note is present), the narrative should still state a real 0 - the placeholder
 itself is handled entirely by `InjectBacklogAgeBarActivity` in either case.
-Card 3 — **Licence** (pairs shape): corroborated lapses, stores affected, avg days overdue,
+Card 3 — **Licence** (pairs shape): corroborated lapses, locations affected, avg days overdue,
 expiring-in-90d — from `LicenceControlTotals` and Licence dimension rows. If `expiring_90d` has no
 real assertion, omit that one pair rather than invent it - 3 real pairs beats 4 with one fake.
 
@@ -698,7 +708,7 @@ aria-label="Coverage">...</section>`:
 ```
 
 `CoverageGridInjector` replaces `<div id="di-pane-3-body"></div>` - and everything else you might
-put in this section instead - with the real KPI card, filter chips, region-grouped store grid, and
+put in this section instead - with the real KPI card, filter chips, region-grouped location grid, and
 detail panel, generated directly from the real data. Do not write `di-kpi`, `di-covfilter`,
 `di-covgrid`, `di-covtile`, `di-covlegend`, or `di-covdetail` markup of your own anywhere in this
 pane - it will be discarded either way, so there is no benefit to attempting it. Move on to Tab 4.
@@ -955,12 +965,12 @@ cite a real value.
             <div class="di-ev"><div class="di-ev__lbl">{real metric label}</div><div class="di-ev__val tnum">{real value}<small>{real unit, if any}</small></div></div>
           </div>
         </div>
-        <!-- OPTIONAL: a di-atable (ranked breakdown, e.g. top offending accounts/stores) or
+        <!-- OPTIONAL: a di-atable (ranked breakdown, e.g. top offending accounts/locations) or
              di-apills (a short tag list, e.g. affected categories) ONLY if real per-row/per-tag
              data exists for this finding - omit both entirely rather than invent rows. Real
              markup shape for each, if used (copied from the real product): -->
         <div>
-          <p class="di-action__sech">{real table title, e.g. "Top affected stores"}</p>
+          <p class="di-action__sech">{real table title, e.g. "Top affected locations"}</p>
           <div class="di-atable">
             <div class="di-atable__h" style="grid-template-columns:1fr 90px 80px">
               <span>{col 1 header}</span><span>{col 2 header}</span><span class="di-atable__end">{col 3 header}</span>
@@ -1008,7 +1018,7 @@ Actions pane is a good outcome, and it needs no explanation.
 
 Declare once (based on `holistic-insights-tenant1300.html`, with the collapsible `<details>` /
 `[open]` / chevron chrome restored per the 2026-09-10 tenant override):
-`.di-actions{display:flex;flex-direction:column;gap:.7rem;margin-top:var(--gap-lg)}` `.di-action{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);overflow:hidden}` `.di-action[open]{box-shadow:0 6px 20px rgba(20,28,48,.10)}` `.di-action__summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:flex-start;padding:14px 16px}` `.di-action__summary::-webkit-details-marker{display:none}` `.di-action[open] .di-action__summary{border-bottom:1px solid var(--c-border)}` `.di-action__rank{width:2rem;height:2rem;border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.8rem;color:#fff;background:#b3261e;font-variant-numeric:tabular-nums;flex-shrink:0}` `.di-action__main{display:flex;flex-direction:column;gap:6px;min-width:0}` `.di-action__top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}` `.di-action__domain{font-size:var(--fs-di-chip);text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);font-weight:600}` `.di-effort{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-di-chip);font-weight:600}` `.di-effort--low{color:#1e8a4a}` `.di-effort--med{color:#b45708}` `.di-effort--high{color:#b3261e}` `.di-effort__bars{display:inline-flex;gap:2px}` `.di-effort__bars i{width:3px;height:10px;border-radius:1px;background:#d4d4d4;display:block}` `.di-effort--low .di-effort__bars i:nth-child(1){background:#1e8a4a}` `.di-effort--med .di-effort__bars i:nth-child(1),.di-effort--med .di-effort__bars i:nth-child(2){background:#b45708}` `.di-effort--high .di-effort__bars i{background:#b3261e}` `.di-action__what{font-size:var(--fs-di-headline);font-weight:500;color:var(--c-text)}` `.di-action__stats{display:flex;flex-wrap:wrap;gap:8px}` `.di-action__k{font-size:var(--fs-di-chip);color:var(--c-text-3);background:var(--c-content-mist);border:1px solid var(--c-border);border-radius:999px;padding:3px 10px}` `.di-action__k b{color:var(--c-text);font-weight:600}` `.di-action__outcome{display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-meta);color:var(--c-text-3)}` `.di-action__outcome svg{width:14px;height:14px;flex-shrink:0;margin-top:2px;color:#1e8a4a}` `.di-action__outcome b{color:#1e8a4a;font-weight:600}` `.di-action__chev{width:22px;height:22px;border-radius:50%;background:var(--c-bg);border:1px solid var(--c-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--c-text-3)}` `.di-action__chev svg{width:11px;height:11px}` `.di-action[open] .di-action__chev{background:var(--c-brand);border-color:var(--c-brand);color:#fff;transform:rotate(180deg)}` `.di-action__detail{border-top:1px solid var(--c-border);padding:14px 16px;display:flex;flex-direction:column;gap:12px}` `.di-action__dtitle{font-size:var(--fs-di-headline);font-weight:600;margin:0;color:var(--c-text)}` `.di-action__dsummary{margin:0;font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.55}` `.di-action__sech{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--c-grey);font-weight:600;margin:0 0 6px}` `.di-evidence{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--c-border);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-ev{background:var(--c-surface);padding:8px 11px}` `.di-ev__lbl{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);margin-bottom:3px}` `.di-ev__val{font-size:var(--fs-di-headline);font-weight:600;color:var(--c-text)}` `.di-ev__val small{font-weight:500;color:var(--c-text-3);margin-left:2px}` `.di-steps{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:5px;font-size:var(--fs-meta);color:var(--c-text-2)}`
+`.di-actions{display:flex;flex-direction:column;gap:.7rem;margin-top:var(--gap-lg)}` `.di-action{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);overflow:hidden}` `.di-action[open]{box-shadow:0 6px 20px rgba(20,28,48,.10)}` `.di-action__summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:flex-start;padding:14px 16px}` `.di-action__summary::-webkit-details-marker{display:none}` `.di-action[open] .di-action__summary{border-bottom:1px solid var(--c-border)}` `.di-action__rank{width:2rem;height:2rem;border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.8rem;color:#fff;background:#b3261e;font-variant-numeric:tabular-nums;flex-shrink:0}` `.di-action__main{display:flex;flex-direction:column;gap:6px;min-width:0}` `.di-action__top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}` `.di-action__domain{font-size:var(--fs-di-chip);text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);font-weight:600}` `.di-effort{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-di-chip);font-weight:600;padding:3px 10px;border-radius:999px}` `.di-effort--low{color:#1e8a4a;background:rgba(30,138,74,.12)}` `.di-effort--med{color:#b45708;background:rgba(180,87,8,.12)}` `.di-effort--high{color:#b3261e;background:rgba(179,38,30,.12)}` `.di-effort__bars{display:inline-flex;gap:2px}` `.di-effort__bars i{width:3px;height:10px;border-radius:1px;background:#d4d4d4;display:block}` `.di-effort--low .di-effort__bars i:nth-child(1){background:#1e8a4a}` `.di-effort--med .di-effort__bars i:nth-child(1),.di-effort--med .di-effort__bars i:nth-child(2){background:#b45708}` `.di-effort--high .di-effort__bars i{background:#b3261e}` `.di-action__what{font-size:var(--fs-di-headline);font-weight:500;color:var(--c-text)}` `.di-action__stats{display:flex;flex-wrap:wrap;gap:8px}` `.di-action__k{font-size:var(--fs-di-chip);color:var(--c-text-3);background:var(--c-content-mist);border:1px solid var(--c-border);border-radius:999px;padding:3px 10px}` `.di-action__k b{color:var(--c-text);font-weight:600}` `.di-action__outcome{display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-meta);color:var(--c-text-3)}` `.di-action__outcome svg{width:14px;height:14px;flex-shrink:0;margin-top:2px;color:#1e8a4a}` `.di-action__outcome b{color:#1e8a4a;font-weight:600}` `.di-action__chev{width:22px;height:22px;border-radius:50%;background:var(--c-bg);border:1px solid var(--c-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--c-text-3)}` `.di-action__chev svg{width:11px;height:11px}` `.di-action[open] .di-action__chev{background:var(--c-brand);border-color:var(--c-brand);color:#fff;transform:rotate(180deg)}` `.di-action__detail{border-top:1px solid var(--c-border);padding:14px 16px;display:flex;flex-direction:column;gap:12px}` `.di-action__dtitle{font-size:var(--fs-di-headline);font-weight:600;margin:0;color:var(--c-text)}` `.di-action__dsummary{margin:0;font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.55}` `.di-action__sech{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--c-grey);font-weight:600;margin:0 0 6px}` `.di-evidence{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--c-border);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-ev{background:var(--c-surface);padding:8px 11px}` `.di-ev__lbl{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);margin-bottom:3px}` `.di-ev__val{font-size:var(--fs-di-headline);font-weight:600;color:var(--c-text)}` `.di-ev__val small{font-weight:500;color:var(--c-text-3);margin-left:2px}` `.di-steps{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:5px;font-size:var(--fs-meta);color:var(--c-text-2)}`
 
 **[FIX - dangling reference, found live, 2026-09-09]** The block above never covered `di-atable`/
 `di-apills`/`di-apill`/`di-anote` even though they were named as legitimate optional markup just

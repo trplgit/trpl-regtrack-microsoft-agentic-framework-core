@@ -599,7 +599,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         BackoffCoefficient = 2.0,
                         Handle = ex => ex is not OrchestrationRefusedException,
                     },
-                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson));
+                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
