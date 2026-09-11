@@ -22,6 +22,9 @@ public sealed class ServiceRegistrationTests
         var values = new Dictionary<string, string?>
         {
             ["ConnectionStrings:RegTrack"] = "Server=localhost;Database=placeholder;Trusted_Connection=True;",
+            ["Azure:BlobConnectionString"] = "UseDevelopmentStorage=true",
+            ["Azure:BlobContainer"] = "insights-reports-temp",
+            ["Azure:DigestBlobContainer"] = "insights-digests",
             ["Budget:FreeDigestTokenCap"] = "1500",
             ["Agents:PromptDirectory"] = "./prompts",
             ["Email:TemplatePath"] = "./templates",

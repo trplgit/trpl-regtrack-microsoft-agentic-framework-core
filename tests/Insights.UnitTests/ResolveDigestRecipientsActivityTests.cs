@@ -2,6 +2,7 @@ using Insights.Data;
 using Insights.Domain;
 using Insights.Worker;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -50,7 +51,8 @@ public sealed class ResolveDigestRecipientsActivityTests
         scope.Setup(s => s.GetScopePairsAsync(It.IsAny<int>(), Tenant, It.IsAny<CancellationToken>()))
             .ReturnsAsync([new ScopePair(10, 1)]);
 
-        return new ResolveDigestRecipientsActivity(repo.Object, scope.Object, new FreeDigestMetrics());
+        return new ResolveDigestRecipientsActivity(
+            repo.Object, scope.Object, new FreeDigestMetrics(), NullLogger<ResolveDigestRecipientsActivity>.Instance);
     }
 
     /// <summary>

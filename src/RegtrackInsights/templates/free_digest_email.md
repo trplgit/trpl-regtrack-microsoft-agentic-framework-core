@@ -21,6 +21,8 @@ Two artifacts:
 | `{{DueNext7}}` … `{{CompletedLast7}}` | the ~15 aggregates from `usp_Insights_FreeDigestAggregates` |
 | `{{UnsubscribeUrl}}` | writes the durable per-recipient opt-out |
 
+> **Computed pluralisation clauses:** `{{DueNext7Word}}`, `{{DueNext7Verb}}`, `{{CriticalClause}}`, `{{DueNext30Word}}`, `{{LiabilityVerb}}`, `{{LicenceClause}}`, `{{CompletedWord}}`, `{{CompletedVerb}}` are not raw aggregates — they are computed in `FreeDigestEmailRenderer.TokensFor()` to handle singular/plural agreement and zero-case wording (e.g., `{{CriticalClause}}` renders as "with none rated critical" when the count is zero, or "N of them rated critical" otherwise). This keeps the fallback template pure substitution with no conditional logic, while every number still traces to an aggregate.
+
 ---
 
 ## `digest_fallback.txt` — deterministic body
@@ -31,18 +33,11 @@ useful without being written.
 ```
 Good morning{{#RecipientName}} {{RecipientName}}{{/RecipientName}},
 
-Your compliance calendar for the week ending {{WeekEnding}}:
+Here's your compliance snapshot for the week: **{{DueNext7}} {{DueNext7Word}}** {{DueNext7Verb}} due in the next seven days, {{CriticalClause}}.
 
-Due in the next 7 days:      {{DueNext7}}
-  of which critical:         {{CriticalDueNext7}}
-  carrying personal liability: {{ImprisonmentDueNext7}}
+Looking further out, the next 30 days carry **{{DueNext30}} {{DueNext30Word}}** in total. Of those, **{{ImprisonmentDueNext30}}** {{LiabilityVerb}} personal liability for the responsible officer, and {{LicenceClause}}.
 
-On the horizon (next 30 days):
-  Total due:                 {{DueNext30}}
-  Carrying personal liability: {{ImprisonmentDueNext30}}
-  Licences due to lapse:     {{LicencesLapsingNext30}}
-
-Completed last week:         {{CompletedLast7}}
+**{{CompletedLast7}} {{CompletedWord}}** {{CompletedVerb}} recorded last week across the estate.
 
 This digest shows what is coming. RegInsights Pro shows which locations,
 which people, and which laws are driving it.
@@ -110,7 +105,9 @@ Reject the LLM body and fall back if **any** check fails:
 1. Contains a `%` adjacent to a completion/closure word (a ratio was invented)
 2. Contains the word **"overdue"** (reserved for the paid tier)
 3. Contains a location, user, department or Act name (it has no such data — a
-   hallucination)
+   hallucination). Word-boundary markers (`branch`, `location`, `office`, `department`) 
+   are matched with regex word boundaries so `office` does not trigger on `officer`; 
+   suffix markers (` ltd`, ` pvt`, ` limited`) use substring matching.
 4. Contains a number not present in the 15 aggregates
 5. Exceeds ~400 words
 

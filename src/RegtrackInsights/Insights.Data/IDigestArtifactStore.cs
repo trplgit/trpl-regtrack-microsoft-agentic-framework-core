@@ -15,7 +15,12 @@ public sealed record DigestArtifactContent(
 /// </summary>
 public interface IDigestArtifactStore
 {
-    Task<DigestArtifactContent> WriteAsync(string html, CancellationToken cancellationToken = default);
+    /// <param name="identity">
+    /// Drives the blob's PATH: <c>&lt;customerId&gt;/free_digest/&lt;yyyy&gt;/&lt;mm&gt;/&lt;artifactId&gt;.html.enc</c>,
+    /// the same shape the paid pipeline uses (see <see cref="Insights.Domain.BlobPathContext"/>), partitioned by
+    /// the week the digest covers rather than generation time - see <see cref="Insights.Domain.DigestArtifactIdentity"/>.
+    /// </param>
+    Task<DigestArtifactContent> WriteAsync(string html, DigestArtifactIdentity identity, CancellationToken cancellationToken = default);
 
     Task<string> ReadAsync(FreeDigestArtifact artifact, CancellationToken cancellationToken = default);
 }

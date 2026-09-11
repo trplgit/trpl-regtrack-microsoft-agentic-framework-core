@@ -1,17 +1,10 @@
 ﻿Good morning{{#RecipientName}} {{RecipientName}}{{/RecipientName}},
 
-Your compliance calendar for the week ending {{WeekEnding}}:
+Here's your compliance snapshot for the week: **{{DueNext7}} {{DueNext7Word}}** {{DueNext7Verb}} due in the next seven days, {{CriticalClause}}.
 
-Due in the next 7 days:      **{{DueNext7}}**
-  of which critical:         **{{CriticalDueNext7}}**
-  carrying personal liability: **{{ImprisonmentDueNext7}}**
+Looking further out, the next 30 days carry **{{DueNext30}} {{DueNext30Word}}** in total. Of those, **{{ImprisonmentDueNext30}}** {{LiabilityVerb}} personal liability for the responsible officer, and {{LicenceClause}}.
 
-On the horizon (next 30 days):
-  Total due:                 **{{DueNext30}}**
-  Carrying personal liability: **{{ImprisonmentDueNext30}}**
-  Licences due to lapse:     **{{LicencesLapsingNext30}}**
-
-Completed last week:         **{{CompletedLast7}}**
+**{{CompletedLast7}} {{CompletedWord}}** {{CompletedVerb}} recorded last week across the estate.
 
 This digest shows what is coming. RegInsights Pro shows which locations,
 which people, and which laws are driving it.

@@ -19,7 +19,7 @@ public sealed class SendGridEmailSender(HttpClient httpClient, string apiKey) : 
         });
 
         using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EmailProviderResponse.EnsureSuccessAsync(response, "SendGrid", cancellationToken);
         return new EmailSendResult("SendGrid");
     }
 }

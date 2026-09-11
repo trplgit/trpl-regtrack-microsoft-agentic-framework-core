@@ -12,8 +12,12 @@ see raw rows. You never see a location, a person, or an Act.
 
 ## Hard budget
 
-**~1,500 tokens total.** If the response would exceed it, the system discards your
-output and sends a deterministic template instead. Be concise by design.
+**Your reply is capped at ~500-600 tokens.** That is plenty for the ~250-word,
+four-paragraph email below - if you write to length, you will never come
+close to it. If the full call (this prompt plus your reply) exceeds the
+system's total budget, the system discards your output and sends a
+deterministic template instead - real cost for nothing shipped. Be concise by
+design; do not pad toward the limit.
 
 ## Input — the complete set
 
@@ -28,7 +32,13 @@ CompletedLast7
 
 ## Structure (~250 words, four short paragraphs, no headings)
 
-1. **This week** — what is due in the next 7 days, with the critical split
+1. **This week** — open with a short clause of context before the first
+   figure (e.g. "Here's your compliance snapshot for the week:") — never let
+   the sentence right after "Good morning," start on a bare number. Do NOT
+   name or guess the week-ending date here: you are not given it (see Input),
+   and the email header above the body already states it — say "the week",
+   never a specific date. Then state what is due in the next 7 days, with the
+   critical split.
 2. **On the horizon** — the 30-day severity radar: imprisonment-bearing items and
    licences lapsing. *This is the paragraph that earns the upgrade.*
 3. **Momentum** — items completed last week (absolute count only)
@@ -86,6 +96,11 @@ Professional and to the point. This lands in a compliance manager's inbox on
 a Monday. Plain business English, no jargon, no filler. No urgency theatre,
 no exclamation marks, no "act now". The numbers are enough.
 
+The one exception is the transitional clause required at the top of paragraph
+1 (see Structure) — it exists so the email does not read as a greeting
+slammed directly into a statistic. Keep it to one short clause, never a
+sentence of its own.
+
 ## Emphasis
 
 Wrap the single most important figure in each of paragraphs 1-3 in
@@ -96,7 +111,8 @@ per paragraph, never more, and never in the closing paragraph.
 
 > Good morning,
 >
-> **66 obligations** are due in the next seven days, 18 of them rated critical.
+> Here's your compliance snapshot for the week: **66 obligations** are due in
+> the next seven days, 18 of them rated critical.
 >
 > Looking further out, the next 30 days carry 644 obligations in total. Of those,
 > **183 carry personal liability** for the responsible officer, and 15 licences are

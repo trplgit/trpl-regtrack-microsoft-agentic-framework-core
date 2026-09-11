@@ -66,7 +66,11 @@ public class PersistActivityTests
         Assert.Equal(29, seenPathContext!.TenantId);
         Assert.Equal("compliance_health", seenPathContext.ReportType);
         Assert.Equal(row.Id, seenPathContext.ReportId);
-        Assert.Equal(row.GeneratedAtUtc, seenPathContext.GeneratedAtUtc);
+        // PartitionDate is derived from DateTime.UtcNow (already Kind=Utc, never a local/offset
+        // clock reading) via DateOnly.FromDateTime - a straight truncation, not a timezone
+        // conversion - so the row's generation date and the blob path's partition date can never
+        // drift apart regardless of the host's local timezone.
+        Assert.Equal(DateOnly.FromDateTime(row.GeneratedAtUtc), seenPathContext.PartitionDate);
         Assert.Equal("29/compliance_health/2026/09/abc123.html.enc", row.BlobPath);
         Assert.Equal(29, row.CustomerId);
         Assert.Equal("tenant", row.ScopeDescriptor);

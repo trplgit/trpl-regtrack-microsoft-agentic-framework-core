@@ -2,6 +2,7 @@ using DurableTask.Core;
 using Insights.Data;
 using Insights.Data.Email;
 using Insights.Presentation;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -20,7 +21,8 @@ public sealed record SendDigestFromArtifactOutput(bool Sent, string? Reason, str
 /// unaffected by the separate GENERATE-phase artifact-slot claim.
 /// </summary>
 public sealed class SendDigestFromArtifactActivity(
-    IFreeDigestRepository repository, IEmailSender emailSender, FreeDigestSettings settings, FreeDigestMetrics metrics)
+    IFreeDigestRepository repository, IEmailSender emailSender, FreeDigestSettings settings, FreeDigestMetrics metrics,
+    ILogger<SendDigestFromArtifactActivity> logger)
     : AsyncTaskActivity<SendDigestFromArtifactInput, SendDigestFromArtifactOutput>
 {
     protected override Task<SendDigestFromArtifactOutput> ExecuteAsync(TaskContext context, SendDigestFromArtifactInput input) => RunAsync(input);
@@ -53,8 +55,17 @@ public sealed class SendDigestFromArtifactActivity(
 
             return new SendDigestFromArtifactOutput(true, null, sendResult.ProviderUsed);
         }
-        catch
+        catch (Exception ex)
         {
+            // Retried up to 3x by FreeDigestSendOrchestrator's RetryOptions before this
+            // ultimately fails the orchestration - log every attempt, not just the last, so a
+            // permanently-bad request (EmailProviderException carries the provider's own error
+            // body - see that type's doc comment) is visibly distinguishable from three
+            // successive transient blips without needing Durable Task's own history dump.
+            logger.LogWarning(ex,
+                "SendDigestFromArtifactActivity: tenant {TenantId} user {UserId} - send failed, releasing claim for retry.",
+                input.TenantId, input.UserId);
+
             /*  Hand the claim back before rethrowing - a transient provider error must not consume
                 this recipient's only attempt for the week.                                        */
             await repository.ReleaseClaimAsync(input.TenantId, input.UserId, weekEnding);

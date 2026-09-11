@@ -1,6 +1,7 @@
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -34,7 +35,8 @@ public sealed record ResolveDigestDispatchOutput(
 /// changed back.
 /// </summary>
 public sealed class ResolveDigestDispatchActivity(
-    IFreeDigestRepository repository, IFreeDigestArtifactRepository artifacts, IScopeRepository scope)
+    IFreeDigestRepository repository, IFreeDigestArtifactRepository artifacts, IScopeRepository scope,
+    ILogger<ResolveDigestDispatchActivity> logger)
     : AsyncTaskActivity<ResolveDigestDispatchInput, ResolveDigestDispatchOutput>
 {
     protected override Task<ResolveDigestDispatchOutput> ExecuteAsync(TaskContext context, ResolveDigestDispatchInput input) => RunAsync(input);
@@ -60,7 +62,32 @@ public sealed class ResolveDigestDispatchActivity(
                 tenant.TenantName, [], 0, 0);
         }
 
-        var artifactBySignature = pendingArtifacts.ToDictionary(a => a.ScopeSignature, StringComparer.Ordinal);
+        /*  [BUG FOUND LIVE, 2026-09-11] GetForDispatchAsync returns every COMPLETE, undispatched,
+            in-freshness artifact for the tenant - it does not guarantee at most one per scope
+            group. A plain ToDictionary(a => a.ScopeSignature) THROWS "An item with the same key
+            has already been added" the moment two complete artifacts share a signature - which
+            happens whenever GENERATE has produced more than one un-dispatched artifact for the
+            same scope group within the freshness window (a manual re-run, a retried Sunday tick
+            with different scope-group cardinality, or - confirmed live - two GENERATE runs
+            targeting different weeks close enough together to both still be "fresh"). That is an
+            ordinary operational scenario, not a corrupt-data scenario, so it must not crash the
+            whole tenant's Monday send - group and keep the most recently generated artifact per
+            signature instead. The others are silently correct to drop: a newer generation is
+            never wrong content to prefer over an older one for the same authorised scope.        */
+        var artifactBySignature = pendingArtifacts
+            .GroupBy(a => a.ScopeSignature, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var ordered = g.OrderByDescending(a => a.GeneratedAtUtc).ToList();
+                    if (ordered.Count > 1)
+                        logger.LogWarning(
+                            "ResolveDigestDispatchActivity: tenant {TenantId} scope {ScopeSignature} - {Count} undispatched artifacts within the freshness window, dispatching the most recent ({ArtifactId}, generated {GeneratedAtUtc}); {DroppedCount} older one(s) skipped.",
+                            input.TenantId, g.Key, ordered.Count, ordered[0].ArtifactId, ordered[0].GeneratedAtUtc, ordered.Count - 1);
+                    return ordered[0];
+                },
+                StringComparer.Ordinal);
 
         var recipients = await repository.GetRecipientsAsync(input.TenantId);
 

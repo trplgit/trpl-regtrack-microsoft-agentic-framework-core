@@ -7,7 +7,8 @@ public sealed record FreeDigestGenerateOrchestrationInput(int TenantId, string? 
 
 public sealed record FreeDigestGenerateOrchestrationOutput(
     int TenantId, string TenantName, string Decision, string Reason,
-    int ScopeGroups, int LlmCalls, int Generated, int AlreadyGenerated, int RecipientsWithoutScope);
+    int ScopeGroups, int LlmCalls, int Generated, int AlreadyGenerated, int RecipientsWithoutScope,
+    int TotalInputTokens, int TotalOutputTokens);
 
 /// <summary>
 /// SUNDAY half of the two-phase free digest (ADR-0001, 2026-09-10). Same gate + resolve + group
@@ -46,12 +47,15 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
         {
             return new FreeDigestGenerateOrchestrationOutput(
                 input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
-                ScopeGroups: 0, LlmCalls: 0, Generated: 0, AlreadyGenerated: 0, resolved.RecipientsWithoutScope);
+                ScopeGroups: 0, LlmCalls: 0, Generated: 0, AlreadyGenerated: 0, resolved.RecipientsWithoutScope,
+                TotalInputTokens: 0, TotalOutputTokens: 0);
         }
 
         var llmCalls = 0;
         var generated = 0;
         var alreadyGenerated = 0;
+        var totalInputTokens = 0;
+        var totalOutputTokens = 0;
 
         foreach (var group in resolved.Groups)
         {
@@ -75,11 +79,13 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
                     new ComposeDigestInput(input.TenantId, group.RepresentativeUserId, resolved.WeekEnding, input.AsOf));
 
                 llmCalls++;
+                totalInputTokens += composed.InputTokens;
+                totalOutputTokens += composed.OutputTokens;
 
                 await context.ScheduleWithRetry<PersistDigestArtifactOutput>(
                     typeof(PersistDigestArtifactActivity).Name, "1.0", retry,
                     new PersistDigestArtifactInput(
-                        claim.ArtifactId!, composed.Body, composed.Source, resolved.TenantName, resolved.WeekEnding,
+                        input.TenantId, claim.ArtifactId!, composed.Body, composed.Source, resolved.TenantName, resolved.WeekEnding,
                         context.CurrentUtcDateTime, group.Recipients.Count));
 
                 generated++;
@@ -98,6 +104,7 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
 
         return new FreeDigestGenerateOrchestrationOutput(
             input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
-            resolved.Groups.Count, llmCalls, generated, alreadyGenerated, resolved.RecipientsWithoutScope);
+            resolved.Groups.Count, llmCalls, generated, alreadyGenerated, resolved.RecipientsWithoutScope,
+            totalInputTokens, totalOutputTokens);
     }
 }

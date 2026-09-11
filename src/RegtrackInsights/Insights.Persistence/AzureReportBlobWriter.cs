@@ -72,7 +72,7 @@ public sealed partial class AzureReportBlobWriter(string storageConnectionString
         {
             ["tenantId"] = pathContext.TenantId.ToString(CultureInfo.InvariantCulture),
             ["reportType"] = Slug(pathContext.ReportType),
-            ["generatedAt"] = pathContext.GeneratedAtUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["partitionDate"] = pathContext.PartitionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         };
         try
         {
@@ -90,15 +90,15 @@ public sealed partial class AzureReportBlobWriter(string storageConnectionString
 
     /// <summary>
     /// <c>&lt;tenantId&gt;/&lt;reportType-slug&gt;/&lt;yyyy&gt;/&lt;MM&gt;/&lt;reportId:N&gt;.html.enc</c>.
-    /// Pure - no I/O - so it is unit-testable on its own. yyyy/MM come from the report's own
-    /// GeneratedAtUtc (UTC), zero-padded, so a lifecycle policy can match a whole month by prefix.
+    /// Pure - no I/O - so it is unit-testable on its own. yyyy/MM come straight from
+    /// <see cref="BlobPathContext.PartitionDate"/>, zero-padded, so a lifecycle policy can match a
+    /// whole month by prefix. The caller decides what that date MEANS (paid: generation date; free
+    /// digest: week-ending date) and hands in an already-resolved <see cref="DateOnly"/> - this
+    /// method does no UTC conversion, so it cannot get that decision wrong on the caller's behalf.
     /// </summary>
-    internal static string BuildBlobPath(BlobPathContext ctx)
-    {
-        var when = ctx.GeneratedAtUtc.ToUniversalTime();
-        return string.Create(CultureInfo.InvariantCulture,
-            $"{ctx.TenantId}/{Slug(ctx.ReportType)}/{when:yyyy}/{when:MM}/{ctx.ReportId:N}.html.enc");
-    }
+    internal static string BuildBlobPath(BlobPathContext ctx) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"{ctx.TenantId}/{Slug(ctx.ReportType)}/{ctx.PartitionDate:yyyy}/{ctx.PartitionDate:MM}/{ctx.ReportId:N}.html.enc");
 
     /// <summary>
     /// A path/tag-safe slug for a report-type string: lowercase, every run of non

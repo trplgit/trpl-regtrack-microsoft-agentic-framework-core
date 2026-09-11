@@ -16,7 +16,7 @@ public sealed class AzureReportBlobWriterPathTests
     [Fact]
     public void BuildBlobPath_ProducesTenantTypeYearMonthReportIdWithHtmlEncExtension()
     {
-        var ctx = new BlobPathContext(1300, "fixed_holistic", new DateTime(2026, 9, 7, 23, 30, 0, DateTimeKind.Utc), ReportId);
+        var ctx = new BlobPathContext(1300, "fixed_holistic", new DateOnly(2026, 9, 7), ReportId);
 
         var path = AzureReportBlobWriter.BuildBlobPath(ctx);
 
@@ -26,19 +26,9 @@ public sealed class AzureReportBlobWriterPathTests
     [Fact]
     public void BuildBlobPath_ZeroPadsTheMonth()
     {
-        var ctx = new BlobPathContext(29, "compliance_health", new DateTime(2027, 1, 4, 0, 0, 0, DateTimeKind.Utc), ReportId);
+        var ctx = new BlobPathContext(29, "compliance_health", new DateOnly(2027, 1, 4), ReportId);
 
         Assert.StartsWith("29/compliance_health/2027/01/", AzureReportBlobWriter.BuildBlobPath(ctx));
-    }
-
-    [Fact]
-    public void BuildBlobPath_NormalisesGenerationTimeToUtcBeforeSlicingYearMonth()
-    {
-        // 2026-04-01 00:30 in a +05:30 zone is still 2026-03-31 19:00 UTC - the path must use UTC.
-        var local = new DateTimeOffset(2026, 4, 1, 0, 30, 0, TimeSpan.FromHours(5.5));
-        var ctx = new BlobPathContext(1, "act", local.UtcDateTime, ReportId);
-
-        Assert.StartsWith("1/act/2026/03/", AzureReportBlobWriter.BuildBlobPath(ctx));
     }
 
     [Theory]
@@ -58,7 +48,7 @@ public sealed class AzureReportBlobWriterPathTests
     public void BuildBlobPath_CarriesNoPii_OnlyIntTenantSlugAndGuid()
     {
         var path = AzureReportBlobWriter.BuildBlobPath(
-            new BlobPathContext(1300, "fixed_holistic", DateTime.UtcNow, ReportId));
+            new BlobPathContext(1300, "fixed_holistic", DateOnly.FromDateTime(DateTime.UtcNow), ReportId));
 
         // No spaces, no '@', no uppercase name-like tokens - path segments are id/slug/date/guid only.
         Assert.DoesNotContain(' ', path);

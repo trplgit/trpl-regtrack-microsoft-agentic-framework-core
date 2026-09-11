@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using DurableTask.Core;
 using Insights.Domain;
 using Insights.Worker.Orchestration;
@@ -95,13 +97,19 @@ public sealed class FreeDigestRunOnceWorker(
                     return;
             }
 
+            var stopwatch = Stopwatch.StartNew();
             var state = await client.WaitForOrchestrationAsync(instance, TimeSpan.FromMinutes(30), stoppingToken);
+            stopwatch.Stop();
 
-            logger.LogInformation("Status: {Status}", state.OrchestrationStatus);
+            logger.LogInformation("Status: {Status} (took {ElapsedSeconds:F1}s enqueue-to-completion).",
+                state.OrchestrationStatus, stopwatch.Elapsed.TotalSeconds);
 
             if (state.OrchestrationStatus == OrchestrationStatus.Completed)
             {
                 logger.LogInformation("Output: {Output}", state.Output);
+
+                if (string.Equals(phase, "generate", StringComparison.OrdinalIgnoreCase))
+                    LogGenerateCostAndScopeSummary(state.Output, tenantId, stopwatch.Elapsed);
             }
             else
             {
@@ -119,6 +127,60 @@ public sealed class FreeDigestRunOnceWorker(
         finally
         {
             lifetime.StopApplication();
+        }
+    }
+
+    /*  Requested 2026-09-11: a per-tenant generate run should self-report cost, scope-resolution
+        shape, token totals and wall time, in the log, rather than someone reading raw HTTP
+        client trace lines and doing the arithmetic by hand every time (that is how every cost
+        figure up to this point in the session was produced - error-prone and not repeatable).
+
+        Pricing is the STANDARD PUBLISHED rate for gpt-4o-mini ($0.15/1M input, $0.60/1M output) -
+        this is NOT read from any Azure billing API, so it will not reflect a negotiated/discounted
+        rate if one exists on this account. Treat the dollar figure as an estimate, the token
+        counts as exact (they come straight from the provider's own usage response).             */
+    private const decimal InputTokenCostPerMillion = 0.15m;
+    private const decimal OutputTokenCostPerMillion = 0.60m;
+
+    private void LogGenerateCostAndScopeSummary(string orchestrationOutputJson, int tenantId, TimeSpan elapsed)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(orchestrationOutputJson);
+            var root = doc.RootElement;
+
+            // Not every generate outcome carries these fields (e.g. a gate refusal returns them
+            // as zero, which is correct - nothing was spent - but a genuinely older/different
+            // output shape should not crash this summary, only skip it).
+            if (!root.TryGetProperty("TotalInputTokens", out var inTokensEl) ||
+                !root.TryGetProperty("TotalOutputTokens", out var outTokensEl))
+                return;
+
+            var inputTokens = inTokensEl.GetInt32();
+            var outputTokens = outTokensEl.GetInt32();
+            var scopeGroups = root.TryGetProperty("ScopeGroups", out var sg) ? sg.GetInt32() : 0;
+            var llmCalls = root.TryGetProperty("LlmCalls", out var lc) ? lc.GetInt32() : 0;
+            var generated = root.TryGetProperty("Generated", out var g) ? g.GetInt32() : 0;
+            var alreadyGenerated = root.TryGetProperty("AlreadyGenerated", out var ag) ? ag.GetInt32() : 0;
+
+            var estimatedCost = inputTokens / 1_000_000m * InputTokenCostPerMillion
+                               + outputTokens / 1_000_000m * OutputTokenCostPerMillion;
+
+            logger.LogInformation(
+                "GENERATE SUMMARY - tenant {TenantId}: {ScopeGroups} scope group(s) resolved -> {LlmCalls} LLM call(s) made " +
+                "({Generated} newly generated, {AlreadyGenerated} already had a complete artifact this week). " +
+                "Tokens: {InputTokens} in + {OutputTokens} out = {TotalTokens} total. " +
+                "Estimated cost: ${EstimatedCost:F6} (gpt-4o-mini standard rate - see this method's own doc comment for why this is an estimate, not a billed figure). " +
+                "Wall time: {ElapsedSeconds:F1}s enqueue-to-completion.",
+                tenantId, scopeGroups, llmCalls, generated, alreadyGenerated,
+                inputTokens, outputTokens, inputTokens + outputTokens,
+                estimatedCost, elapsed.TotalSeconds);
+        }
+        catch (JsonException ex)
+        {
+            // A cost/scope summary that fails to parse must never mask that the run itself
+            // already succeeded (logged above, unconditionally) - this is purely additive.
+            logger.LogWarning(ex, "Could not parse the orchestration output to log a cost/scope summary - the run itself still completed successfully.");
         }
     }
 }

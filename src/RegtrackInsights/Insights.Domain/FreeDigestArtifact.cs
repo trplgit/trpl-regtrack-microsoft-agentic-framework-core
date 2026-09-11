@@ -24,3 +24,14 @@ public sealed record FreeDigestArtifact(
 
 /// <summary>The result of a claim attempt - see ICooldownRepository/CooldownResult for the same "record, don't throw, on an expected outcome" shape.</summary>
 public sealed record FreeDigestArtifactClaimResult(bool Claimed, Guid? ArtifactId);
+
+/// <summary>
+/// What <see cref="Insights.Data.IDigestArtifactStore"/> needs to build the digest blob's PATH -
+/// mirrors <see cref="BlobPathContext"/>'s role in the paid pipeline, but keyed on the slot's
+/// natural key (<see cref="CustomerId"/>, <see cref="WeekEnding"/>, <see cref="ArtifactId"/>)
+/// rather than a generation timestamp, since <c>GeneratedAtUtc</c> is minted and re-stamped by SQL
+/// (usp_Insights_FreeDigestArtifactClaim) and is never returned to the activity. Deliberately has
+/// no string member - <c>TenantName</c> (PII) is structurally unable to reach the blob path through
+/// this type.
+/// </summary>
+public sealed record DigestArtifactIdentity(int CustomerId, DateOnly WeekEnding, Guid ArtifactId);

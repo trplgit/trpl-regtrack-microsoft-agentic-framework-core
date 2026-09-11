@@ -4,6 +4,7 @@ using Insights.Domain;
 using Insights.Presentation;
 using Insights.Worker;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -44,7 +45,8 @@ public sealed class SendDigestFromArtifactActivityTests
         sender.Setup(s => s.SendAsync(It.IsAny<EmailMessage>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EmailSendResult("ElasticEmail"));
 
-        var activity = new SendDigestFromArtifactActivity(repo.Object, sender.Object, Settings(), new FreeDigestMetrics());
+        var activity = new SendDigestFromArtifactActivity(
+            repo.Object, sender.Object, Settings(), new FreeDigestMetrics(), NullLogger<SendDigestFromArtifactActivity>.Instance);
 
         return (activity, repo, sender);
     }

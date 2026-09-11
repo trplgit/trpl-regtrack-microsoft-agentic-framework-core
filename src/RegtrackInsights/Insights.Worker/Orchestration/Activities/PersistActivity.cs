@@ -48,7 +48,7 @@ public sealed class PersistActivity(
 
         var envelope = await encryptor.EncryptAsync(input.Html);
         var location = await blobWriter.WriteAsync(
-            envelope, new BlobPathContext(input.TenantId, input.ReportType, generatedAtUtc, reportId));
+            envelope, new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(generatedAtUtc), reportId));
 
         var report = new GeneratedReport
         {

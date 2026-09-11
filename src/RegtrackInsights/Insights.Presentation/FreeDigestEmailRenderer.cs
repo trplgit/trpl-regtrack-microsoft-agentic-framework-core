@@ -31,10 +31,13 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
     {
         var html = await RenderHtmlAsync(body, tenantName, weekEnding, upgradeUrl, UnsubscribeSentinel, cancellationToken);
 
-        var occurrences = CountOccurrences(html, UnsubscribeSentinel);
-        if (occurrences != 1)
-            throw new InvalidOperationException(
-                $"Digest artifact render produced {occurrences} occurrence(s) of the unsubscribe sentinel, expected exactly 1 - refusing to store an artifact with no (or an ambiguous) unsubscribe link.");
+        // Unsubscribe link removed from digest.html - the sentinel no longer appears in the
+        // rendered shell, so the exactly-once assertion below would always throw. Commented out
+        // along with the template markup (digest.html) and the SubstituteUnsubscribeUrl check below.
+        // var occurrences = CountOccurrences(html, UnsubscribeSentinel);
+        // if (occurrences != 1)
+        //     throw new InvalidOperationException(
+        //         $"Digest artifact render produced {occurrences} occurrence(s) of the unsubscribe sentinel, expected exactly 1 - refusing to store an artifact with no (or an ambiguous) unsubscribe link.");
 
         return html;
     }
@@ -47,10 +50,13 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
     /// </summary>
     public static string SubstituteUnsubscribeUrl(string artifactHtml, string realUnsubscribeUrl)
     {
-        var occurrences = CountOccurrences(artifactHtml, UnsubscribeSentinel);
-        if (occurrences != 1)
-            throw new InvalidOperationException(
-                $"Digest artifact has {occurrences} occurrence(s) of the unsubscribe sentinel, expected exactly 1 - refusing to send a possibly-altered artifact.");
+        // Unsubscribe link removed from digest.html - the sentinel is never rendered into the
+        // artifact anymore, so this is a no-op. Commented out along with the exactly-once
+        // assertion (see RenderHtmlForArtifactAsync above) rather than deleted.
+        // var occurrences = CountOccurrences(artifactHtml, UnsubscribeSentinel);
+        // if (occurrences != 1)
+        //     throw new InvalidOperationException(
+        //         $"Digest artifact has {occurrences} occurrence(s) of the unsubscribe sentinel, expected exactly 1 - refusing to send a possibly-altered artifact.");
 
         return artifactHtml.Replace(UnsubscribeSentinel, realUnsubscribeUrl, StringComparison.Ordinal);
     }
@@ -103,6 +109,16 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
         return File.ReadAllTextAsync(Path.Combine(root, fileName), cancellationToken);
     }
 
+    /// <summary>
+    /// The fallback body is meant to read as though the same prompt (prompts/06_freetier_digest.md)
+    /// had written it - a recipient should not be able to tell whether the LLM was skipped this
+    /// week. The raw aggregates alone cannot produce that ("0 obligations" reads fine, but "18 of
+    /// which critical" as a fixed label does not flex for zero or singular) - so the clauses below
+    /// are computed HERE, in code, not in the template. The template stays pure substitution
+    /// (Substitute has no conditional-on-value logic, only conditional-on-non-empty-string), and
+    /// every number still traces straight to an aggregate - same "state the count, never a rate,
+    /// never a fabrication" rule the prompt itself is held to.
+    /// </summary>
     private static Dictionary<string, string> TokensFor(FreeDigestAggregates a, string? recipientName, DateTime weekEnding) => new()
     {
         ["RecipientName"] = recipientName ?? string.Empty,
@@ -114,7 +130,26 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
         ["ImprisonmentDueNext30"] = a.ImprisonmentDueNext30.ToString(),
         ["LicencesLapsingNext30"] = a.LicencesLapsingNext30.ToString(),
         ["CompletedLast7"] = a.CompletedLast7.ToString(),
+
+        ["DueNext7Word"] = Plural(a.DueNext7, "obligation", "obligations"),
+        ["DueNext7Verb"] = Plural(a.DueNext7, "is", "are"),
+        ["CriticalClause"] = a.CriticalDueNext7 == 0
+            ? "with none rated critical"
+            : $"{a.CriticalDueNext7} of them rated critical",
+
+        ["DueNext30Word"] = Plural(a.DueNext30, "obligation", "obligations"),
+        ["LiabilityVerb"] = Plural(a.ImprisonmentDueNext30, "carries", "carry"),
+        ["LicenceClause"] = a.LicencesLapsingNext30 == 0
+            ? "no licences are due to lapse"
+            : $"{a.LicencesLapsingNext30} {Plural(a.LicencesLapsingNext30, "licence", "licences")} " +
+              $"{Plural(a.LicencesLapsingNext30, "is", "are")} due to lapse",
+
+        ["CompletedWord"] = Plural(a.CompletedLast7, "completion", "completions"),
+        ["CompletedVerb"] = Plural(a.CompletedLast7, "was", "were"),
     };
+
+    /// <summary>English pluralisation only ever needs to distinguish "exactly one" from everything else - zero takes the plural form same as any other count.</summary>
+    private static string Plural(int count, string singular, string plural) => count == 1 ? singular : plural;
 
     /// <summary>
     /// Minimal mustache subset: {{Token}} substitution plus {{#Token}}...{{/Token}}

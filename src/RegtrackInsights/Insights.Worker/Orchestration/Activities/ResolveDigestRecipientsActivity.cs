@@ -2,6 +2,7 @@ using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
 using Insights.Worker;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -38,7 +39,8 @@ public sealed record ResolveDigestRecipientsOutput(
 public sealed class ResolveDigestRecipientsActivity(
     IFreeDigestRepository repository,
     IScopeRepository scope,
-    FreeDigestMetrics metrics)
+    FreeDigestMetrics metrics,
+    ILogger<ResolveDigestRecipientsActivity> logger)
     : AsyncTaskActivity<ResolveDigestRecipientsInput, ResolveDigestRecipientsOutput>
 {
     protected override Task<ResolveDigestRecipientsOutput> ExecuteAsync(TaskContext context, ResolveDigestRecipientsInput input) => RunAsync(input);
@@ -141,6 +143,17 @@ public sealed class ResolveDigestRecipientsActivity(
         var result = groups
             .Select(kv => new DigestScopeGroup(kv.Key, kv.Value.RepresentativeUserId, kv.Value.Members))
             .ToList();
+
+        /*  Scope resolution is the one place that determines LLM call COUNT (one per distinct
+            signature, never per recipient - see ComposeDigestActivity's own doc comment on why).
+            Logged here, not computed after the fact from HTTP traffic, because this is the only
+            place that actually knows the recipient-to-group shape - by the time ComposeDigestActivity
+            runs, all it has is one representative user id, with no visibility into how many real
+            people share that signature or how skewed the distribution is.                        */
+        var groupSizes = string.Join(", ", result.Select(g => g.Recipients.Count).OrderDescending());
+        logger.LogInformation(
+            "ResolveDigestRecipientsActivity: tenant {TenantId} - {RecipientCount} recipients resolved into {GroupCount} distinct scope group(s) (sizes: {GroupSizes}), {WithoutScope} recipient(s) dropped with no scope. {GroupCount} scope group(s) means at most {GroupCount} LLM call(s) this run, not {RecipientCount}.",
+            input.TenantId, recipients.Count, result.Count, groupSizes, withoutScope, result.Count, result.Count, recipients.Count);
 
         return new ResolveDigestRecipientsOutput(
             true, gate.Decision.ToString(), gate.Reason, tenant.TenantName, weekEnding, result, withoutScope);

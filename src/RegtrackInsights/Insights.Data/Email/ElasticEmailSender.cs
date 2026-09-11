@@ -21,7 +21,7 @@ public sealed class ElasticEmailSender(HttpClient httpClient, string apiKey) : I
         });
 
         using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EmailProviderResponse.EnsureSuccessAsync(response, "ElasticEmail", cancellationToken);
         return new EmailSendResult("ElasticEmail");
     }
 }
