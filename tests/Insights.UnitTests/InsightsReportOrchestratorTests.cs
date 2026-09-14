@@ -155,8 +155,10 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 300_000));
 
         var orchestrator = new InsightsReportOrchestrator();
+        // Nature - deliberately a dimension NOT in FreehandDimensions.Names (Location joined it
+        // 2026-09-14; Nature/Risk/Internal/Event still use the deterministic path).
         var input = new InsightsReportOrchestrationInput(
-            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Location"]);
+            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Nature"]);
 
         await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
 

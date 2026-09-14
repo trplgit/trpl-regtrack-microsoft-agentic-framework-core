@@ -53,6 +53,7 @@ public class PaidReportAgentsRegistrationTests
         Assert.NotNull(compositionAgents["BacklogAging"]);
         Assert.NotNull(compositionAgents["Departments"]);
         Assert.NotNull(compositionAgents["Licence"]);
+        Assert.NotNull(compositionAgents["Location"]);
     }
 
     [Fact]

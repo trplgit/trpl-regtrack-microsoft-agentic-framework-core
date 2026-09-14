@@ -114,6 +114,7 @@ public static class PaidReportAgentsRegistration
                 ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging.md"),
                 ["Departments"] = Build("Departments", "02_composition_freehand_departments.md"),
                 ["Licence"] = Build("Licence", "02_composition_freehand_licence.md"),
+                ["Location"] = Build("Location", "02_composition_freehand_location.md"),
             };
         });
 
@@ -173,11 +174,15 @@ public static class PaidReportAgentsRegistration
                 // AFTER the generic dimension_selection prompt above was built on Trent's design -
                 // Location gets its own specific-key override here rather than changing the
                 // generic prompt (which still serves every dimension without its own specific
-                // key, e.g. Nature/Entity/Risk/Act/Internal/Event, on Trent's system for now -
-                // flagged as a real, not-yet-closed gap, not a silent inconsistency).
+                // key, e.g. Nature/Risk/Internal/Event, on Trent's system for now - flagged as a
+                // real, not-yet-closed gap, not a silent inconsistency; NOT part of v1's release
+                // scope - see the freehand-dimensions-v1-scope memory).
+                // [REPLACED 2026-09-14] Location joined FreehandDimensions.Names the same day as
+                // v1's scope was confirmed - same reasoning as the Departments/BacklogAging/Act/
+                // Licence entries below: real LLM composition ahead of render, sol deployment.
                 ["dimension_selection:Location"] = Build(
-                    "DimensionSelectionLocationReportHtmlAgent", "Renders a single-Location-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_location.md"),
+                    "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_location.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Dimension-specific override for a
                 // single-"Users" request - RenderHtmlActivity's own doc comment explains the
                 // "{ReportType}:{DimensionName}" key-preference rule this depends on. First built
