@@ -224,6 +224,23 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     /// Reads real connection strings/keys straight from D:\trpl-reginsights-dev\appsettings.json
     /// (the real local dev config, outside this repo) rather than env vars - keeps secrets out of
     /// any shell command entirely. Non-secret overrides layered on top via AddInMemoryCollection.
+    ///
+    /// [REAL FINDING, 2026-09-14 - EXPECTED, NOT A BUG] Run twice for real (15-min then 30-min
+    /// budget, with real console logging wired both times): 0/10 reached rendering in either
+    /// run, every case stuck cycling gathering/validating/composing/narrating. Confirmed NOT a
+    /// defect - LlmConcurrencyGate/ConcurrencyGatedChatClient's actual code was read line by line
+    /// (correct: proper locking, direct slot handoff, double-release guard), and the real
+    /// diagnostic log across both runs (~3000+ lines, DTFx's own console logging) shows zero
+    /// errors, warnings, exceptions, or retries anywhere - checkpoints landing steadily, fast
+    /// latencies, nothing hanging. This IS what Agents:MaxConcurrentLlmCalls=3 genuinely produces
+    /// when all 10 real orchestrations are freehand dimensions (every one needs the extra real
+    /// composition call on top of narrate+reflect+render+vision-QA) and all launch at once - a
+    /// real capacity ceiling, deliberately left as-is (user decision, 2026-09-14): real production
+    /// traffic bursting 10 simultaneous freehand Generate clicks is not the expected case, and
+    /// raising the cap without knowing sol/gpt-5.2/terra's real per-deployment RPM/TPM risks
+    /// tripping the exact rate limit this gate exists to prevent. If real production telemetry
+    /// later shows this ceiling actually matters, that real number is the input this decision
+    /// needs - not a guess.
     /// </summary>
     [Fact]
     public async Task RunAsync_FreehandDimensions_RealTenants_Concurrently_AllReachCompleteStatus()
