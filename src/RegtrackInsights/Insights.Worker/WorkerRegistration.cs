@@ -109,6 +109,7 @@ public static class WorkerRegistration
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
         services.AddTransient<ComputeScoreActivity>();
+        services.AddTransient<ComposeFreehandDimensionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
         services.AddTransient<PublishGateActivity>();
@@ -179,7 +180,7 @@ public static class WorkerRegistration
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
-                ActivityCreator<ComputeScoreActivity>(sp),
+                ActivityCreator<ComputeScoreActivity>(sp), ActivityCreator<ComposeFreehandDimensionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),

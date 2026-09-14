@@ -78,7 +78,7 @@ public class RenderHtmlActivityTests
             [$"{DimensionSelectionComposition.ReportType}:Location"] = locationAgent.Object,
         });
 
-        var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt));
+        var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", DimensionSelectionComposition.ReportType, generatedAt, DimensionName: "Location"));
 
         Assert.Equal("<!DOCTYPE html><html>location, finalized</html>", result.Html);
         genericAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Never);

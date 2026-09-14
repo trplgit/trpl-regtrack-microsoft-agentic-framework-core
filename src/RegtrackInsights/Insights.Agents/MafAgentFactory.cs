@@ -4,6 +4,7 @@ using System.ClientModel;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using OpenAI.Responses;
 
 namespace Insights.Agents;
 
@@ -29,18 +30,25 @@ public static class MafAgentFactory
     /// </summary>
     public const string ChatClientActivitySourceName = "Microsoft.Extensions.AI";
 
-    /// <summary>For agents whose contract is a JSON object (composition, reflection, narrative).</summary>
-    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
+    /// <summary>
+    /// For agents whose contract is a JSON object (composition, reflection, narrative).
+    /// <paramref name="reasoningEffort"/> [ADDED 2026-09-14] is optional and defaults to null
+    /// (no ReasoningOptions set - unchanged behavior for every existing caller). Freehand
+    /// dimension composition is the first caller to pass a real value, deliberately configurable
+    /// (FreehandDimensions:ReasoningEffort) rather than hardcoded, so it can be tuned without a
+    /// code change.
+    /// </summary>
+    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// </summary>
-    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
+    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate)
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort)
     {
         /*  [BUG FOUND LIVE, 2026-09-01] The SDK's own default NetworkTimeout is 100 seconds
             (ClientPipelineOptions.NetworkTimeout - confirmed via the SDK's own
@@ -92,6 +100,12 @@ public static class MafAgentFactory
                 // confirmed via reflection, not guessed (2026-08-20).
                 Instructions = instructions,
                 ResponseFormat = responseFormat,
+                RawRepresentationFactory = reasoningEffort is null
+                    ? null
+                    : _ => new CreateResponseOptions
+                    {
+                        ReasoningOptions = new ResponseReasoningOptions { ReasoningEffortLevel = reasoningEffort.Value },
+                    },
             },
         };
 

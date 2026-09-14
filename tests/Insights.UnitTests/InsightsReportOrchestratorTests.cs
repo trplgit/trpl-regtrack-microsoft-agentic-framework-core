@@ -85,6 +85,84 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-14] FreehandDimensions.Names (Act/BacklogAging/Departments/Licence) get a
+    /// real LLM composition call instead of DimensionSelectionComposition.Build's fixed single
+    /// block - stops right after Narrate (a per-run-budget refusal, same technique
+    /// RunTask_PerRunTokenBudgetExceeded_RefusesAndNeverNarrates uses) so the test does not need to
+    /// mock the entire render/inject/persist chain to prove which composition path ran.
+    /// </summary>
+    [Fact]
+    public async Task RunTask_DimensionSelectionWithFreehandDimension_UsesComposeFreehandDimensionActivity()
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(DateTime.UtcNow);
+
+        var dimensionJson = """{"Rows":[],"ControlTotals":{},"DataQuality":[]}""";
+        var plan = new CompositionPlan(new CompositionHero("worst_acts", "highest real overdue rate for this tenant"), [], [], []);
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string> { ["Act"] = dimensionJson }, [], []));
+
+        ComposeFreehandDimensionInput? capturedComposeInput = null;
+        context.Setup(c => c.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Callback<string, string, object[]>((_, _, args) => capturedComposeInput = (ComposeFreehandDimensionInput)args[0])
+            .ReturnsAsync(new ComposeFreehandDimensionOutput(plan, 5000));
+
+        // Any Narrate result pushes the running total (5000 compose + this) over the 250k ceiling,
+        // so the run refuses right here - nothing past Narrate needs mocking.
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 300_000));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(
+            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Act"]);
+
+        await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
+
+        context.Verify(c => c.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+        Assert.NotNull(capturedComposeInput);
+        Assert.Equal("Act", capturedComposeInput!.Dimension);
+        context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
+            It.Is<object[]>(args => ((NarrateInput)args[0]).Plan == plan)), Times.Once);
+    }
+
+    /// <summary>
+    /// Regression guard - Location (not in FreehandDimensions.Names) must keep using the
+    /// deterministic DimensionSelectionComposition.Build path, never the LLM one.
+    /// </summary>
+    [Fact]
+    public async Task RunTask_DimensionSelectionWithNonFreehandDimension_NeverCallsComposeFreehandDimensionActivity()
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(DateTime.UtcNow);
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 300_000));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(
+            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Location"]);
+
+        await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
+
+        context.Verify(c => c.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+    }
+
     // [DELETED 2026-09-11] RunTask_CompositionReflectionRevises_CallsComposeTwice - tested the
     // dynamic composition reflection loop (ComposeActivity/ReflectOnCompositionActivity), which no
     // longer exists at all. FixedHolisticComposition/DimensionSelectionComposition are pure

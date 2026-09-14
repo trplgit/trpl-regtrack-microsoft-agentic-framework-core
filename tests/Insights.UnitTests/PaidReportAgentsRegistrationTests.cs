@@ -47,6 +47,12 @@ public class PaidReportAgentsRegistrationTests
         Assert.NotNull(htmlAgents["dimension_selection:BacklogAging"]);
         Assert.NotNull(htmlAgents["dimension_selection:Act"]);
         Assert.NotNull(htmlAgents["dimension_selection:Licence"]);
+
+        var compositionAgents = provider.GetRequiredService<IReadOnlyDictionary<string, IFreehandDimensionCompositionAgent>>();
+        Assert.NotNull(compositionAgents["Act"]);
+        Assert.NotNull(compositionAgents["BacklogAging"]);
+        Assert.NotNull(compositionAgents["Departments"]);
+        Assert.NotNull(compositionAgents["Licence"]);
     }
 
     [Fact]

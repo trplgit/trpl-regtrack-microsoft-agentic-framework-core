@@ -439,6 +439,26 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             {
                 plan = FixedHolisticComposition.Build();
             }
+            else if (input.ReportType == DimensionSelectionComposition.ReportType
+                && input.RequestedDimensions is [var soleDimension] && FreehandDimensions.Names.Contains(soleDimension))
+            {
+                // [ADDED 2026-09-14] Real LLM composition for exactly these four dimensions -
+                // see FreehandDimensions' own doc comment for why. dimensions.DimensionResults[d]
+                // already carries Rows/ControlTotals/DataQuality as one serialized JSON object
+                // (DimensionResult<,>'s own shape) - same raw source dimensionRowsJson/
+                // dimensionControlTotalsJson extract from further below for render, pulled here
+                // too since composition needs it earlier in the pipeline.
+                var dimensionJson = System.Text.Json.JsonDocument.Parse(dimensions.DimensionResults[soleDimension]).RootElement;
+                var composeResult = await context.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0",
+                    new ComposeFreehandDimensionInput(
+                        soleDimension, dimensions.Assertions, dimensions.Findings,
+                        dimensionJson.GetProperty("Rows").GetRawText(),
+                        dimensionJson.GetProperty("ControlTotals").GetRawText(),
+                        dimensionJson.GetProperty("DataQuality").GetRawText(),
+                        input.Priority));
+                ChargeAndCheck(composeResult.TotalTokens);
+                plan = composeResult.Plan;
+            }
             else if (input.ReportType == DimensionSelectionComposition.ReportType)
             {
                 plan = DimensionSelectionComposition.Build(input.RequestedDimensions!);
@@ -599,7 +619,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         BackoffCoefficient = 2.0,
                         Handle = ex => ex is not OrchestrationRefusedException,
                     },
-                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson));
+                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson,
+                        DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
