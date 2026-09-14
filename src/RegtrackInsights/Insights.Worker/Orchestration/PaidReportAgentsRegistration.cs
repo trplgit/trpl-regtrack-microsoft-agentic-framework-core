@@ -26,12 +26,19 @@ public static class PaidReportAgentsRegistration
         var apiKey = Require(configuration, "Llm:Maf:ApiKey");
         var promptDirectory = Require(configuration, "Agents:PromptDirectory");
 
-        // [ADDED 2026-09-14] The four FreehandDimensions agents (composition + their four render
-        // overrides) deliberately use a DIFFERENT deployment (sol) than every other agent this
-        // file registers, and a configurable reasoning effort - explicit product decision to be
-        // able to tune it without a code change ("play with reasoning levels"), same endpoint/key
-        // as Llm:Maf (one Azure AI Foundry project, different deployment name only). Defaults keep
-        // a fresh environment working with zero new required config.
+        // [ADDED 2026-09-14, CORRECTED 2026-09-14] The four FreehandDimensions agents (composition
+        // + their four render overrides) deliberately use a DIFFERENT deployment (sol) than every
+        // other agent this file registers, and a configurable reasoning effort - explicit product
+        // decision to be able to tune it without a code change ("play with reasoning levels").
+        // [BUG FOUND LIVE] First wired assuming sol shared Llm:Maf's endpoint/key (same Azure AI
+        // Foundry project, different deployment name only) - confirmed WRONG via a real run: sol
+        // 404s (DeploymentNotFound) on trpl-prod-saas-ai-3 (Llm:Maf's endpoint), because it is
+        // actually deployed on a DIFFERENT resource, trpl-prod-saas-ai-2. Endpoint/ApiKey are now
+        // independently configurable (FreehandDimensions:Endpoint/ApiKey), each falling back to
+        // Llm:Maf's own value only so a fresh environment with nothing configured still starts -
+        // that fallback will keep 404ing until FreehandDimensions:Endpoint/ApiKey are actually set.
+        var freehandEndpoint = configuration["FreehandDimensions:Endpoint"] is { Length: > 0 } fe ? fe : endpoint;
+        var freehandApiKey = configuration["FreehandDimensions:ApiKey"] is { Length: > 0 } fk ? fk : apiKey;
         var freehandModel = configuration["FreehandDimensions:Model"] is { Length: > 0 } fm ? fm : "gpt-5.6-sol";
         var freehandReasoningEffort = configuration["FreehandDimensions:ReasoningEffort"] is { Length: > 0 } fre
             ? Enum.Parse<ResponseReasoningEffortLevel>(fre, ignoreCase: true)
@@ -98,7 +105,7 @@ public static class PaidReportAgentsRegistration
 
             IFreehandDimensionCompositionAgent Build(string dimension, string promptFile) =>
                 new MafFreehandDimensionCompositionAgent(MafAgentFactory.CreateJsonAgent(
-                    endpoint, freehandModel, apiKey, $"FreehandComposition{dimension}Agent", $"Decides structure/hero/emphasis for a freehand {dimension} insight from real tenant data.",
+                    freehandEndpoint, freehandModel, freehandApiKey, $"FreehandComposition{dimension}Agent", $"Decides structure/hero/emphasis for a freehand {dimension} insight from real tenant data.",
                     LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate, freehandReasoningEffort));
 
             return new Dictionary<string, IFreehandDimensionCompositionAgent>
@@ -149,7 +156,7 @@ public static class PaidReportAgentsRegistration
             // nullable target type instead.
             IReportHtmlAgent Build(string name, string description, string promptFile, string? modelOverride = null) =>
                 new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
-                    endpoint, modelOverride ?? model, apiKey, name, description,
+                    modelOverride is null ? endpoint : freehandEndpoint, modelOverride ?? model, modelOverride is null ? apiKey : freehandApiKey, name, description,
                     LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate,
                     modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort));
 

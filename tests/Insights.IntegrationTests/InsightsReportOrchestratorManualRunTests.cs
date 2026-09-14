@@ -204,6 +204,77 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
+    /// [ADDED 2026-09-14] Real end-to-end validation of the new freehand composition+render path
+    /// (FreehandDimensions.Names: Act, BacklogAging, Departments, Licence) - first time any of
+    /// this has actually reached a real model. Same real-worker/real-DTFx shape as the Users
+    /// dimension_selection Theory above, tenant 1008 (Minda Corporation Group) for all four so the
+    /// first pass isolates "does the mechanism work at all" from "does it vary sensibly by
+    /// tenant." FreehandDimensions:Model/ReasoningEffort deliberately left unset - the real
+    /// defaults (gpt-5.6-sol / High) are exactly what should be validated first.
+    ///
+    /// Reads real connection strings/keys straight from D:\trpl-reginsights-dev\appsettings.json
+    /// (the real local dev config, outside this repo) rather than env vars - keeps secrets out of
+    /// any shell command entirely. Non-secret overrides layered on top via AddInMemoryCollection.
+    /// </summary>
+    [Theory]
+    [InlineData("Act")]
+    [InlineData("BacklogAging")]
+    [InlineData("Departments")]
+    [InlineData("Licence")]
+    public async Task RunAsync_FreehandDimension_RealTenant_ReachesCompleteStatus(string dimension)
+    {
+        const int tenantId = 1008;
+        const int userId = 12116;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+                ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
+                ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
+                ["Budget:AlertAtPercentOfCeiling"] = "80",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var input = new InsightsReportOrchestrationInput(
+                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day", userId, LlmCallPriority.Interactive, [dimension]);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"Dimension {dimension}, tenant {tenantId}: {state.OrchestrationStatus}, final status {state.Status}");
+            if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                output.WriteLine($"Output/failure detail: {state.Output}");
+
+            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
     /// THROWAWAY - a real worker process that only DEQUEUES, and stays alive INDEFINITELY (up to
     /// the 30-minute budget below) rather than polling one known run and exiting.
     ///
