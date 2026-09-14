@@ -111,8 +111,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string> { ["Act"] = dimensionJson }, [], []));
 
         ComposeFreehandDimensionInput? capturedComposeInput = null;
-        context.Setup(c => c.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<object[]>()))
-            .Callback<string, string, object[]>((_, _, args) => capturedComposeInput = (ComposeFreehandDimensionInput)args[0])
+        context.Setup(c => c.ScheduleWithRetry<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
+            .Callback<string, string, RetryOptions, object[]>((_, _, _, args) => capturedComposeInput = (ComposeFreehandDimensionInput)args[0])
             .ReturnsAsync(new ComposeFreehandDimensionOutput(plan, 5000));
 
         // Any Narrate result pushes the running total (5000 compose + this) over the 250k ceiling,
@@ -126,7 +126,7 @@ public class InsightsReportOrchestratorTests
 
         await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
 
-        context.Verify(c => c.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+        context.Verify(c => c.ScheduleWithRetry<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()), Times.Once);
         Assert.NotNull(capturedComposeInput);
         Assert.Equal("Act", capturedComposeInput!.Dimension);
         context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
@@ -160,7 +160,7 @@ public class InsightsReportOrchestratorTests
 
         await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
 
-        context.Verify(c => c.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+        context.Verify(c => c.ScheduleWithRetry<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()), Times.Never);
     }
 
     // [DELETED 2026-09-11] RunTask_CompositionReflectionRevises_CallsComposeTwice - tested the

@@ -448,8 +448,21 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 // (DimensionResult<,>'s own shape) - same raw source dimensionRowsJson/
                 // dimensionControlTotalsJson extract from further below for render, pulled here
                 // too since composition needs it earlier in the pipeline.
+                // [ADDED 2026-09-14, STABILITY REVIEW] Real LLM call, same transient-failure risk
+                // class as RenderHtmlActivity - a network blip or one-off malformed response used
+                // to fail the WHOLE run outright here, no retry, unlike render. Same RetryOptions
+                // shape as render's own ScheduleWithRetry: 3 attempts, exponential backoff, never
+                // retrying a deterministic OrchestrationRefusedException (this activity does not
+                // throw that today, but the filter is what keeps it true if that ever changes -
+                // same reasoning as render's own comment on this exact pattern).
                 var dimensionJson = System.Text.Json.JsonDocument.Parse(dimensions.DimensionResults[soleDimension]).RootElement;
-                var composeResult = await context.ScheduleTask<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0",
+                var composeResult = await context.ScheduleWithRetry<ComposeFreehandDimensionOutput>(
+                    typeof(ComposeFreehandDimensionActivity).Name, "1.0",
+                    new RetryOptions(TimeSpan.FromSeconds(3), maxNumberOfAttempts: 3)
+                    {
+                        BackoffCoefficient = 2.0,
+                        Handle = ex => ex is not OrchestrationRefusedException,
+                    },
                     new ComposeFreehandDimensionInput(
                         soleDimension, dimensions.Assertions, dimensions.Findings,
                         dimensionJson.GetProperty("Rows").GetRawText(),
