@@ -6,6 +6,7 @@ using Insights.Worker.Orchestration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 
 namespace Insights.IntegrationTests;
@@ -255,7 +256,13 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             .Build();
 
         var services = new ServiceCollection();
-        services.AddLogging();
+        // [FIX 2026-09-14] Was AddLogging() with no provider attached - every ILogger call in the
+        // whole pipeline (DurableTaskRunStatusReader's own logger.LogError on failure, anything
+        // DTFx or the OpenAI SDK logs internally) was silently discarded. Real diagnostic blindness
+        // - the first 10-way concurrent run stalled with zero instances reaching rendering and
+        // this gave no way to tell whether that was real queueing math or actual failures retrying
+        // silently underneath ComposeFreehandDimensionActivity's own ScheduleWithRetry.
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
         services.AddInsightsData(configuration);
         services.AddInsightsTenantTokenBudget(configuration);
         services.AddInsightsWorker();
@@ -283,24 +290,40 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
                     "90day", userId, LlmCallPriority.Interactive, [dimension]);
                 var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
                 instances.Add((dimension, tenantId, instance.InstanceId));
-                output.WriteLine($"Enqueued: {dimension}, tenant {tenantId} -> {instance.InstanceId}");
+                output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} Enqueued: {dimension}, tenant {tenantId} -> {instance.InstanceId}");
             }
 
+            // [FIX 2026-09-14] Was `await PollUntilTerminalAsync(...)` directly inside the
+            // Select - the FIRST instance to time out faulted the whole Task.WhenAll immediately,
+            // hiding whatever the other 9 were actually doing. Each instance's own outcome
+            // (Completed/Failed/TimedOut) is now captured individually, so one straggler can never
+            // hide the real per-instance picture again. Budget raised from 15 to 30 minutes - the
+            // first run's own real math (all 10 cases are freehand dimensions, every one needs the
+            // extra composition call, all fighting over the same 3-slot gate) makes 15 minutes an
+            // unrealistic budget for genuine worst-case queueing, not evidence of a hang by itself.
             var polls = instances.Select(async i =>
             {
-                var state = await PollUntilTerminalAsync(client, i.InstanceId, TimeSpan.FromMinutes(15));
-                output.WriteLine($"{i.Dimension}, tenant {i.TenantId}: {state.OrchestrationStatus}, final status {state.Status}");
-                if (state.OrchestrationStatus != OrchestrationStatus.Completed)
-                    output.WriteLine($"  Output/failure detail ({i.Dimension}, tenant {i.TenantId}): {state.Output}");
-                return (i.Dimension, i.TenantId, state.OrchestrationStatus);
+                try
+                {
+                    var state = await PollUntilTerminalAsync(client, i.InstanceId, TimeSpan.FromMinutes(30));
+                    output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} {i.Dimension}, tenant {i.TenantId}: {state.OrchestrationStatus}, final status {state.Status}");
+                    if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                        output.WriteLine($"  Output/failure detail ({i.Dimension}, tenant {i.TenantId}): {state.Output}");
+                    return (i.Dimension, i.TenantId, Outcome: state.OrchestrationStatus.ToString());
+                }
+                catch (Exception ex)
+                {
+                    output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} {i.Dimension}, tenant {i.TenantId}: EXCEPTION - {ex.GetType().Name}: {ex.Message}");
+                    return (i.Dimension, i.TenantId, Outcome: $"Exception:{ex.GetType().Name}");
+                }
             });
 
             var results = await Task.WhenAll(polls);
 
-            var failed = results.Where(r => r.OrchestrationStatus != OrchestrationStatus.Completed).ToList();
+            var failed = results.Where(r => r.Outcome != nameof(OrchestrationStatus.Completed)).ToList();
             output.WriteLine($"Summary: {results.Length - failed.Count}/{results.Length} completed.");
-            foreach (var (dimension, tenantId, status) in failed)
-                output.WriteLine($"  FAILED: {dimension}, tenant {tenantId} -> {status}");
+            foreach (var (dimension, tenantId, outcome) in failed)
+                output.WriteLine($"  FAILED: {dimension}, tenant {tenantId} -> {outcome}");
 
             Assert.Empty(failed);
         }
