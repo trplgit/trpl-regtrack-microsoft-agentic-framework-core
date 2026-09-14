@@ -144,7 +144,7 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
                 $"Length={stripped.Length}. Start=[{stripped[..Math.Min(300, stripped.Length)]}]. End=[{stripped[Math.Max(0, stripped.Length - 300)..]}].");
 
         var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
-        return new AgentCallResult<string>(stripped, totalTokens);
+        return new AgentCallResult<string>(stripped, totalTokens, ReasoningSummaryExtractor.Extract(response.Messages));
     }
 
     /// <summary>

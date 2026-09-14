@@ -50,6 +50,6 @@ public sealed class MafNarrativeReflectionAgent(AIAgent agent) : INarrativeRefle
             ?? throw new InvalidOperationException($"Narrative reflection agent returned unparsable JSON: {text}");
 
         var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
-        return new AgentCallResult<NarrativeReflectionResult>(result, totalTokens);
+        return new AgentCallResult<NarrativeReflectionResult>(result, totalTokens, ReasoningSummaryExtractor.Extract(response.Messages));
     }
 }

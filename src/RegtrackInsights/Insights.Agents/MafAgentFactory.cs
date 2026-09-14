@@ -4,6 +4,7 @@ using System.ClientModel;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using OpenAI.Responses;
 
 namespace Insights.Agents;
 
@@ -92,6 +93,22 @@ public static class MafAgentFactory
                 // confirmed via reflection, not guessed (2026-08-20).
                 Instructions = instructions,
                 ResponseFormat = responseFormat,
+                // [ADDED 2026-09-14] Requests the vendor's own summary of its reasoning for every
+                // call this factory makes (composition reflection/narrative/reflection/report
+                // HTML - the five agents this factory builds). ReasoningSummaryVerbosity is the
+                // ONLY supported way to get any of the model's reasoning back - OpenAI's terms
+                // forbid extracting raw chain-of-thought by any other means. "Auto" lets each
+                // model pick its own summary style rather than forcing "concise", which the gpt-5
+                // series rejects per Microsoft's own docs. See ReasoningSummaryExtractor for how
+                // this is read back out of the response.
+                RawRepresentationFactory = _ => new CreateResponseOptions
+                {
+                    ReasoningOptions = new ResponseReasoningOptions
+                    {
+                        ReasoningEffortLevel = ResponseReasoningEffortLevel.High,
+                        ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                    },
+                },
             },
         };
 
