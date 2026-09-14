@@ -15,6 +15,9 @@ public class PaidReportAgentsRegistrationTests
             ["Llm:Maf:Endpoint"] = "https://example.invalid/openai/v1",
             ["Llm:Maf:Model"] = "gpt-5.2",
             ["Llm:Maf:ApiKey"] = "test-key",
+            ["Llm:VisionQa:Endpoint"] = "https://example.invalid/openai/v1",
+            ["Llm:VisionQa:Model"] = "gpt-5.2",
+            ["Llm:VisionQa:ApiKey"] = "test-key",
             ["Agents:PromptDirectory"] = "./prompts",
         })
         .Build();
@@ -37,6 +40,7 @@ public class PaidReportAgentsRegistrationTests
 
         Assert.NotNull(provider.GetRequiredService<INarrativeAgent>());
         Assert.NotNull(provider.GetRequiredService<INarrativeReflectionAgent>());
+        Assert.NotNull(provider.GetRequiredService<IVisionQaAgent>());
 
         var htmlAgents = provider.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
         Assert.NotNull(htmlAgents["fixed_holistic"]);

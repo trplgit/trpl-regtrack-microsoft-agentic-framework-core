@@ -19,7 +19,11 @@ public sealed record RenderHtmlInput(
     // now driven directly by which dimension was requested, never by how many blocks composition
     // decided to produce.
     string? DimensionName = null,
-    string? ReqId = null);
+    string? ReqId = null,
+    // [ADDED 2026-09-14] Set only when this attempt is a retry triggered by VisionQaActivity
+    // finding a real visual defect in the PREVIOUS attempt - see IReportHtmlAgent.RenderAsync's
+    // own doc comment on this same field.
+    string? PreviousVisualIssue = null);
 public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 
 /// <summary>
@@ -80,7 +84,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
-            input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);
+            input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.PreviousVisualIssue, CancellationToken.None);
         return new RenderHtmlOutput(result.Value, result.TotalTokens);
     }
 }

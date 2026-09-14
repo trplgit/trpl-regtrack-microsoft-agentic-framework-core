@@ -608,6 +608,15 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             const int maxRenderAttempts = 3;
             ValidateFixedHolisticStructureOutput? structureChecked = null;
 
+            // [ADDED 2026-09-14] Set from VisionQaActivity's own OUTPUT (a real ScheduleTask
+            // result, safely replayable) right before throwing on a real visual defect below -
+            // deliberately NOT read back out of the caught exception on the next iteration, per
+            // the [BUG FOUND LIVE, 2026-09-07] note further down: a custom exception's own content
+            // does not reliably survive a DTFx replay pass, so deriving this value from it would
+            // be a real non-determinism risk. Reading it from the activity output instead is safe
+            // because that is exactly what DTFx replay re-derives identically from history.
+            string? previousVisualIssue = null;
+
             for (var renderAttempt = 1; renderAttempt <= maxRenderAttempts; renderAttempt++)
             {
                 // [BUG FOUND LIVE, 2026-09-01] Render is the one call in this whole pipeline with
@@ -634,7 +643,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     },
                     new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson,
                         DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null,
-                        ReqId: input.ReqId));
+                        ReqId: input.ReqId,
+                        PreviousVisualIssue: previousVisualIssue));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
@@ -776,6 +786,28 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         typeof(ValidateUserDimensionStructureActivity).Name, "1.0",
                         new ValidateUserDimensionStructureInput(structureChecked.Html, input.ReportType, input.RequestedDimensions, usersRowsJson));
                     structureChecked = new ValidateFixedHolisticStructureOutput(userStructureChecked.Html);
+
+                    // [ADDED 2026-09-14] Real vision-model gate - runs inside this SAME
+                    // render-retry loop, same "structural defect the render agent can plausibly
+                    // fix on a fresh attempt" reasoning the structure gate above already
+                    // documents. Deliberately AFTER the structure gate (cheaper, deterministic
+                    // checks run first) and still inside the try, so a real visual defect reuses
+                    // the exact same catch-and-retry mechanism.
+                    var visionResult = await context.ScheduleTask<VisionQaOutput>(
+                        typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
+                    ChargeAndCheck(visionResult.TotalTokens);
+
+                    if (visionResult.HasVisualDefect)
+                    {
+                        // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
+                        // see this loop's own doc comment on why that matters for replay safety.
+                        previousVisualIssue = visionResult.Issue;
+                        throw new OrchestrationRefusedException(
+                            "VISUAL_DEFECT_DETECTED",
+                            "We couldn't generate this report to our accuracy standard. Our team has been notified.",
+                            internalDiagnostics: [visionResult.Issue ?? "Vision QA flagged a defect with no issue text."]);
+                    }
+
                     break;
                 }
                 catch (Exception) when (renderAttempt < maxRenderAttempts)

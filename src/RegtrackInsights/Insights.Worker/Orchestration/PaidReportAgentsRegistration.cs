@@ -44,6 +44,14 @@ public static class PaidReportAgentsRegistration
             ? Enum.Parse<ResponseReasoningEffortLevel>(fre, ignoreCase: true)
             : ResponseReasoningEffortLevel.High;
 
+        // [ADDED 2026-09-14] Vision QA's own deployment - a real, different Azure resource again
+        // (trpl-prod-saas-ai-3, not ai-2/sol or the shared Llm:Maf one), same "confirm before
+        // wiring, do not assume it shares an endpoint" lesson FreehandDimensions' own [BUG FOUND
+        // LIVE] note already paid for once tonight.
+        var visionQaEndpoint = Require(configuration, "Llm:VisionQa:Endpoint");
+        var visionQaModel = Require(configuration, "Llm:VisionQa:Model");
+        var visionQaApiKey = Require(configuration, "Llm:VisionQa:ApiKey");
+
         /*  Item 17 - cost instrumentation. Registered as one singleton exposed under two service
             types so the agents depend on the ILlmUsageRecorder contract while anything that needs
             to dispose the Meter can resolve the concrete class. NOT two registrations: two Meters
@@ -125,6 +133,14 @@ public static class PaidReportAgentsRegistration
         services.AddSingleton<INarrativeReflectionAgent>(sp => new MafNarrativeReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
             LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+
+        // [ADDED 2026-09-14] Real vision-model gate inside the render-retry loop - see
+        // VisionQaActivity's own doc comment for why this is a real gate, not advisory like
+        // PlaywrightQaActivity. CreateJsonAgent, not CreateTextAgent - the output contract is
+        // {has_visual_defect, issue}, same JSON-mode reasoning as every other structured agent.
+        services.AddSingleton<IVisionQaAgent>(sp => new MafVisionQaAgent(MafAgentFactory.CreateJsonAgent(
+            visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
+            LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
