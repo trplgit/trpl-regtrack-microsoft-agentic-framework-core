@@ -1,5 +1,6 @@
 using DurableTask.Core;
 using Insights.Agents;
+using Insights.Data;
 using Insights.Domain;
 
 namespace Insights.Worker.Orchestration.Activities;
@@ -43,12 +44,13 @@ public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 /// below already covers Entity-alone (which the orchestrator's own Entity-ALONE redirect turns
 /// into a plain "fixed_holistic" request before this activity ever runs).
 /// </summary>
-public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAgent> htmlAgentsByReportType)
+public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAgent> htmlAgentsByReportType, IAgentReasoningRecorder? reasoningRecorder = null)
     : AsyncTaskActivity<RenderHtmlInput, RenderHtmlOutput>
 {
-    protected override Task<RenderHtmlOutput> ExecuteAsync(TaskContext context, RenderHtmlInput input) => RunAsync(input);
+    protected override Task<RenderHtmlOutput> ExecuteAsync(TaskContext context, RenderHtmlInput input) =>
+        RunAsync(input, context.OrchestrationInstance.InstanceId);
 
-    internal async Task<RenderHtmlOutput> RunAsync(RenderHtmlInput input)
+    internal async Task<RenderHtmlOutput> RunAsync(RenderHtmlInput input, string? runId = null)
     {
         // Design spec (docs/superpowers/specs/2026-09-09-per-dimension-render-template-design.md
         // Sec.4.1) - a single-dimension request tries a dimension-specific key first
@@ -69,6 +71,19 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
             input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);
+
+        if (runId is not null)
+        {
+            try
+            {
+                await (reasoningRecorder ?? IAgentReasoningRecorder.Null).RecordAsync(runId, "render_html", result.ReasoningSummary);
+            }
+            catch
+            {
+                // Reasoning capture is not worth a response.
+            }
+        }
+
         return new RenderHtmlOutput(result.Value, result.TotalTokens);
     }
 }

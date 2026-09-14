@@ -1,4 +1,5 @@
 using Insights.Agents;
+using Insights.Data;
 using Insights.Domain;
 using Insights.Worker.Orchestration.Activities;
 using Moq;
@@ -25,6 +26,44 @@ public class RenderHtmlActivityTests
 
         Assert.Equal("<!DOCTYPE html><html></html>", result.Html);
         Assert.Equal(3100, result.TotalTokens);
+    }
+
+    [Fact]
+    public async Task RunAsync_RunIdGivenAndReasoningSummaryPresent_RecordsIt()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var plan = new CompositionPlan(new CompositionHero("coverage_map", "why"), [], [], []);
+        var narrative = new NarrativeResult([]);
+        var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
+        IReadOnlyList<Assertion> assertions = [];
+
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100, "chose a coverage-first layout because..."));
+
+        var recorder = new Mock<IAgentReasoningRecorder>();
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { ["compliance_health"] = agent.Object }, recorder.Object);
+        await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt), runId: "run-123");
+
+        recorder.Verify(r => r.RecordAsync("run-123", "render_html", "chose a coverage-first layout because...", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_NoRunIdGiven_NeverCallsRecorder()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var plan = new CompositionPlan(new CompositionHero("coverage_map", "why"), [], [], []);
+        var narrative = new NarrativeResult([]);
+        var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
+        IReadOnlyList<Assertion> assertions = [];
+
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100, "some reasoning"));
+
+        var recorder = new Mock<IAgentReasoningRecorder>();
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { ["compliance_health"] = agent.Object }, recorder.Object);
+        await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt));
+
+        recorder.Verify(r => r.RecordAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     /// <summary>
