@@ -116,8 +116,7 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     /// <summary>
     /// [ADDED 2026-09-15] Real end-to-end run of `dimension_selection:Users` (the same template
     /// this session spent all day fixing - CSS inlining, lens toggle nesting, real company name)
-    /// through the ACTUAL orchestrator - not the lab-test activity-by-activity bypass
-    /// (ModelComparisonLabTests.cs), the real Durable Task worker dequeuing off the real
+    /// through the ACTUAL orchestrator - not an activity-by-activity bypass, the real Durable Task worker dequeuing off the real
     /// SQL-backed task hub. Three real production tenants, requested by the user directly:
     /// Life Cell Group (1326), Minda Corporation Group (1008), Agrocel Group (1082) - user ids
     /// each independently confirmed to have real scope pairs via tvfInsightsScopePairs before
