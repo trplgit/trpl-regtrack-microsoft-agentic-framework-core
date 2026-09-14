@@ -366,13 +366,18 @@ public static class RunEndpoints
     private static async Task WriteFrameAsync(
         HttpContext http, string? eventName, InsightsRunStatus status, CancellationToken cancellationToken)
     {
+        // [CHANGED 2026-09-14, PRODUCT DECISION] Was {runId, status, stage, stagesComplete,
+        // stagesTotal, message} - the detailed 7-stage breakdown is now deliberately NOT sent to
+        // the customer-facing stream. status alone (queued/running/complete/failed) is the whole
+        // external contract now; internal stage detail stays internal (LangFuse/logs), same
+        // "internal diagnostics never reach the response body" stance §11.3 already applies to
+        // failure messages. InsightsRunStatus itself is UNCHANGED (still carries Stage/
+        // StagesComplete/StagesTotal) - only what this one endpoint puts on the wire changed, so
+        // nothing else that reads InsightsRunStatus needed touching.
         var payload = JsonSerializer.Serialize(new
         {
             runId = status.RunId,
             status = status.Status,
-            stage = status.Stage,
-            stagesComplete = status.StagesComplete,
-            stagesTotal = status.StagesTotal,
             // Present only on failure, and user-safe by construction - see InsightsRunStatus.
             message = status.Message,
         });
