@@ -22,9 +22,10 @@ public sealed record ComposeFreehandDimensionOutput(CompositionPlan Plan, long T
 public sealed class ComposeFreehandDimensionActivity(IReadOnlyDictionary<string, IFreehandDimensionCompositionAgent> agentsByDimension)
     : AsyncTaskActivity<ComposeFreehandDimensionInput, ComposeFreehandDimensionOutput>
 {
-    protected override Task<ComposeFreehandDimensionOutput> ExecuteAsync(TaskContext context, ComposeFreehandDimensionInput input) => RunAsync(input);
+    protected override Task<ComposeFreehandDimensionOutput> ExecuteAsync(TaskContext context, ComposeFreehandDimensionInput input) =>
+        RunAsync(input, context.OrchestrationInstance.InstanceId);
 
-    internal async Task<ComposeFreehandDimensionOutput> RunAsync(ComposeFreehandDimensionInput input)
+    internal async Task<ComposeFreehandDimensionOutput> RunAsync(ComposeFreehandDimensionInput input, string? runId = null)
     {
         if (!agentsByDimension.TryGetValue(input.Dimension, out var agent))
         {
@@ -33,6 +34,7 @@ public sealed class ComposeFreehandDimensionActivity(IReadOnlyDictionary<string,
         }
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
+        using var _session = LangfuseSessionContext.Push(runId);
         var result = await agent.ComposeAsync(
             input.Assertions, input.Findings, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.DataQualityJson, CancellationToken.None);
         return new ComposeFreehandDimensionOutput(result.Value, result.TotalTokens);

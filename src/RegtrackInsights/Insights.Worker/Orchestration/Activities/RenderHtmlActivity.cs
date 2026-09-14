@@ -55,9 +55,10 @@ public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAgent> htmlAgentsByReportType)
     : AsyncTaskActivity<RenderHtmlInput, RenderHtmlOutput>
 {
-    protected override Task<RenderHtmlOutput> ExecuteAsync(TaskContext context, RenderHtmlInput input) => RunAsync(input);
+    protected override Task<RenderHtmlOutput> ExecuteAsync(TaskContext context, RenderHtmlInput input) =>
+        RunAsync(input, context.OrchestrationInstance.InstanceId);
 
-    internal async Task<RenderHtmlOutput> RunAsync(RenderHtmlInput input)
+    internal async Task<RenderHtmlOutput> RunAsync(RenderHtmlInput input, string? runId = null)
     {
         // Design spec (docs/superpowers/specs/2026-09-09-per-dimension-render-template-design.md
         // Sec.4.1) - a single-dimension request tries a dimension-specific key first
@@ -75,6 +76,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         }
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
+        using var _session = LangfuseSessionContext.Push(runId);
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
             input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);

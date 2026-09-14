@@ -66,6 +66,11 @@ public static class MafAgentFactory
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint), NetworkTimeout = TimeSpan.FromMinutes(5) });
         IChatClient chatClient = client.GetResponsesClient().AsIChatClient(model);
 
+        /*  [ADDED 2026-09-14] MUST be INNERMOST of all - i.e. wrapped by OpenTelemetryChatClient,
+            not wrapping it - so it runs WHILE the real chat span (Activity.Current) is active, not
+            before it starts or after it has already stopped. See its own doc comment. */
+        chatClient = new LangfuseSessionTaggingChatClient(chatClient);
+
         /*  OTel wraps the RAW client, innermost, so its span timing measures the actual network
             call rather than anything the layers above add. EnableSensitiveData gates whether the
             span carries full prompt/response text (Otel:EnableSensitiveData, design doc Sec.3.2's

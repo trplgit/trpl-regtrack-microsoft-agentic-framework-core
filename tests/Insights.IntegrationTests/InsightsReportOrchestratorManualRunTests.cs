@@ -226,15 +226,16 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         const int tenantId = 1008;
         const int userId = 12116;
 
+        // [FIX 2026-09-14] The REAL, current config is the in-repo (gitignored)
+        // src/RegtrackInsights/appsettings.json - it already has Llm:Maf pointed at sol/ai-2. The
+        // root D:\trpl-reginsights-dev\appsettings.json this first pointed at is a stale copy
+        // (still ai-3/terra) - that mismatch is exactly what produced the DeploymentNotFound 404.
         var configuration = new ConfigurationBuilder()
-            .AddJsonFile(@"D:\trpl-reginsights-dev\appsettings.json")
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Agents:PromptDirectory"] = "./prompts",
                 ["Azure:BlobContainer"] = "insights-reports-temp",
-                ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
-                ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
-                ["Budget:AlertAtPercentOfCeiling"] = "80",
             })
             .Build();
 
