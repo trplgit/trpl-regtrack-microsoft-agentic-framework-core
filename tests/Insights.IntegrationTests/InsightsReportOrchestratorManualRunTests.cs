@@ -203,27 +203,43 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
-    /// [ADDED 2026-09-14] Real end-to-end validation of the new freehand composition+render path
-    /// (FreehandDimensions.Names: Act, BacklogAging, Departments, Licence) - first time any of
-    /// this has actually reached a real model. Same real-worker/real-DTFx shape as the Users
-    /// dimension_selection Theory above, tenant 1008 (Minda Corporation Group) for all four so the
-    /// first pass isolates "does the mechanism work at all" from "does it vary sensibly by
-    /// tenant." FreehandDimensions:Model/ReasoningEffort deliberately left unset - the real
-    /// defaults (gpt-5.6-sol / High) are exactly what should be validated first.
+    /// [ADDED 2026-09-14, REWRITTEN 2026-09-14] Real end-to-end stability pass - "multiple
+    /// pitfalls", not a single happy-path repeat: all 5 freehand dimensions
+    /// (FreehandDimensions.Names) across 3 real production tenants with independently-confirmed
+    /// real scope pairs (2026-09-13 session) - Minda Corporation Group (1008), Life Cell Group
+    /// (1326), Agrocel Group (1082). Location included for the first time here - never run live
+    /// since joining FreehandDimensions.Names.
+    ///
+    /// [REWRITTEN, real concurrency] Was a [Theory] with 10 InlineData rows - xUnit runs Theory
+    /// cases of ONE method sequentially by default, so that never actually exercised concurrent
+    /// load. This fires all 10 real orchestration runs through ONE shared ServiceProvider
+    /// instead, via Task.WhenAll - deliberately ONE shared LlmConcurrencyGate instance, matching
+    /// the real deployed worker exactly (also one process, one gate). Ten SEPARATE dotnet-test
+    /// processes would each build their OWN in-memory gate (cap 3 each) - real aggregate
+    /// concurrent LLM calls could hit ~30 against the same Azure resources, a self-inflicted
+    /// rate-limit risk that has nothing to do with real pipeline bugs and would contaminate the
+    /// signal this run exists to produce.
     ///
     /// Reads real connection strings/keys straight from D:\trpl-reginsights-dev\appsettings.json
     /// (the real local dev config, outside this repo) rather than env vars - keeps secrets out of
     /// any shell command entirely. Non-secret overrides layered on top via AddInMemoryCollection.
     /// </summary>
-    [Theory]
-    [InlineData("Act")]
-    [InlineData("BacklogAging")]
-    [InlineData("Departments")]
-    [InlineData("Licence")]
-    public async Task RunAsync_FreehandDimension_RealTenant_ReachesCompleteStatus(string dimension)
+    [Fact]
+    public async Task RunAsync_FreehandDimensions_RealTenants_Concurrently_AllReachCompleteStatus()
     {
-        const int tenantId = 1008;
-        const int userId = 12116;
+        (string Dimension, int TenantId, int UserId)[] cases =
+        [
+            ("Act", 1008, 12116),
+            ("BacklogAging", 1008, 12116),
+            ("Licence", 1008, 12116),
+            ("Location", 1008, 12116),
+            ("Departments", 1326, 83105),
+            ("Location", 1326, 83105),
+            ("Act", 1326, 83105),
+            ("BacklogAging", 1082, 14128),
+            ("Licence", 1082, 14128),
+            ("Departments", 1082, 14128),
+        ];
 
         // [FIX 2026-09-14] The REAL, current config is the in-repo (gitignored)
         // src/RegtrackInsights/appsettings.json - it already has Llm:Maf pointed at sol/ai-2. The
@@ -254,18 +270,39 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         try
         {
             var client = provider.GetRequiredService<TaskHubClient>();
-            var input = new InsightsReportOrchestrationInput(
-                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
-                "90day", userId, LlmCallPriority.Interactive, [dimension]);
 
-            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
-            var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+            // Enqueue is cheap/fast (real DTFx metadata write, not an LLM call) - sequential here
+            // costs nothing real and avoids any shared-state risk in the enqueue path itself. The
+            // real concurrency this run is actually testing happens AFTER this, inside the
+            // worker's own dequeue loop, gated by the one shared LlmConcurrencyGate.
+            var instances = new List<(string Dimension, int TenantId, string InstanceId)>();
+            foreach (var (dimension, tenantId, userId) in cases)
+            {
+                var input = new InsightsReportOrchestrationInput(
+                    tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                    "90day", userId, LlmCallPriority.Interactive, [dimension]);
+                var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+                instances.Add((dimension, tenantId, instance.InstanceId));
+                output.WriteLine($"Enqueued: {dimension}, tenant {tenantId} -> {instance.InstanceId}");
+            }
 
-            output.WriteLine($"Dimension {dimension}, tenant {tenantId}: {state.OrchestrationStatus}, final status {state.Status}");
-            if (state.OrchestrationStatus != OrchestrationStatus.Completed)
-                output.WriteLine($"Output/failure detail: {state.Output}");
+            var polls = instances.Select(async i =>
+            {
+                var state = await PollUntilTerminalAsync(client, i.InstanceId, TimeSpan.FromMinutes(15));
+                output.WriteLine($"{i.Dimension}, tenant {i.TenantId}: {state.OrchestrationStatus}, final status {state.Status}");
+                if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                    output.WriteLine($"  Output/failure detail ({i.Dimension}, tenant {i.TenantId}): {state.Output}");
+                return (i.Dimension, i.TenantId, state.OrchestrationStatus);
+            });
 
-            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+            var results = await Task.WhenAll(polls);
+
+            var failed = results.Where(r => r.OrchestrationStatus != OrchestrationStatus.Completed).ToList();
+            output.WriteLine($"Summary: {results.Length - failed.Count}/{results.Length} completed.");
+            foreach (var (dimension, tenantId, status) in failed)
+                output.WriteLine($"  FAILED: {dimension}, tenant {tenantId} -> {status}");
+
+            Assert.Empty(failed);
         }
         finally
         {
