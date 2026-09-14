@@ -1419,8 +1419,8 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         // leaving both around after a clean finish is confusing, not helpful.
         if (File.Exists(inProgressPath))
             File.Delete(inProgressPath);
-        if (qa is not null && qa.Screenshot.Length > 0)
-            await File.WriteAllBytesAsync(Path.Combine(LabRoot, $"{Slug(target.Label)}{variantSuffix}.png"), qa.Screenshot);
+        if (qa is not null && qa.Screenshots.Count > 0)
+            await File.WriteAllBytesAsync(Path.Combine(LabRoot, $"{Slug(target.Label)}{variantSuffix}.png"), qa.Screenshots[0]);
 
         return new ModelRunResult(target.Label, totalTokens, iterations + 1, review.Approved, htmlPath, review.Approved ? [] : review.Issues);
     }
@@ -1809,7 +1809,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
         var message = new ChatMessage(ChatRole.User,
         [
             new TextContent(text_),
-            new DataContent(qa.Screenshot, "image/png"),
+            new DataContent(qa.Screenshots[0], "image/png"),
             new DataContent(referenceScreenshot, "image/png"),
         ]);
         var response = await reviewerAgent.RunAsync(message);
