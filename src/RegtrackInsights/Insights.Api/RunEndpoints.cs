@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Api;
 
@@ -46,6 +47,7 @@ public static class RunEndpoints
             [FromServices] ICooldownRepository cooldown,
             [FromServices] IInsightsRunEnqueuer enqueuer,
             [FromServices] IReportRequestRepository requests,
+            [FromServices] ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
             // Same ordering as the stream endpoint: authorise against the AUTHENTICATED caller
@@ -109,7 +111,24 @@ public static class RunEndpoints
             var reqId = Guid.NewGuid();
             var queuedRunIds = reports.Where(r => r.RunId is not null).Select(r => r.RunId!).ToList();
             if (queuedRunIds.Count > 0)
-                await requests.SaveAsync(reqId, queuedRunIds, cancellationToken);
+            {
+                // [BEST-EFFORT, 2026-09-11] The reports themselves are already enqueued and real by
+                // this point - a failure to record the GROUPING must never take that away. Found
+                // live: the write-capable DB account was granted GeneratedReport/InsightsTenantTokenUsage
+                // only, before InsightsReportRequest existed, so this INSERT 500'd the entire
+                // request until the grant catches up. Log and continue instead of throwing - a
+                // caller who then polls this reqId gets a clean 404 (nothing was ever grouped under
+                // it) rather than losing the whole generate call to a convenience feature.
+                try
+                {
+                    await requests.SaveAsync(reqId, queuedRunIds, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    loggerFactory.CreateLogger("Insights.Api.RunEndpoints").LogError(
+                        ex, "Failed to save reqId {ReqId} grouping for {Count} run(s) - reports were still enqueued, only the combined-progress lookup is affected.", reqId, queuedRunIds.Count);
+                }
+            }
 
             return Results.Accepted(value: new { reqId, reports });
         });

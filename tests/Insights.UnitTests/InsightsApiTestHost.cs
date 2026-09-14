@@ -218,8 +218,19 @@ internal sealed class FakeReportRequestRepository : IReportRequestRepository
     public List<(Guid ReqId, IReadOnlyList<string> RunIds)> SaveCalls { get; } = [];
     private readonly Dictionary<Guid, List<string>> _byReqId = [];
 
+    /// <summary>
+    /// [ADDED 2026-09-11] Simulates the real INSERT-permission-denied found live: the write
+    /// account was granted GeneratedReport/InsightsTenantTokenUsage only, before
+    /// InsightsReportRequest existed. Set to make SaveAsync throw, proving the generate endpoint's
+    /// try/catch keeps the reports enqueued rather than 500ing the whole request over this.
+    /// </summary>
+    public bool ThrowOnSave { get; set; }
+
     public Task SaveAsync(Guid reqId, IReadOnlyList<string> runIds, CancellationToken cancellationToken = default)
     {
+        if (ThrowOnSave)
+            throw new InvalidOperationException("INSERT permission was denied on the object 'InsightsReportRequest'.");
+
         SaveCalls.Add((reqId, runIds));
         if (!_byReqId.TryGetValue(reqId, out var existing))
             _byReqId[reqId] = existing = [];

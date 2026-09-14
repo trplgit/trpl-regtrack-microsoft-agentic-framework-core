@@ -151,7 +151,7 @@ threshold yourself.
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Location insights · Tenant {tenant id}</title>
+  <title>Location insights · {real company name}</title>
   <style>/* :root tokens + every class below - see CSS section, verbatim from the reference file */</style>
 </head>
 <body>
@@ -164,7 +164,9 @@ threshold yourself.
 
   <section class="di-hero">
     <div class="di-eyebrow-row">
-      <span class="di-eyebrow">Location · Tenant {tenant id}</span>
+      <!-- [FIX 2026-09-14] Never the literal word "Tenant" or a numeric id here - a customer
+           reading their own report about their own company never sees "Tenant 1008". -->
+      <span class="di-eyebrow">Location · {real company name}</span>
       <span class="di-band di-band--{bad if worst branch's real OverduePct is >=30pp above TenantOverduePct, warn if 10-29.9pp}"><span class="di-band__dot"></span>{real band text, e.g. "Action required"}</span>
     </div>
     <h1 class="di-hero__title">{one real sentence: the worst real branch by OverduePct, and the real rankable-population count (rows with Instances > 0) - the same M a worst-branch assertion's own of_n gives you, NOT the table's total row count (the table separately shows every real row, rankable or not)}</h1>

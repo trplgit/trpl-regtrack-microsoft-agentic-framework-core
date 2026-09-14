@@ -8,7 +8,11 @@ namespace Insights.Worker.Orchestration.Activities;
 public sealed record PersistInput(
     string Html, int TenantId, string ReportType, string Period, string ScopeDescriptor, int UserId);
 
-public sealed record PersistOutput(string ReportId);
+/// <param name="LocalFilePath">
+/// [ADDED 2026-09-12] Set only when Reports:LocalFallbackDirectory is configured - see
+/// PersistActivity's own doc comment. Null on every normal (encrypt/blob/SQL) persist.
+/// </param>
+public sealed record PersistOutput(string ReportId, string? LocalFilePath = null);
 
 /// <summary>
 /// Node 12: build order item 14's write path. Encrypt -> blob -> SQL index row, replacing
@@ -30,9 +34,21 @@ public sealed record PersistOutput(string ReportId);
 /// IServiceScopeFactory instead and creating/disposing the DbContext's OWN scope INSIDE RunAsync,
 /// where it is actually used - matching every other activity's "one connection per call" pattern
 /// instead of trying to make PersistActivity fit ActivityCreator's construction-time-only scope.
+///
+/// [ADDED 2026-09-12, TEMPORARY] localFallbackDirectory - a stopgap for a real, ongoing Key Vault
+/// access failure (KeyVaultErrorException "Forbidden", confirmed live via ProbeKeyVaultEncryptionAsync
+/// with VPN both on and off - not an IP/network issue, a real RBAC/access-policy denial on the
+/// shared DocAI vault). Every dimension of a 7-dimension Minda batch reached this exact step after
+/// narrate+render had ALREADY billed real tokens, then lost the entire output at the last line.
+/// When set (Reports:LocalFallbackDirectory), this activity skips encrypt/blob/SQL entirely and
+/// writes plaintext HTML straight to disk - deliberately NOT wired into GeneratedReport or the
+/// /content API, since a report that bypassed real encryption has no business posing as one that
+/// went through the normal pipeline. Revert by clearing that config key once Key Vault access is
+/// fixed - do not leave this on longer than the outage that justified it.
 /// </summary>
 public sealed class PersistActivity(
-    IReportEncryptor encryptor, IReportBlobWriter blobWriter, IServiceScopeFactory serviceScopeFactory)
+    IReportEncryptor encryptor, IReportBlobWriter blobWriter, IServiceScopeFactory serviceScopeFactory,
+    string? localFallbackDirectory = null)
     : AsyncTaskActivity<PersistInput, PersistOutput>
 {
     protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) => RunAsync(input);
@@ -45,6 +61,15 @@ public sealed class PersistActivity(
         // row carries the exact same id and timestamp the blob path encodes.
         var reportId = Guid.NewGuid();
         var generatedAtUtc = DateTime.UtcNow;
+
+        if (!string.IsNullOrWhiteSpace(localFallbackDirectory))
+        {
+            Directory.CreateDirectory(localFallbackDirectory);
+            var safePeriod = string.Join("_", input.Period.Split(Path.GetInvalidFileNameChars()));
+            var localPath = Path.Combine(localFallbackDirectory, $"{input.TenantId}-{input.ReportType}-{safePeriod}-{reportId}.html");
+            await File.WriteAllTextAsync(localPath, input.Html);
+            return new PersistOutput(reportId.ToString(), LocalFilePath: localPath);
+        }
 
         var envelope = await encryptor.EncryptAsync(input.Html);
         var location = await blobWriter.WriteAsync(

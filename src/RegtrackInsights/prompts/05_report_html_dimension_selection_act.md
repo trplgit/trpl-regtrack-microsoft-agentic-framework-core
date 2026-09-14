@@ -86,7 +86,7 @@ spread, etc.).
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Acts &amp; regulators insights · Tenant {tenant id}</title>
+  <title>Acts &amp; regulators insights · {real company name}</title>
   <style>/* :root tokens + every class below - verbatim from the CSS section */</style>
 </head>
 <body>
@@ -99,7 +99,9 @@ spread, etc.).
 
   <section class="di-hero">
     <div class="di-eyebrow-row">
-      <span class="di-eyebrow">Acts &amp; regulators · Tenant {tenant id}</span>
+      <!-- [FIX 2026-09-14] Never the literal word "Tenant" or a numeric id here - a customer
+           reading their own report about their own company never sees "Tenant 1008". -->
+      <span class="di-eyebrow">Acts &amp; regulators · {real company name}</span>
       <span class="di-band di-band--{bad if the top act's Overdue share of OverdueInstances >= 25, warn if 10-24.9, ok otherwise}"><span class="di-band__dot"></span>{real band text, e.g. "Concentrated" / "Spread" }</span>
     </div>
     <h1 class="di-hero__title">{one real sentence: which single act produces the most late work and its real share of all overdue tasks — e.g. "One act produces {X}% of all late work"}</h1>

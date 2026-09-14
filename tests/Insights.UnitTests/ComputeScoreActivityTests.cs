@@ -66,9 +66,10 @@ public sealed class ComputeScoreActivityTests
         // [BUG FOUND LIVE] A-SCORE-composite must ALWAYS be present alongside the components -
         // without it, nothing in the pipeline ever states the overall number, and a render step
         // fabricated one ("24/100" against a real 40) because no fact backed the real value.
-        // Evidence and Timeliness are null this pass (no source / no query yet) - never emitted
-        // as component assertions. Every other component (Risk/Licence/Coverage/OverdueBacklog/
-        // People) plus the composite itself is - 6 total, not 5.
+        // Evidence and Timeliness are null this pass (their dimensions are not supplied here -
+        // see Run_EvidenceIntegrityDimensionPresent_ScoresIt below for the case where they are) -
+        // never emitted as component assertions. Every other component (Risk/Licence/Coverage/
+        // OverdueBacklog/People) plus the composite itself is - 6 total, not 5.
         Assert.Equal(6, result.Assertions.Count);
         Assert.Contains(result.Assertions, a => a.AssertionId == "A-SCORE-composite" && a.Value == result.OverallHealth.Score);
         Assert.DoesNotContain(result.Assertions, a => a.AssertionId == "A-SCORE-evidence_integrity");
@@ -96,6 +97,24 @@ public sealed class ComputeScoreActivityTests
         Assert.Equal(result.OverallHealth.Score, composite.Value);
         Assert.Contains(result.OverallHealth.Band, composite.Caveat);
         Assert.Contains(result.OverallHealth.Trend, composite.Caveat);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE, 2026-09-12] EvidenceIntegrity was already fetched by FetchDimensionsActivity
+    /// (sql/25, deployed 2026-09-03) but ComputeScoreActivity never read it - CompositeScoreCalculator
+    /// hardcoded the component to null regardless. Pins that supplying the dimension now produces a
+    /// real A-SCORE-evidence_integrity assertion.
+    /// </summary>
+    [Fact]
+    public void Run_EvidenceIntegrityDimensionPresent_ScoresIt()
+    {
+        var evidence = new DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>(
+            "EvidenceIntegrity", new EvidenceIntegrityControlTotals { ClosuresWithReviewTrailPct = 16m }, [], [], [], [], []);
+        var dimensionResults = new Dictionary<string, string> { ["EvidenceIntegrity"] = JsonSerializer.Serialize(evidence) };
+
+        var result = ComputeScoreActivity.Run(new ComputeScoreInput(dimensionResults));
+
+        Assert.Contains(result.Assertions, a => a.AssertionId == "A-SCORE-evidence_integrity" && a.Value == 16m);
     }
 
     [Fact]

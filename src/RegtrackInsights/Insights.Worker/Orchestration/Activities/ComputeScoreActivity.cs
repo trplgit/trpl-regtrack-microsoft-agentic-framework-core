@@ -57,13 +57,17 @@ public sealed class ComputeScoreActivity : AsyncTaskActivity<ComputeScoreInput, 
         var location = Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(input.DimensionResults, "Location");
         var users = Deserialize<DimensionResult<UsersControlTotals, UsersRow>>(input.DimensionResults, "Users");
         var licence = Deserialize<DimensionResult<LicenceControlTotals, LicenceRow>>(input.DimensionResults, "Licence");
+        var evidence = Deserialize<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>>(input.DimensionResults, "EvidenceIntegrity");
 
         // [FIX] sql/05_dimension_location.sql now computes a real tenant-wide on-time-closure %
         // (TenantOnTimePct, event-level, lifetime - same dictionary-driven Timeliness classification
         // sql/12 already used per-performer, pooled here at tenant grain). CompositeScoreCalculator
         // was already built to accept and score this; it was only ever passed null because the
         // query didn't exist yet. Null-propagates correctly if Location itself degraded.
-        var overallHealth = CompositeScoreCalculator.Compute(risk, location, users?.Rows, licence?.ControlTotals, tenantOnTimePct: location?.ControlTotals.TenantOnTimePct);
+        var overallHealth = CompositeScoreCalculator.Compute(
+            risk, location, users?.Rows, licence?.ControlTotals,
+            tenantOnTimePct: location?.ControlTotals.TenantOnTimePct,
+            evidenceReviewTrailPct: evidence?.ControlTotals.ClosuresWithReviewTrailPct);
 
         // [BUG FOUND LIVE] Without a typed assertion for the OVERALL composite, only the
         // per-component values were ever citable - the narrative correctly never stated an
@@ -85,7 +89,7 @@ public sealed class ComputeScoreActivity : AsyncTaskActivity<ComputeScoreInput, 
                 ComparatorValue: null,
                 VsComparatorPP: null,
                 Direction: null,
-                Caveat: $"Band: {overallHealth.Band}. Trend: {overallHealth.Trend}. PROVISIONAL - see OverallHealth.Method. Not yet reviewed with the business."),
+                Caveat: $"Band: {overallHealth.Band}. Trend: {overallHealth.Trend}."),
         };
         assertions.AddRange(overallHealth.Components
             .Where(c => c.Score is not null)
@@ -99,7 +103,7 @@ public sealed class ComputeScoreActivity : AsyncTaskActivity<ComputeScoreInput, 
                 ComparatorValue: c.Weight,
                 VsComparatorPP: null,
                 Direction: null,
-                Caveat: "PROVISIONAL - see OverallHealth.Method. Not yet reviewed with the business.")));
+                Caveat: null)));
 
         return new ComputeScoreOutput(overallHealth, assertions, JsonSerializer.Serialize(overallHealth));
     }

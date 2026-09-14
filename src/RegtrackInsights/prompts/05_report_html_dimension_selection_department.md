@@ -104,7 +104,7 @@ show your work in the sentence.
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Departments insights · Tenant {tenant id}</title>
+  <title>Departments insights · {real company name}</title>
   <style>/* :root tokens + every class below - see CSS section, verbatim from the reference file */</style>
 </head>
 <body>
@@ -117,7 +117,9 @@ show your work in the sentence.
 
   <section class="di-hero">
     <div class="di-eyebrow-row">
-      <span class="di-eyebrow">Departments · Tenant {tenant id}</span>
+      <!-- [FIX 2026-09-14] Never the literal word "Tenant" or a numeric id here - a customer
+           reading their own report about their own company never sees "Tenant 1008". -->
+      <span class="di-eyebrow">Departments · {real company name}</span>
       <span class="di-band di-band--{bad if real UnassignedPct >= 50, warn if 20-49.9, ok otherwise}"><span class="di-band__dot"></span>{real band text}</span>
     </div>
     <h1 class="di-hero__title">{one real sentence on the real tagged/untagged split - e.g. "The department dimension is mostly empty" only if UnassignedPct >= 50, otherwise a neutral real framing of the real DepartmentsWithObligations count}</h1>

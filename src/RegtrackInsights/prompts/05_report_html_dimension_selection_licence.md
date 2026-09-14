@@ -99,7 +99,7 @@ high-lapse types) or `A-LAPSE-AGG` (aggregate) depending on distribution. Use ea
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Licences insights · Tenant {tenant id}</title>
+  <title>Licences insights · {real company name}</title>
   <style>/* :root tokens + every class below - verbatim from the CSS section */</style>
 </head>
 <body>
@@ -112,7 +112,9 @@ high-lapse types) or `A-LAPSE-AGG` (aggregate) depending on distribution. Use ea
 
   <section class="di-hero">
     <div class="di-eyebrow-row">
-      <span class="di-eyebrow">Licences · Tenant {tenant id}</span>
+      <!-- [FIX 2026-09-14] Never the literal word "Tenant" or a numeric id here - a customer
+           reading their own report about their own company never sees "Tenant 1008". -->
+      <span class="di-eyebrow">Licences · {real company name}</span>
       <span class="di-band di-band--{bad if TenantLapsedPct >= 25, warn if 10-24.9, ok otherwise}"><span class="di-band__dot"></span>{real band text, e.g. "1 in 4 expired" / "Elevated expiry" / "Mostly current"}</span>
     </div>
     <h1 class="di-hero__title">{one real sentence from TenantLapsedPct and the lapsed count — e.g. "{fraction, e.g. 1 in 4} licences has expired: {real total lapsed} of {real ScopedLicences}"}</h1>

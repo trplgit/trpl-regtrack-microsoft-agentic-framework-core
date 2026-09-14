@@ -46,6 +46,17 @@ Everything else in this document is detail. These five are the spine. If a propo
 1. **Determinism owns truth and safety; the agent owns judgement.**
    Scope resolution, SQL execution, reconciliation, and rendering are permanently deterministic. The agent decides *what matters, in what order, and how to say it* — never *what the number is* or *who may see it*. (§3.1)
 
+   > **[UPDATE 2026-09-11] Superseded for both shipped report types.** The
+   > "agent decides ... in what order" composition agent described in §3.1 and
+   > the diagram (Composition agent, "select + order + emphasise") was removed
+   > from the codebase 2026-09-11. `fixed_holistic` and `dimension_selection`
+   > both build their block order deterministically
+   > (`FixedHolisticComposition.Build()` / `DimensionSelectionComposition.Build()`
+   > in `Insights.Domain`) with zero LLM calls for structure. The agent's role
+   > is now narrative-only: prose and emphasis *within* a block the deterministic
+   > builder already placed. Treat §3.1's composition-agent description as
+   > historical/Phase-2 unless a new report type explicitly reinstates it.
+
 2. **Fail closed, and fail loudly.**
    An unknown enum, an empty scope, a failed reconciliation, or an unverifiable claim must **refuse and log**, never guess or default. A refused report is a good outcome. A wrong number with a provenance badge is a catastrophic one. (§6.5, §11)
 
@@ -362,6 +373,16 @@ flowchart TD
 | 12 | Persist | Deterministic | Encrypt, blob + index row | Retry |
 
 > **[TRAP]** Node 11 (Playwright) is **QA, not security**. Malicious markup renders *perfectly* in a headless browser. Playwright catches *ugly*; it cannot catch *dangerous*. Security comes from nodes 8–10 plus the sandbox and CSP (§8).
+
+> **[UPDATE 2026-09-11] Nodes 5 and 5r are gone for both shipped report types.**
+> `ComposeActivity`/`ReflectOnCompositionActivity` were deleted along with
+> `01_composition.md`/`02_composition_reflection.md`. `fixed_holistic` and
+> `dimension_selection` go straight from node 4 (Assertion builder) to node 6
+> (Narrative agent), with block choice/order/emphasis decided deterministically
+> by `FixedHolisticComposition.Build()` / `DimensionSelectionComposition.Build()`
+> instead. This diagram and the table row above describe the pre-2026-09-11
+> design — treat them as historical/Phase-2 unless a future report type
+> reinstates an agentic composition step.
 
 ### 3.5 Reflection loops
 

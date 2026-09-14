@@ -50,6 +50,18 @@ Violating any of these is a build-breaking error, not a style preference.
    deterministic**. The agent decides *what matters, in what order, and how to say
    it* — never *what a number is* or *who may see it*. (§3.1)
 
+   > **[UPDATE 2026-09-11] Composition itself is no longer agentic for either
+   > shipped report type.** `fixed_holistic` (`FixedHolisticComposition.Build()`)
+   > and `dimension_selection` (`DimensionSelectionComposition.Build()`) both
+   > pick block order **deterministically in C#, zero LLM calls** — the dynamic
+   > "compliance_health" composition agent this rule originally described was
+   > removed the same day. `ComposeActivity`/`ReflectOnCompositionActivity`/
+   > `01_composition.md` are deleted from the codebase. The agent's remaining
+   > judgement calls are narrative-only (`NarrateActivity`, prose/emphasis within
+   > a fixed block) and rendering-prompt tile selection — never structure. If a
+   > future report type needs the LLM to choose block order again, reinstate this
+   > rule for that type explicitly; don't assume it still applies by default.
+
 2. **Fail closed, and fail loudly.**
    Unknown enum, empty scope, failed reconciliation, unverifiable claim → **refuse
    and log**. Never guess, never default. A refused report is a good outcome; a

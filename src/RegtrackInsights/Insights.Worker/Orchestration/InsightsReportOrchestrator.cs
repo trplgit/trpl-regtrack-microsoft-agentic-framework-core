@@ -726,6 +726,21 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 {
                     structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
                         typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html, input.ReportType));
+
+                    // [ADDED 2026-09-12] Same retry-on-refusal treatment as the fixed_holistic gate
+                    // just above - a real render for dimension_selection:Users ignored the rewritten
+                    // 4-tab/donut/role-strip template entirely (see UserDimensionStructureGate's own
+                    // doc comment). No-op for every other report shape (guarded on ReportType +
+                    // RequestedDimensions inside the activity itself).
+                    // [ADDED 2026-09-15] UsersRowsJson - lets the activity tell the gate whether a
+                    // real qualifying row exists (TimingSampleSize >= 5) for the completion-timing
+                    // info line check. Same dimensionRowsJson already built above for RenderHtmlInput -
+                    // no new fetch, just threaded one hop further.
+                    var usersRowsJson = dimensionRowsJson?.GetValueOrDefault("Users");
+                    var userStructureChecked = await context.ScheduleTask<ValidateUserDimensionStructureOutput>(
+                        typeof(ValidateUserDimensionStructureActivity).Name, "1.0",
+                        new ValidateUserDimensionStructureInput(structureChecked.Html, input.ReportType, input.RequestedDimensions, usersRowsJson));
+                    structureChecked = new ValidateFixedHolisticStructureOutput(userStructureChecked.Html);
                     break;
                 }
                 catch (Exception) when (renderAttempt < maxRenderAttempts)

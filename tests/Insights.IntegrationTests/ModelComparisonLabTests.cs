@@ -7,6 +7,7 @@ using Azure.Identity;
 using Insights.Agents;
 using Insights.Data;
 using Insights.Domain;
+using Insights.Persistence;
 using Insights.Presentation;
 using Insights.Worker;
 using Insights.Worker.Orchestration;
@@ -16,6 +17,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OpenAI;
+using OpenAI.Responses;
 using Xunit.Abstractions;
 
 namespace Insights.IntegrationTests;
@@ -219,7 +221,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             : null;
 
         var snapshot = new ReportSnapshot(
-            TenantId, $"Tenant {TenantId}", ReportType, Period, gathered.TenantShape, DateTime.UtcNow,
+            TenantId, gathered.TenantName, ReportType, Period, gathered.TenantShape, DateTime.UtcNow,
             plan, narrative, dimensions.Assertions, dimensions.Findings, locationRows);
 
         Directory.CreateDirectory(LabRoot);
@@ -362,7 +364,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             try
             {
                 var renderResult = await htmlAgent.RenderAsync(
-                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", FixedHolisticComposition.ReportType, DateTime.UtcNow, locationRows);
+                    plan, narrative, dimensions.Assertions, gathered.TenantName, FixedHolisticComposition.ReportType, DateTime.UtcNow, locationRows);
                 renderTokens += renderResult.TotalTokens;
                 var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
 
@@ -685,7 +687,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             try
             {
                 var renderResult = await htmlAgent.RenderAsync(
-                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, locationRows, dimensionRowsJson, dimensionControlTotalsJson);
+                    plan, narrative, dimensions.Assertions, gathered.TenantName, DimensionSelectionComposition.ReportType, DateTime.UtcNow, locationRows, dimensionRowsJson, dimensionControlTotalsJson);
                 renderTokens += renderResult.TotalTokens;
                 var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
 
@@ -829,7 +831,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             try
             {
                 var renderResult = await htmlAgent.RenderAsync(
-                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
+                    plan, narrative, dimensions.Assertions, gathered.TenantName, DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
                 renderTokens += renderResult.TotalTokens;
                 var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
 
@@ -960,7 +962,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             try
             {
                 var renderResult = await htmlAgent.RenderAsync(
-                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
+                    plan, narrative, dimensions.Assertions, gathered.TenantName, DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
                 renderTokens += renderResult.TotalTokens;
                 var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
 
@@ -1098,7 +1100,7 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             try
             {
                 var renderResult = await htmlAgent.RenderAsync(
-                    plan, narrative, dimensions.Assertions, $"Tenant {TenantId}", DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
+                    plan, narrative, dimensions.Assertions, gathered.TenantName, DimensionSelectionComposition.ReportType, DateTime.UtcNow, null, dimensionRowsJson, dimensionControlTotalsJson);
                 renderTokens += renderResult.TotalTokens;
                 var html = PartialDimensionPlaceholder.InsertPlaceholders(renderResult.Value, dimensions.FailedDimensions);
 
@@ -1165,6 +1167,10 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
     /// </summary>
     [Fact]
     public Task RenderFixedHolisticWithGpt56Terra() => RenderAndReviewAsync(Targets[1], "05_report_html_fixed_holistic.md", FixedHolisticSnapshotPath);
+
+    /// <summary>Same as RenderFixedHolisticWithGpt56Terra, gpt-5.6-sol instead - 2026-09-12, first real render since network access was opened (Targets[0]'s endpoint was VNet-blocked before that).</summary>
+    [Fact]
+    public Task RenderFixedHolisticWithGpt56Sol() => RenderAndReviewAsync(Targets[0], "05_report_html_fixed_holistic.md", FixedHolisticSnapshotPath);
 
     /// <summary>
     /// Runs all three sequentially and writes one combined comparison summary - convenience over
@@ -1632,6 +1638,19 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             // that finding - re-check finishReason if truncation recurs at 24000.
             ChatOptions = new ChatOptions { Instructions = instructions, ResponseFormat = ChatResponseFormat.Text, MaxOutputTokens = 24000 },
         };
+        // [ADDED 2026-09-12] Reasoning effort = high, gpt-5.6-terra ONLY - not sol, not DeepSeek.
+        // A fair three-way comparison needs each candidate's own settings tracked deliberately, not
+        // a blanket change; DeepSeek-V4-Flash in particular is a different model family and may not
+        // even accept this Responses-API-specific parameter. RawRepresentationFactory is the
+        // documented Microsoft.Extensions.AI escape hatch for a provider-specific option ChatOptions
+        // itself has no field for - the underlying OpenAIResponseChatClient merges this in.
+        if (target.Label == "gpt-5.6-terra")
+        {
+            options.ChatOptions.RawRepresentationFactory = _ => new CreateResponseOptions
+            {
+                ReasoningOptions = new ResponseReasoningOptions { ReasoningEffortLevel = ResponseReasoningEffortLevel.High },
+            };
+        }
         return new ChatClientAgent(chatClient, options);
     }
 
@@ -2045,6 +2064,117 @@ public sealed class ModelComparisonLabTests(ITestOutputHelper output)
             {
                 output.WriteLine($"[{target.Label}] VISION FAILED: {ex.GetType().Name}: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>
+    /// DIAGNOSTIC ONLY, near-zero cost - answers "does gpt-5.6-sol's API KEY actually work" (as
+    /// opposed to Entra ID, which every other probe/render in this file uses) BEFORE switching
+    /// Llm:Maf:* (the one config point every production agent - compose/narrate/reflect/render/
+    /// review - reads) to point at sol. A VNet allow-rule and an API key are orthogonal: the
+    /// network being open (confirmed by ProbeGpt56SolReachabilityAsync) says nothing about whether
+    /// this specific resource accepts key-based auth at all, or whether the key on file is valid.
+    /// Mirrors MafAgentFactory's own OpenAIClient(ApiKeyCredential, ...) construction exactly, so a
+    /// pass here means production's real code path would also work, not just this test's.
+    /// </summary>
+    /// <summary>
+    /// DIAGNOSTIC ONLY, zero LLM tokens - isolates the Key Vault step from the whole report
+    /// pipeline. [FOUND LIVE, 2026-09-12] Every one of a 7-dimension Minda batch failed identically
+    /// at PersistActivity with "Operation returned an invalid status code 'Forbidden'" from
+    /// AdalKeyVaultReportEncryptor - AFTER narrate+render already ran and billed real tokens. A
+    /// worker restart (clearing the poisoned Lazy&lt;Task&gt; cache) did NOT fix it, meaning this is
+    /// a real, current Key Vault RBAC/network denial, not a stale cached fault. This calls
+    /// EncryptAsync directly with trivial content - no scope, no dimensions, no LLM calls - to
+    /// confirm the exact failure point cheaply before spending more real tokens on a full run that
+    /// would fail at the same last step regardless of which model renders it.
+    /// </summary>
+    [Fact]
+    public async Task ProbeKeyVaultEncryptionAsync()
+    {
+        var connectionString = RequireEnv("ConnectionStrings__RegTrack");
+        var encryptor = new AdalKeyVaultReportEncryptor(connectionString);
+        try
+        {
+            var envelope = await encryptor.EncryptAsync("<html>diagnostic probe - not a real report</html>");
+            output.WriteLine($"[KeyVault] REACHABLE: encrypted {envelope.Content.Length} bytes, KeyVaultObjectName={envelope.KeyVaultObjectName}, KeyVaultObjectVersion={envelope.KeyVaultObjectVersion}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"[KeyVault] FAILED: {ex.GetType().Name}: {ex.Message}");
+            if (ex.InnerException is not null)
+                output.WriteLine($"[KeyVault]   inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+        }
+    }
+
+    [Fact]
+    public async Task ProbeGpt56SolApiKeyAuthAsync()
+    {
+        var apiKey = Environment.GetEnvironmentVariable("SOL_API_KEY")
+            ?? throw new InvalidOperationException("Set SOL_API_KEY before running this probe.");
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri("https://trpl-prod-saas-ai-2.openai.azure.com/openai/v1/"), NetworkTimeout = TimeSpan.FromSeconds(30) });
+        IChatClient chatClient = client.GetResponsesClient().AsIChatClient("gpt-5.6-sol");
+        try
+        {
+            var message = new ChatMessage(ChatRole.User, [new TextContent("Reply with just the word: ok")]);
+            var response = await chatClient.GetResponseAsync([message]);
+            output.WriteLine($"[gpt-5.6-sol via API key] REACHABLE: {response.Text}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"[gpt-5.6-sol via API key] FAILED: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// DIAGNOSTIC ONLY - [FOUND LIVE, 2026-09-12] the real production worker hit HTTP 403 "A Virtual
+    /// Network is configured for this resource" on EVERY one of a 7-dimension sol batch, moments
+    /// after ProbeGpt56SolApiKeyAuthAsync (no reasoning effort set) succeeded on this exact machine
+    /// against this exact endpoint/key. The one real difference: MafAgentFactory now also sets
+    /// RawRepresentationFactory -> CreateResponseOptions{ReasoningOptions}. Isolates whether THAT
+    /// combination is what trips the VNet rule (a specific API surface/region the network rule does
+    /// not cover) rather than assuming the rule itself is simply flaky.
+    /// </summary>
+    [Fact]
+    public async Task ProbeGpt56SolApiKeyAuthWithReasoningEffortAsync()
+    {
+        var apiKey = Environment.GetEnvironmentVariable("SOL_API_KEY")
+            ?? throw new InvalidOperationException("Set SOL_API_KEY before running this probe.");
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri("https://trpl-prod-saas-ai-2.openai.azure.com/openai/v1/"), NetworkTimeout = TimeSpan.FromSeconds(30) });
+        IChatClient chatClient = client.GetResponsesClient().AsIChatClient("gpt-5.6-sol");
+        try
+        {
+            var message = new ChatMessage(ChatRole.User, [new TextContent("Reply with just the word: ok")]);
+            var response = await chatClient.GetResponseAsync([message], new ChatOptions
+            {
+                RawRepresentationFactory = _ => new CreateResponseOptions
+                {
+                    ReasoningOptions = new ResponseReasoningOptions { ReasoningEffortLevel = ResponseReasoningEffortLevel.High },
+                },
+            });
+            output.WriteLine($"[gpt-5.6-sol via API key + reasoning=high] REACHABLE: {response.Text}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"[gpt-5.6-sol via API key + reasoning=high] FAILED: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    [Fact]
+    public async Task ProbeGpt56SolReachabilityAsync()
+    {
+        var target = Targets[0]; // gpt-5.6-sol
+        var authPolicy = new BearerTokenPolicy(new AzureIdentityTokenProvider(BuildCredential()), "https://ai.azure.com/.default");
+        var client = new OpenAIClient(authPolicy, new OpenAIClientOptions { Endpoint = new Uri(target.Endpoint.TrimEnd('/') + "/openai/v1/"), NetworkTimeout = TimeSpan.FromSeconds(30) });
+        IChatClient chatClient = client.GetResponsesClient().AsIChatClient(target.Deployment);
+        try
+        {
+            var message = new ChatMessage(ChatRole.User, [new TextContent("Reply with just the word: ok")]);
+            var response = await chatClient.GetResponseAsync([message]);
+            output.WriteLine($"[{target.Label}] REACHABLE: {response.Text}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"[{target.Label}] UNREACHABLE: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

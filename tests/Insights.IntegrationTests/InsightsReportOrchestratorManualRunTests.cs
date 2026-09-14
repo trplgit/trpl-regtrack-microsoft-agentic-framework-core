@@ -114,6 +114,96 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
+    /// [ADDED 2026-09-15] Real end-to-end run of `dimension_selection:Users` (the same template
+    /// this session spent all day fixing - CSS inlining, lens toggle nesting, real company name)
+    /// through the ACTUAL orchestrator - not the lab-test activity-by-activity bypass
+    /// (ModelComparisonLabTests.cs), the real Durable Task worker dequeuing off the real
+    /// SQL-backed task hub. Three real production tenants, requested by the user directly:
+    /// Life Cell Group (1326), Minda Corporation Group (1008), Agrocel Group (1082) - user ids
+    /// each independently confirmed to have real scope pairs via tvfInsightsScopePairs before
+    /// this test was written (2026-09-13 session).
+    ///
+    /// Key Vault is still Forbidden (real, ongoing, RBAC-side denial - see PersistActivity's own
+    /// doc comment) so this sets Reports:LocalFallbackDirectory, same temporary bypass every other
+    /// real run this session has used. Azure:BlobConnectionString is still supplied (the real,
+    /// working trplchatgpt9378 account, confirmed live via a direct blob probe this session) only
+    /// because PersistActivity's DI-injected IReportBlobWriter is constructed eagerly regardless
+    /// of whether local-fallback ever calls it - never actually written to here.
+    /// </summary>
+    [Theory]
+    [InlineData(1326, 83105, "Life Cell Group")]
+    [InlineData(1008, 12116, "Minda Corporation Group")]
+    [InlineData(1082, 14128, "Agrocel Group")]
+    public async Task RunAsync_DimensionSelectionUsers_RealTenant_ReachesCompleteStatus(int tenantId, int userId, string expectedCompanyLabel)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                // Read path - broad EXECUTE on usp_Insights_* procs, no table-level write grants.
+                ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
+                // [FIX 2026-09-15] Write path - TenantTokenBudgetRegistration.cs and
+                // WorkerRegistration.cs's own RegisterReportsDbContext ALREADY prefer this key over
+                // ConnectionStrings:RegTrack for every real write (InsightsTenantTokenUsage,
+                // GeneratedReport) - this test just never supplied it, so both silently fell back
+                // to the read-only connection and the token-usage INSERT was denied at the very
+                // last stage of an otherwise fully-successful run. No code changed; the pipeline
+                // already splits read/write by design, confirmed live by that exact failure.
+                ["ConnectionStrings:RegTrackReportsWrite"] = RequireEnv("ConnectionStrings__RegTrackReportsWrite"),
+                ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+                ["Llm:Maf:Endpoint"] = RequireEnv("MAF_ENDPOINT"),
+                ["Llm:Maf:Model"] = RequireEnv("MAF_MODEL"),
+                ["Llm:Maf:ApiKey"] = RequireEnv("MAF_API_KEY"),
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+                ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
+                ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
+                ["Budget:AlertAtPercentOfCeiling"] = "80",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        // [FIX 2026-09-15] AddInsightsOrchestration's own registration resolves ILoggerFactory
+        // eagerly (WorkerRegistration.cs RegisterSqlOrchestrationService/AddInsightsOrchestrationWorker)
+        // - missing here regardless of tenant, confirmed live on all three. Pre-existing gap in
+        // every manual test in this file; none had been run since AddInsightsOrchestration started
+        // requiring it.
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var input = new InsightsReportOrchestrationInput(
+                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day", userId, LlmCallPriority.Interactive, ["Users"]);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"Tenant {tenantId} ({expectedCompanyLabel}): {state.OrchestrationStatus}, final status {state.Status}");
+            if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                output.WriteLine($"Output/failure detail: {state.Output}");
+
+            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
     /// THROWAWAY - a real worker process that only DEQUEUES, and stays alive INDEFINITELY (up to
     /// the 30-minute budget below) rather than polling one known run and exiting.
     ///

@@ -15,13 +15,17 @@ public sealed record OverallHealth(decimal? Score, string Band, string Trend, st
 /// give a real working number NOW; the business (Vinay/Sambram) is expected to review and retune
 /// both the formulas and the weights - nothing here should be read as final.
 ///
-/// A component whose input isn't available yet (Evidence - no real data source exists at all, see
-/// DIMENSION_SPECS.md's evidence-integrity gap) returns a null Score, not a fabricated zero.
-/// Timeliness was in this category too until sql/05_dimension_location.sql grew a real tenant-wide
-/// on-time-closure query - ComputeScoreActivity now passes it through. The composite renormalizes over whichever
-/// components ARE available, generalizing the "exclude Evidence, redistribute its weight" idea to
-/// however many components are actually missing right now - never silently treats a missing input
-/// as a zero score, which would be a worse number than not answering at all.
+/// A component whose input isn't available (e.g. a degraded dimension) returns a null Score, not a
+/// fabricated zero. Timeliness and Evidence were both in this category until their real queries
+/// existed - Timeliness via sql/05_dimension_location.sql's tenant-wide on-time-closure query,
+/// Evidence via sql/25_dimension_evidence_integrity.sql's review-trail proxy (deployed 2026-09-03).
+/// [FOUND LIVE, 2026-09-12] Evidence was left permanently null in this calculator anyway - the SQL
+/// proc, the repository call, and the dimension fetch were all already wired; only this last hop
+/// was missing. ComputeScoreActivity now passes ClosuresWithReviewTrailPct through, same as it does
+/// for TenantOnTimePct. The composite renormalizes over whichever components ARE available,
+/// generalizing the "exclude Evidence, redistribute its weight" idea to however many components are
+/// actually missing right now - never silently treats a missing input as a zero score, which would
+/// be a worse number than not answering at all.
 /// </summary>
 public static class CompositeScoreCalculator
 {
@@ -45,7 +49,8 @@ public static class CompositeScoreCalculator
         DimensionResult<LocationControlTotals, LocationRow>? location,
         IReadOnlyList<UsersRow>? usersRows,
         LicenceControlTotals? licenceTotals,
-        decimal? tenantOnTimePct)
+        decimal? tenantOnTimePct,
+        decimal? evidenceReviewTrailPct)
     {
         var components = new List<ScoreComponentResult>
         {
@@ -55,11 +60,10 @@ public static class CompositeScoreCalculator
             new("overdue_backlog", "Overdue / Backlog health", location is null ? null : ComputeOverdueBacklogScore(location.Rows, location.ControlTotals), OverdueBacklogWeight),
             new("people_continuity", "People / continuity", usersRows is null ? null : ComputePeopleScore(usersRows), PeopleWeight),
             new("timeliness", "Timeliness", Clamp(tenantOnTimePct), TimelinessWeight),
-            // [BLOCKED] no real source exists - DIMENSION_SPECS.md's evidence-integrity gap
-            // (FileID/DocumentNo are 100% empty on real data). Mirrors
-            // paid_tier_holistic.schema.json's own evidence_in_sql escape hatch: this is a known,
-            // declared absence, not a defect to hide.
-            new("evidence_integrity", "Evidence integrity", null, EvidenceWeight),
+            // Review-trail proxy, not document-evidence attachment - evidence_in_sql is always
+            // false (sql/25's own honest caveat). Higher % is already "better", unlike Risk/Licence's
+            // 100-x inversion, since ClosuresWithReviewTrailPct already measures the healthy direction.
+            new("evidence_integrity", "Evidence integrity", Clamp(evidenceReviewTrailPct), EvidenceWeight),
         };
 
         var composite = ComputeComposite(components);

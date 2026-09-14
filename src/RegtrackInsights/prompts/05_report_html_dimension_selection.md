@@ -231,7 +231,9 @@ because the pane "already has enough."
 </head>
 <body>
 <div class="topbar"><div class="topbar-inner">
-  <div class="crumbs"><span class="here">{leading dimension name, or "N dimensions" if more than one} · Tenant {tenant id}</span></div>
+  <!-- [FIX 2026-09-14] Never the literal word "Tenant" or a numeric id here - a customer
+       reading their own report about their own company never sees "Tenant 1008". -->
+  <div class="crumbs"><span class="here">{leading dimension name, or "N dimensions" if more than one} · {real company name}</span></div>
   <div class="spacer"></div>
   <span class="chip asof">as of <span class="tnum">{generated_at, formatted DD MMM YYYY, HH:MM UTC - NEVER the raw ISO "T…Z" stamp}</span></span>
 </div></div>
@@ -358,12 +360,15 @@ dimensions were selected.
 
 ## Title rule
 
-`<title>` follows RegTrack's real naming, never the word "report":
-- One dimension selected: `"{Dimension} insights · Tenant {N}"` (e.g.
-  `"Nature insights · Tenant 29"`).
+`<title>` follows RegTrack's real naming, never the word "report" - and
+**[FIX 2026-09-14] never the literal word "Tenant" or a numeric id either** (a customer
+reading their own report about their own company never sees "Tenant 29" - always the real
+company name you were given as context):
+- One dimension selected: `"{Dimension} insights · {real company name}"` (e.g.
+  `"Nature insights · Acme Manufacturing Ltd"`).
 - More than one dimension selected: join the real block names with `" & "`
-  when there are two or three (e.g. `"Nature & Entity insights · Tenant 29"`);
-  for four or more, use `"{count}-dimension insights · Tenant {N}"` - never
+  when there are two or three (e.g. `"Nature & Entity insights · Acme Manufacturing Ltd"`);
+  for four or more, use `"{count}-dimension insights · {real company name}"` - never
   list more than three names in the title itself.
 
 ## CSS — declare every class you actually used above, once, in the `<style>` block

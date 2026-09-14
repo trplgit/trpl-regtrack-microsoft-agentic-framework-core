@@ -69,6 +69,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -272,6 +274,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -361,6 +365,8 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .Callback<string, string, object[]>((_, _, args) => capturedStructureInput = (ValidateFixedHolisticStructureInput)args[0])
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))

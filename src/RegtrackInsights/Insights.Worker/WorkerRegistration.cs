@@ -124,8 +124,16 @@ public static class WorkerRegistration
         services.AddTransient<NormalizeActivity>();
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient<ValidateUserDimensionStructureActivity>();
         services.AddTransient<PlaywrightQaActivity>();
-        services.AddTransient<PersistActivity>();
+        // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
+        // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
+        // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
+        services.AddTransient(sp => new PersistActivity(
+            sp.GetRequiredService<IReportEncryptor>(),
+            sp.GetRequiredService<IReportBlobWriter>(),
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            configuration["Reports:LocalFallbackDirectory"]));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
         RegisterReportCodec(services, configuration);
@@ -180,6 +188,7 @@ public static class WorkerRegistration
                 ActivityCreator<InjectForwardLookActivity>(sp), ActivityCreator<InjectForwardLookCssActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
+                ActivityCreator<ValidateUserDimensionStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),

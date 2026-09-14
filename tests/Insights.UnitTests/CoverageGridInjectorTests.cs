@@ -161,9 +161,9 @@ public sealed class CoverageGridInjectorTests
 
         var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
 
-        Assert.Contains("Stores mapped", result, StringComparison.Ordinal);
+        Assert.Contains("Locations mapped", result, StringComparison.Ordinal);
         Assert.Contains("di-kpi__pair-val tnum\">3<", result, StringComparison.Ordinal); // 4 leaf - 1 unmapped = 3
-        Assert.Contains("75.0% of 4 leaf stores", result, StringComparison.Ordinal);
+        Assert.Contains("75.0% of 4 leaf locations", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public sealed class CoverageGridInjectorTests
 
         Assert.Contains("Ownerless obligations", result, StringComparison.Ordinal);
         Assert.Contains("di-kpi__pair-val tnum\">13<", result, StringComparison.Ordinal); // 3 + 4 leaf + 6 rollup = 13
-        Assert.Contains("7 on leaf stores", result, StringComparison.Ordinal);
+        Assert.Contains("7 on leaf locations", result, StringComparison.Ordinal);
         Assert.Contains("6 on corporate rollup", result, StringComparison.Ordinal);
     }
 
@@ -216,7 +216,7 @@ public sealed class CoverageGridInjectorTests
         var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
 
         Assert.Contains("one box per location", result, StringComparison.Ordinal);
-        Assert.Contains("is not a leaf store", result, StringComparison.Ordinal);
+        Assert.Contains("is not a leaf location", result, StringComparison.Ordinal);
         Assert.Contains("6", result, StringComparison.Ordinal);
     }
 }

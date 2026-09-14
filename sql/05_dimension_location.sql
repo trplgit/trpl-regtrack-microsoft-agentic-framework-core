@@ -491,6 +491,18 @@ SELECT
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
 
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*===================================================================
@@ -726,7 +738,22 @@ SELECT
     /*===================================================================
       9. DATA QUALITY - declared, never silent
     ===================================================================*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'state_peer_norm_median_vs_mean'       THEN 'PeerStateOverduePct'
+                   WHEN 'no_schedules_missing_frequency'       THEN 'NoSchedules_NoFrequency'
+                   WHEN 'no_schedules_despite_frequency'       THEN 'NoSchedules_HasFrequency'
+                   WHEN 'true_overdue_denominator'             THEN 'TenantOverduePct'
+                   WHEN 'ownership_has_two_mechanisms'         THEN 'NoInstanceOwnerPct'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'tenant_recently_onboarded'            THEN 'ClosureRatio'
+                   WHEN 'degraded_peer_sample'                 THEN 'PeerStateOverduePct'
+                   WHEN 'orphaned_entities'                    THEN 'RootKind'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
         SELECT 'state_peer_norm_median_vs_mean' AS Issue,
                N'PeerStateOverduePct uses the MEDIAN of the tenant''s own branches in that state. '
              + N'BA sign-off on median vs mean for this specific comparison is still pending. '
