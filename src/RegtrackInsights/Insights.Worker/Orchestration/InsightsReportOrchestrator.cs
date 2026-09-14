@@ -455,7 +455,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         dimensionJson.GetProperty("Rows").GetRawText(),
                         dimensionJson.GetProperty("ControlTotals").GetRawText(),
                         dimensionJson.GetProperty("DataQuality").GetRawText(),
-                        input.Priority));
+                        input.Priority, input.ReqId));
                 ChargeAndCheck(composeResult.TotalTokens);
                 plan = composeResult.Plan;
             }
@@ -484,20 +484,20 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
             SetStage(InsightsRunStage.Narrating);
             var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority));
+                new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority, input.ReqId));
             ChargeAndCheck(narrateResult.TotalTokens);
             var narrative = narrateResult.Narrative;
 
             for (var i = 0; i < maxReflectionIterations; i++)
             {
                 var reflection = await context.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0",
-                    new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings, input.Priority));
+                    new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings, input.Priority, input.ReqId));
                 ChargeAndCheck(reflection.TotalTokens);
                 if (reflection.Result.Verdict == ReflectionVerdict.Approve)
                     break;
 
                 var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority));
+                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority, input.ReqId));
                 ChargeAndCheck(revised.TotalTokens);
                 narrative = revised.Narrative;
             }
@@ -620,7 +620,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         Handle = ex => ex is not OrchestrationRefusedException,
                     },
                     new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson,
-                        DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null));
+                        DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null,
+                        ReqId: input.ReqId));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder

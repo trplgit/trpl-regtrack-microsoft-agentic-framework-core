@@ -245,14 +245,14 @@ internal sealed class FakeReportRequestRepository : IReportRequestRepository
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
 internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
 {
-    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions)> Calls { get; } = [];
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions, string? ReqId)> Calls { get; } = [];
 
     public Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null)
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null)
     {
-        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions));
+        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId));
         return Task.FromResult(runIdToReturn);
     }
 }

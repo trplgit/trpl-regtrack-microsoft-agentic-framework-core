@@ -7,7 +7,8 @@ namespace Insights.Worker.Orchestration.Activities;
 public sealed record ComposeFreehandDimensionInput(
     string Dimension, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings,
     string DimensionRowsJson, string DimensionControlTotalsJson, string DataQualityJson,
-    LlmCallPriority Priority = LlmCallPriority.Interactive);
+    LlmCallPriority Priority = LlmCallPriority.Interactive,
+    string? ReqId = null);
 
 public sealed record ComposeFreehandDimensionOutput(CompositionPlan Plan, long TotalTokens);
 
@@ -34,7 +35,7 @@ public sealed class ComposeFreehandDimensionActivity(IReadOnlyDictionary<string,
         }
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
-        using var _session = LangfuseSessionContext.Push(runId);
+        using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await agent.ComposeAsync(
             input.Assertions, input.Findings, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.DataQualityJson, CancellationToken.None);
         return new ComposeFreehandDimensionOutput(result.Value, result.TotalTokens);

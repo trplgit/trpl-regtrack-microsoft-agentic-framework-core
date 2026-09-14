@@ -38,8 +38,16 @@ public interface IInsightsRunEnqueuer
     /// verbatim into <c>InsightsReportOrchestrationInput.RequestedDimensions</c>, null for every
     /// other report type exactly as before this parameter existed.
     /// </summary>
+    /// <param name="reqId">
+    /// [ADDED 2026-09-14] The API-level fan-out request id (RunEndpoints.cs's reqId, one per POST
+    /// regardless of how many dimensions it fans out to) - forwarded into
+    /// InsightsReportOrchestrationInput.ReqId so every real LLM call this run makes can be tagged
+    /// with it for LangFuse session grouping (LangfuseSessionTaggingChatClient). Null for callers
+    /// with no such concept (PaidKeepWarmScheduler, the manual CLI trigger) - those fall back to
+    /// the DTFx run id itself, same as before this parameter existed.
+    /// </param>
     Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null);
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null);
 }

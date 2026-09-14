@@ -6,7 +6,8 @@ namespace Insights.Worker.Orchestration.Activities;
 
 public sealed record ReflectOnNarrativeInput(
     NarrativeResult Narrative, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings,
-    LlmCallPriority Priority = LlmCallPriority.Interactive);
+    LlmCallPriority Priority = LlmCallPriority.Interactive,
+    string? ReqId = null);
 public sealed record ReflectOnNarrativeOutput(NarrativeReflectionResult Result, long TotalTokens);
 
 /// <summary>Node 6r.</summary>
@@ -19,7 +20,7 @@ public sealed class ReflectOnNarrativeActivity(INarrativeReflectionAgent reflect
     internal async Task<ReflectOnNarrativeOutput> RunAsync(ReflectOnNarrativeInput input, string? runId = null)
     {
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
-        using var _session = LangfuseSessionContext.Push(runId);
+        using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await reflectionAgent.ReflectAsync(input.Narrative, input.Assertions, input.Findings, CancellationToken.None);
         return new ReflectOnNarrativeOutput(result.Value, result.TotalTokens);
     }

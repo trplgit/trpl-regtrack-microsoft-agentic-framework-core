@@ -18,7 +18,8 @@ public sealed record RenderHtmlInput(
     // blocks - hero + supporting sections, the agent's own judgement call), so the specific key is
     // now driven directly by which dimension was requested, never by how many blocks composition
     // decided to produce.
-    string? DimensionName = null);
+    string? DimensionName = null,
+    string? ReqId = null);
 public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 
 /// <summary>
@@ -76,7 +77,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         }
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
-        using var _session = LangfuseSessionContext.Push(runId);
+        using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
             input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);
