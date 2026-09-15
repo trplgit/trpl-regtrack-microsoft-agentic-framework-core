@@ -1,13 +1,13 @@
-﻿/*â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  RegTrack Insights â€” Phase 1c
-  FREE WEEKLY DIGEST â€” entitlement gate + the ~15 aggregates
+/*===========================================================================
+  RegTrack Insights - Phase 1c
+  FREE WEEKLY DIGEST - entitlement gate + the ~15 aggregates
 
-  Spec reference : RegTrack_Insights_System_Design_v1.md Â§10
+  Spec reference : RegTrack_Insights_System_Design_v1.md Sec.10
   Purpose        : Product 18 (RegInsights Basic). A weekly email to every
                    entitled tenant's designated management users.
 
-  â”€â”€ THE COST INSIGHT THAT SHAPES THIS WHOLE DESIGN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  The analysis WINDOW does not drive LLM cost â€” the ARCHITECTURE does.
+  -- THE COST INSIGHT THAT SHAPES THIS WHOLE DESIGN -------------------------
+  The analysis WINDOW does not drive LLM cost - the ARCHITECTURE does.
 
   Deterministic SQL collapses the entire window to ~15 integers; the LLM sees
   ONLY those integers and writes ~250 words. A 30-day forward analysis therefore
@@ -15,35 +15,35 @@
 
   So: choose the window for VALUE, not for cost. Hard cap ~1,500 tokens/email.
   Across ~600 entitled tenants weekly that is roughly 30M tokens/year for the
-  entire free tier â€” small, predictable, and trivially cappable.
+  entire free tier - small, predictable, and trivially cappable.
 
-  â”€â”€ RECENCY SAFETY â€” NON-NEGOTIABLE (Â§10.6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  -- RECENCY SAFETY - NON-NEGOTIABLE (Sec.10.6) --------------------------------
   NEVER compute a completion RATIO over the last 7 days. Raw "missed last week"
   figures look catastrophic (one tenant showed 272 of 322 not closed, ~84%) but
-  that is RECENCY LAG, not failure â€” an item due three days ago and still inside
+  that is RECENCY LAG, not failure - an item due three days ago and still inside
   its normal review cycle has not been "missed".
 
   Backward-looking content is ABSOLUTE COMPLETED-COUNT ONLY.
   The word "overdue" as a level is reserved for the PAID engine.
 
   IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•*/
+===========================================================================*/
 
 SET NOCOUNT ON;
 GO
 
-/*â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  1. WEEKLY DIGEST GATE  (Â§5.3)
+/*---------------------------------------------------------------------------
+  1. WEEKLY DIGEST GATE  (Sec.5.3)
 
   Cheapest-first, short-circuit BEFORE any spend. An unentitled tenant costs
   literally nothing: no aggregation, no LLM call, no email.
 
-  [TRAP] ProductMapping.IsActive is INVERTED â€” 0 = ENABLED.
+  [TRAP] ProductMapping.IsActive is INVERTED - 0 = ENABLED.
 
   Entitlement is evaluated at JOB EXECUTION TIME, never cached at schedule
   time. That is what makes mid-cycle transitions correct: a tenant upgraded on
   Wednesday does not receive Thursday's free digest.
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestGate', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_FreeDigestGate;
 GO
@@ -69,42 +69,39 @@ BEGIN
         SELECT @decision = 'EXIT_ZERO_COST',
                @reason   = N'Product 18 (RegInsights Basic) is not mapped-and-enabled.';
 
-    -- Step 2: supersession â€” paid subsumes free
+    -- Step 2: supersession - paid subsumes free
     IF @decision = 'PROCEED'
        AND EXISTS (SELECT 1 FROM ProductMapping
                    WHERE CustomerID = @CustomerID AND ProductID = 19 AND IsActive = 0)
         SELECT @decision = 'EXIT_SUPERSEDED',
-               @reason   = N'Paid tier active â€” free digest self-skips. Also covers the '
+               @reason   = N'Paid tier active - free digest self-skips. Also covers the '
                          + N'non-atomic window where both products are briefly mapped.';
 
     -- Step 3: recipients, minus durable opt-outs
     IF @decision = 'PROCEED'
     BEGIN
-        SELECT @recips = COUNT(DISTINCT ucm.UserID)
-        FROM UserCustomerMapping ucm
-        JOIN [User] u ON u.ID = ucm.UserID
-        WHERE ucm.CustomerID = @CustomerID
-          AND ucm.ProductID  = 18
-          AND ucm.IsActive   = 0        -- INVERTED
-          AND u.IsDeleted    = 0
-          /*  Per-recipient opt-out (spec 5.4). Suppression lives in its OWN table
-              precisely so it SURVIVES tier changes - storing it on the product
-              mapping would mean an upgrade/downgrade cycle silently re-subscribes
-              someone who asked to stop. Covers hard bounces too; see sql/16.
+        /*  [CORRECTED 2026-09-08] Recipients are the tenant's MANAGEMENT-ROLE
+            users, per BA ruling. Previously counted from UserCustomerMapping,
+            where every production row has ProductID = NULL and IsActive = 1 -
+            so this returned ZERO for every tenant and the digest could never
+            send. See sql/01 for the evidence.
 
-              This predicate MUST stay identical to the one in
-              SqlFreeDigestRepository.GetRecipientsAsync, or the gate's count stops
-              agreeing with the list and EXIT_NO_RECIPIENTS means nothing.
-
-              REQUIRES sql/16 to be installed. Deferred name resolution lets this
-              proc CREATE without the table, then fails at run time - so install
-              sql/16 before re-installing this file.                              */
-          AND NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression sup
-                          WHERE sup.CustomerID = ucm.CustomerID AND sup.UserID = ucm.UserID);
+            [CORRECTED 2026-09-10] Now subtracts durable opt-outs (sql/16),
+            which did not exist when the TODO below was written. Opt-out
+            SURVIVES tier changes (Sec.5.4) - an upgrade/downgrade cycle must
+            not silently re-subscribe someone who asked to stop. Without this,
+            the gate's RecipientCount could show PROCEED with N recipients
+            while GetRecipientsAsync (the actual send list, which already
+            filters suppression) finds fewer or zero - a cheap query wasted on
+            a tenant that was never going to be mailed, not a wrong send.    */
+        SELECT @recips = COUNT(DISTINCT m.UserID)
+        FROM dbo.tvfInsightsManagementUsers(@CustomerID) m
+        WHERE NOT EXISTS (SELECT 1 FROM dbo.InsightsDigestSuppression s
+                          WHERE s.CustomerID = @CustomerID AND s.UserID = m.UserID);
 
         IF @recips = 0
             SELECT @decision = 'EXIT_NO_RECIPIENTS',
-                   @reason   = N'No enabled recipients â€” exit before aggregation or LLM spend.';
+                   @reason   = N'No enabled recipients - exit before aggregation or LLM spend.';
     END
 
     SELECT @CustomerID AS CustomerID,
@@ -115,19 +112,19 @@ BEGIN
 END
 GO
 
-/*â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/*---------------------------------------------------------------------------
   2. THE ~15 AGGREGATES
 
   Everything the LLM will ever see. Raw rows are NEVER passed to the model.
 
   Windows are anchored on ScheduleOn (stable, drift-free, snapshot-free):
-      â€¢ next 7 days  â€” "this week"      (the actionable core)
-      â€¢ next 30 days â€” "severity radar" (the paid-tier conversion hook)
-      â€¢ last 7 days  â€” completed COUNT  (momentum; absolute only)
+      - next 7 days  - "this week"      (the actionable core)
+      - next 30 days - "severity radar" (the paid-tier conversion hook)
+      - last 7 days  - completed COUNT  (momentum; absolute only)
 
   Scope: pass @UserID to constrain to a recipient's authorised scope. Pass NULL
   for a tenant-wide digest ONLY when the recipient is verified tenant-wide.
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€*/
+---------------------------------------------------------------------------*/
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestAggregates', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_Insights_FreeDigestAggregates;
 GO
@@ -142,21 +139,7 @@ BEGIN
 
     EXEC dbo.usp_Insights_AssertStatusCoverage;   -- fail closed on dictionary gap
 
-    /*  The RiskType value meaning Critical comes from the DICTIONARY, never from a
-        literal (non-negotiable #4). This matters more here than anywhere: a wrong
-        literal makes the free digest tell a compliance manager they have 2 critical
-        obligations due when they have 140 - silently, with no error, in an email
-        that goes to 600 tenants.                                                    */
-    DECLARE @criticalRisk INT = (
-        SELECT TRY_CAST(p.RawValue AS INT)
-        FROM dbo.InsightsEnumPolarity p
-        JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
-        WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
-
-    IF @criticalRisk IS NULL
-        THROW 51040, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to send a digest carrying a critical-risk count.', 1;
-
-    /* Scoped instance base. Same 2-D scope rules as the paid engine â€” a free
+    /* Scoped instance base. Same 2-D scope rules as the paid engine - a free
        recipient must never receive numbers outside their authorised scope. */
     IF OBJECT_ID('tempdb..#i') IS NOT NULL DROP TABLE #i;
     SELECT s.ComplianceInstanceID, s.BranchID, c.Imprisonment, c.RiskType, c.ComplianceType
@@ -170,20 +153,23 @@ BEGIN
         FROM ComplianceInstance i2
         JOIN CustomerBranch cb ON cb.ID = i2.CustomerBranchID
         WHERE @UserID IS NULL AND cb.CustomerID = @CustomerID
-          AND cb.IsDeleted = 0 AND i2.IsDeleted = 0
+          AND cb.IsDeleted = 0 AND cb.Status = 1 AND i2.IsDeleted = 0
     ) s
     JOIN Compliance c ON c.ID = s.ComplianceID AND c.IsDeleted = 0;
 
     /* Forward-looking schedule window. Only ACTIVE, not-yet-closed obligations
-       count as "due" â€” an item already completed is not a deadline. */
+       count as "due" - an item already completed is not a deadline. */
     IF OBJECT_ID('tempdb..#due') IS NOT NULL DROP TABLE #due;
     SELECT cso.ID AS SchedId, i.ComplianceInstanceID, cso.ScheduleOn,
            i.Imprisonment, i.RiskType, i.ComplianceType
     INTO #due
     FROM #i i
     JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
-    LEFT JOIN RecentComplianceTransactionView rct ON rct.ComplianceScheduleOnID = cso.ID
-    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = rct.ComplianceStatusID
+    /*  [PERF] explicit latest-status seek, never the 45.7M-row view - see sql/01 */
+    OUTER APPLY (SELECT TOP 1 t.StatusId FROM ComplianceTransaction t
+                 WHERE t.ComplianceScheduleOnID = cso.ID
+                 ORDER BY t.Dated DESC, t.ID DESC) rct
+    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = rct.StatusId
     WHERE cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1
       AND cso.ScheduleOn > @AsOf
       AND cso.ScheduleOn <= DATEADD(DAY, 30, @AsOf)
@@ -200,7 +186,7 @@ BEGIN
           AND t.StatusChangedOn >= DATEADD(DAY, -7, @AsOf)
           AND t.StatusChangedOn <  @AsOf);
 
-    /*  THE ~15 NUMBERS â€” the complete LLM input.  */
+    /*  THE ~15 NUMBERS - the complete LLM input.  */
     SELECT
         @CustomerID AS CustomerID,
         @AsOf       AS GeneratedAt,
@@ -210,15 +196,15 @@ BEGIN
 
         -- this week: next 7 days (4)
         (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf))                       AS DueNext7,
-        (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf) AND RiskType = @criticalRisk) AS CriticalDueNext7,
+        (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf) AND RiskType = 3)      AS CriticalDueNext7,
         (SELECT COUNT(*) FROM #due WHERE ScheduleOn <= DATEADD(DAY,7,@AsOf) AND Imprisonment = 1)  AS ImprisonmentDueNext7,
         (SELECT COUNT(DISTINCT BranchID) FROM #i)                                                  AS BranchesInScope,
 
-        -- severity radar: next 30 days â€” THE CONVERSION HOOK (4)
+        -- severity radar: next 30 days - THE CONVERSION HOOK (4)
         (SELECT COUNT(*) FROM #due)                                                                AS DueNext30,
         (SELECT COUNT(*) FROM #due WHERE Imprisonment = 1)                                         AS ImprisonmentDueNext30,
         (SELECT COUNT(*) FROM #due WHERE ComplianceType = 2)                                       AS LicencesLapsingNext30,
-        (SELECT COUNT(*) FROM #due WHERE RiskType = @criticalRisk)                                  AS CriticalDueNext30,
+        (SELECT COUNT(*) FROM #due WHERE RiskType = 3)                                             AS CriticalDueNext30,
 
         -- momentum: backward, ABSOLUTE COUNT ONLY (1)
         @completedLast7                                                                            AS CompletedLast7,
@@ -233,20 +219,20 @@ BEGIN
 END
 GO
 
-/*â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+/*---------------------------------------------------------------------------
   3. LLM CONTRACT  (implemented in .NET, documented here so it stays with the SQL)
 
   INPUT  : exactly the ~15 integers above. NEVER raw rows.
   OUTPUT : ~250 words, plain prose, no markup.
-  CAP    : ~1,500 tokens total. Over budget â‡’ SKIP the LLM and send the
+  CAP    : ~1,500 tokens total. Over budget => SKIP the LLM and send the
            deterministic templated version. The email NEVER fails to go out.
 
-  ALLOWED CLAIMS â€” forward counts, absolute completed count, severity counts.
-  BANNED CLAIMS  â€” any completion RATIO over a recent window (recency lag);
+  ALLOWED CLAIMS - forward counts, absolute completed count, severity counts.
+  BANNED CLAIMS  - any completion RATIO over a recent window (recency lag);
                    the word "overdue" as a level (reserved for the paid tier);
                    any per-location / per-user / per-Act attribution.
 
-  â”€â”€ THE CONVERSION BOUNDARY (Â§10.7) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  -- THE CONVERSION BOUNDARY (Sec.10.7) ----------------------------------------
   The free email shows the WHAT and never the WHERE / WHO / WHY.
 
       FREE : "183 items carrying personal liability are due in the next 30 days."
@@ -255,7 +241,7 @@ GO
 
   The gap between the number and its explanation IS the sales pitch. End the
   email on that teased depth.
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€*/
+---------------------------------------------------------------------------*/
 
 PRINT 'Free weekly digest gate + aggregates installed.';
 GO

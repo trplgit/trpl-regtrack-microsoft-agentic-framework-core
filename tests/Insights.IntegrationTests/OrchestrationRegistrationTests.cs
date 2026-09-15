@@ -25,6 +25,13 @@ public class OrchestrationRegistrationTests
                 ?? throw new InvalidOperationException("Set ConnectionStrings__RegTrack before running this test."),
             ["ConnectionStrings:DurableTaskHub"] = Environment.GetEnvironmentVariable("ConnectionStrings__DurableTaskHub")
                 ?? throw new InvalidOperationException("Set ConnectionStrings__DurableTaskHub before running this test."),
+            // [BUG FOUND LIVE, pre-existing, unrelated to RenderHtmlActivity's 2026-09-01 change]
+            // AddInsightsOrchestrationWorker -> RegisterReportCodec requires this - missing here
+            // meant this test could never have passed even before today's changes, it just never
+            // got run far enough to hit it until now.
+            ["Azure:BlobConnectionString"] = Environment.GetEnvironmentVariable("AZURE_BLOB_CONNECTION_STRING")
+                ?? throw new InvalidOperationException("Set AZURE_BLOB_CONNECTION_STRING before running this test."),
+            ["Azure:BlobContainer"] = "insights-reports-temp",
             ["Llm:Maf:Endpoint"] = Environment.GetEnvironmentVariable("MAF_ENDPOINT")
                 ?? throw new InvalidOperationException("Set MAF_ENDPOINT before running this test."),
             ["Llm:Maf:Model"] = Environment.GetEnvironmentVariable("MAF_MODEL")
@@ -32,6 +39,8 @@ public class OrchestrationRegistrationTests
             ["Llm:Maf:ApiKey"] = Environment.GetEnvironmentVariable("MAF_API_KEY")
                 ?? throw new InvalidOperationException("Set MAF_API_KEY before running this test."),
             ["Agents:PromptDirectory"] = "./prompts",
+            ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
+            ["Budget:AlertAtPercentOfCeiling"] = "80",
         };
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
@@ -43,6 +52,7 @@ public class OrchestrationRegistrationTests
         var services = new ServiceCollection();
 
         services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
         services.AddInsightsWorker();
         services.AddInsightsPaidReportAgents(configuration);
         services.AddInsightsOrchestration(configuration);

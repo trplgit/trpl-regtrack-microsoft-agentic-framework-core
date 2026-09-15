@@ -1,4 +1,4 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1b, Step 7
   USERS DIMENSION
 
@@ -104,6 +104,62 @@ BEGIN
     WHERE a.RoleID = 3 AND d.ClosureClass = 'completed' AND d.Timeliness IS NOT NULL
     GROUP BY a.UserID;
 
+    /*-- 3b. COMPLETION TIMING - HOW early/late, not just whether ---------
+       [ADDED 2026-09-13] New facet, PERFORMER ONLY, OWN WORK - same population as
+       #quality above (RoleID=3, ClosureClass='completed'), never blended with
+       reviewer timing, which would need a different date pair (submission vs
+       review date) and is not built here. Timeliness (facet B2 above) only says
+       on_time/delayed; this says BY HOW MUCH, in real days, from real dates:
+       ComplianceScheduleOn.ScheduleOn (the due date) vs ComplianceTransaction.Dated
+       (the actual completion-event date - the same column
+       tvfInsightsLatestStatus itself already orders by, confirmed live on tenant
+       1300, 2026-09-13). Negative = finished early, positive = finished late.
+
+       [TRAP - confirmed live] A handful of events show a gap of over 1000 days in
+       either direction - bulk-migration/backdated-schedule artifacts, the same
+       class of noise CLAUDE.md sec.5 already documents for this table, not real
+       human behaviour. A MEAN would let one such row wreck a user's entire
+       reading (measured live: one user's average flipped to -160 days off a
+       37-event sample because of a handful of these). Excluded here at |gap| >
+       365 days - no normal compliance cycle runs a year early or late - and the
+       excluded count is declared tenant-wide in data_quality below, never
+       silently dropped. The per-user figure itself is still a MEDIAN
+       (PERCENTILE_CONT), not a mean, as further protection even within the
+       365-day band.                                                        */
+    IF OBJECT_ID('tempdb..#timing') IS NOT NULL DROP TABLE #timing;
+    SELECT a.UserID,
+           DATEDIFF(day, cso.ScheduleOn, t.Dated) AS DaysLate
+    INTO #timing
+    FROM #asg a
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = a.ComplianceInstanceID
+    JOIN ComplianceTransaction t  ON t.ComplianceScheduleOnID = cso.ID
+    JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = t.StatusId
+    WHERE a.RoleID = 3 AND d.ClosureClass = 'completed' AND d.Timeliness IS NOT NULL;
+
+    DECLARE @timingOutliersExcluded INT = (SELECT COUNT(*) FROM #timing WHERE ABS(DaysLate) > 365);
+
+    /*  [ADDED 2026-09-13] EarlyCount/LateCount/OnTimeCount/EarlyPct - the split behind the
+        median, not just the median itself. EarlyPct is DATE-based (DaysLate < 0), never to be
+        confused with the existing status-based OnTimePct in #quality above - a different
+        population and a different definition of "on time", kept as separate, differently-named
+        fields per CLAUDE.md sec.4a's own residual-naming rule (never conflate two distinct
+        counts under one name). Same 365-day exclusion window as the median. */
+    IF OBJECT_ID('tempdb..#medtiming') IS NOT NULL DROP TABLE #medtiming;
+    SELECT DISTINCT UserID,
+           CAST(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(DaysLate AS FLOAT))
+                OVER (PARTITION BY UserID) AS DECIMAL(9,1)) AS MedianDaysEarlyLate,
+           COUNT(*) OVER (PARTITION BY UserID) AS TimingSampleSize,
+           SUM(CASE WHEN DaysLate < 0 THEN 1 ELSE 0 END) OVER (PARTITION BY UserID) AS EarlyCount,
+           SUM(CASE WHEN DaysLate > 0 THEN 1 ELSE 0 END) OVER (PARTITION BY UserID) AS LateCount,
+           SUM(CASE WHEN DaysLate = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY UserID) AS OnTimeCount
+    INTO #medtiming
+    FROM #timing
+    WHERE ABS(DaysLate) <= 365;
+
+    DECLARE @tenantMedianDaysEarlyLate DECIMAL(9,1) = (
+        SELECT TOP 1 CAST(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(DaysLate AS FLOAT)) OVER () AS DECIMAL(9,1))
+        FROM #timing WHERE ABS(DaysLate) <= 365);
+
     /*-- 4. ENGAGEMENT - 12-month login window, keyed by EMAIL -----------*/
     IF OBJECT_ID('tempdb..#login') IS NOT NULL DROP TABLE #login;
     SELECT u.ID AS UserID, COUNT(l.ID) AS Logins12m
@@ -125,6 +181,10 @@ BEGIN
         Instances             INT            NOT NULL,   -- distinct instances held, any role
         PerformerInstances    INT            NOT NULL,
         ReviewerInstances     INT            NOT NULL,
+        OtherRoleInstances    INT            NOT NULL,   -- [TRAP] RoleID outside {3,4} - e.g. RoleID 6, seen live on
+                                                           -- tenant 1403, not yet in DIMENSION_SPECS.md. Never blended
+                                                           -- into Performer/Reviewer - surfaced separately so an
+                                                           -- undocumented role cannot silently vanish into a total.
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
@@ -135,11 +195,17 @@ BEGIN
         OnTimeEvents          INT            NOT NULL,
         OnTimePct             DECIMAL(5,1)   NULL,
         QuadrantOverlay       VARCHAR(30)    NULL,
+        MedianDaysEarlyLate   DECIMAL(9,1)   NULL,   -- NULL = no qualifying completed event (never 0 - 0 is a real "right on the day")
+        TimingSampleSize      INT            NULL,   -- how many completed events the median above is drawn from
+        EarlyCount            INT            NULL,
+        LateCount             INT            NULL,
+        OnTimeCount           INT            NULL,   -- DaysLate = 0 exactly - NOT the same population/definition as OnTimeEvents above
+        EarlyPct              DECIMAL(5,1)   NULL,   -- date-based (DaysLate < 0) - NOT the same as OnTimePct, which is status-based
         Flags                 VARCHAR(200)   NULL
     );
 
     INSERT #rows (UserID, UserName, IsActive, Instances, PerformerInstances, ReviewerInstances,
-                  Overdue, ImprisonmentInstances, BranchesCovered, Logins12m,
+                  OtherRoleInstances, Overdue, ImprisonmentInstances, BranchesCovered, Logins12m,
                   CompletedEvents, OnTimeEvents)
     SELECT
         a.UserID,
@@ -148,6 +214,7 @@ BEGIN
         COUNT(DISTINCT a.ComplianceInstanceID),
         COUNT(DISTINCT CASE WHEN a.RoleID = 3 THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN a.RoleID = 4 THEN a.ComplianceInstanceID END),
+        COUNT(DISTINCT CASE WHEN a.RoleID NOT IN (3,4) THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN i.Imprisonment = 1 THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT i.BranchID),
@@ -187,12 +254,12 @@ BEGIN
     /*  No single user can hold more distinct instances than exist in the union.
         This is what actually catches the 155% class of bug at the row grain. */
     IF EXISTS (SELECT 1 FROM #rows WHERE Instances > @assignedUnion)
-        THROW 51101, N'USERS DIMENSION RECONCILIATION FAILED - a user row claims more distinct instances than the whole assigned union contains. A join is fanning out. Refusing to publish.', 1;
+        THROW 51102, N'USERS DIMENSION RECONCILIATION FAILED - a user row claims more distinct instances than the whole assigned union contains. A join is fanning out. Refusing to publish.', 1;
 
     /*  Every assigned instance appears in at least one user row, so the sum of
         per-user counts must be at least the union. Less means rows were lost. */
     IF @rowSum < @assignedUnion
-        THROW 51101, N'USERS DIMENSION RECONCILIATION FAILED - the sum of per-user instance counts is below the distinct-instance union, so assigned instances are missing from the rows. Refusing to publish.', 1;
+        THROW 51103, N'USERS DIMENSION RECONCILIATION FAILED - the sum of per-user instance counts is below the distinct-instance union, so assigned instances are missing from the rows. Refusing to publish.', 1;
 
     DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
     DECLARE @tenantOverduePct DECIMAL(5,1) =
@@ -207,6 +274,19 @@ BEGIN
                               WHEN Logins12m >= 6   THEN 'moderate'
                               WHEN Logins12m >= 1   THEN 'seldom'
                               ELSE 'never' END;
+
+    /*  MedianDaysEarlyLate stays NULL for a user with zero qualifying events -
+        never defaulted to 0, which would misreport them as "always on the day". */
+    UPDATE r SET
+        r.MedianDaysEarlyLate = mt.MedianDaysEarlyLate,
+        r.TimingSampleSize    = mt.TimingSampleSize,
+        r.EarlyCount          = mt.EarlyCount,
+        r.LateCount           = mt.LateCount,
+        r.OnTimeCount         = mt.OnTimeCount,
+        r.EarlyPct            = CASE WHEN mt.TimingSampleSize = 0 THEN NULL
+                                      ELSE 100.0 * mt.EarlyCount / mt.TimingSampleSize END
+    FROM #rows r
+    JOIN #medtiming mt ON mt.UserID = r.UserID;
 
     /*  The 2x2 overlay. Engagement on one axis, quality on the other - the
         third cell (disengaged but current) is the dependency risk that login
@@ -267,7 +347,9 @@ BEGIN
         @rowSum                       AS SumOfPerUserInstances,
         @medianOnTime                 AS TenantMedianOnTimePct,
         @medianLoad                   AS TenantMedianPerformerLoad,
-        @soleReviewerInstances        AS InstancesWithSoleReviewer;
+        @soleReviewerInstances        AS InstancesWithSoleReviewer,
+        @tenantMedianDaysEarlyLate    AS TenantMedianDaysEarlyLate,
+        @timingOutliersExcluded       AS TimingOutliersExcluded;
 
     SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;
 
@@ -293,6 +375,18 @@ BEGIN
                            WHEN Eligible <= 5      THEN 'individual'
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
+
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
 
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
@@ -435,7 +529,23 @@ BEGIN
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*-- 11. DATA QUALITY ------------------------------------------------*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding.
+        [EXTENDED 2026-09-13] implausible_completion_gaps/undocumented_role_id are this session's
+        own additions (completion-timing, OtherRoleInstances) - not in the handoff's own mapping,
+        added here so they follow the same binding convention. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'engagement_is_not_quality'            THEN 'LoginBand'
+                   WHEN 'users_without_quality_reading'        THEN 'OnTimePct'
+                   WHEN 'unassigned_instances'                 THEN 'UnassignedInstances'
+                   WHEN 'login_keyed_by_email'                 THEN 'LoginBand'
+                   WHEN 'implausible_completion_gaps'          THEN 'MedianDaysEarlyLate'
+                   WHEN 'undocumented_role_id'                 THEN 'OtherRoleInstances'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL
@@ -456,12 +566,32 @@ BEGIN
                     + N'therefore appear in no user row.')
         WHERE @unassigned > 0
         UNION ALL
+        SELECT 'implausible_completion_gaps',
+               CONCAT(N'', @timingOutliersExcluded, N' completed event(s) show a gap of more than 365 days '
+                    + N'between due date and completion date - almost certainly bulk-migration or '
+                    + N'backdated-schedule artifacts, not real behaviour. Excluded from every '
+                    + N'MedianDaysEarlyLate figure in this report, tenant-wide and per-user.')
+        WHERE @timingOutliersExcluded > 0
+        UNION ALL
         SELECT 'login_keyed_by_email',
                N'UserLoginTrack is keyed by Email, not UserID. A user whose email changed, or who shares an '
              + N'address, may have an inaccurate login count. Engagement bands are indicative, not exact.'
+        UNION ALL
+        SELECT 'undocumented_role_id',
+               CONCAT(N'RoleID(s) ', ids.List,
+                      N' appear on ', cnt.InstanceCount,
+                      N' assignment(s) in this scope and are not RoleID 3 (performer) or 4 (reviewer). ',
+                      N'Not classified as performer or reviewer work - counted only in OtherRoleInstances. ',
+                      N'DIMENSION_SPECS.md needs a BA-signed definition before this can be classified.')
+        FROM (SELECT STRING_AGG(CAST(RoleID AS VARCHAR(10)), ', ') AS List
+              FROM (SELECT DISTINCT RoleID FROM #asg WHERE RoleID NOT IN (3,4)) r) ids
+        CROSS JOIN (SELECT COUNT(DISTINCT ComplianceInstanceID) AS InstanceCount
+                    FROM #asg WHERE RoleID NOT IN (3,4)) cnt
+        WHERE ids.List IS NOT NULL
     ) q;
 
     DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #asg; DROP TABLE #quality;
+    DROP TABLE #timing; DROP TABLE #medtiming;
     DROP TABLE #login; DROP TABLE #rows; DROP TABLE #detector;
     DROP TABLE #assert; DROP TABLE #find;
 END

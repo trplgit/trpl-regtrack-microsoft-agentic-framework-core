@@ -1,5 +1,7 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1b, Step 3
+  Error block 51060-51069.  Convention: x0 = SCOPE DENIED,
+  x1-x4 = RECONCILIATION FAILED, x5-x9 = DICTIONARY / MASTER DATA GAP.
   RISK DIMENSION
 
   Spec reference : docs/DIMENSION_SPECS.md section 5
@@ -76,12 +78,12 @@ BEGIN
     WHERE p.Semantic = 'RiskType' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL;
 
     IF NOT EXISTS (SELECT 1 FROM #risk)
-        THROW 51062, N'DICTIONARY GAP - no RiskType values are mapped in InsightsEnumPolarity. Refusing to compute a risk dimension.', 1;
+        THROW 51065, N'DICTIONARY GAP - no RiskType values are mapped in InsightsEnumPolarity. Refusing to compute a risk dimension.', 1;
 
     DECLARE @criticalRisk INT = (SELECT TOP 1 RiskType FROM #risk WHERE RiskLabel LIKE N'Critical%');
 
     IF @criticalRisk IS NULL
-        THROW 51062, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+        THROW 51066, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
 
     /*=====================================================================
       1. SCOPED INSTANCE BASE - both scope axes
@@ -109,12 +111,23 @@ BEGIN
     /*=====================================================================
       3. OWNERSHIP - an instance with no performer is ownerless
     =====================================================================*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
     IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #owned
-    FROM ComplianceAssignment ca
-    JOIN #inst i ON i.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;      -- RoleID 3 = performer
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);      -- RoleID 3 = performer
 
     /*=====================================================================
       4. PER-LEVEL ROWS - from the dictionary member list, not the facts
@@ -131,7 +144,7 @@ BEGIN
         Instances             INT            NOT NULL,
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
-        Ownerless             INT            NOT NULL,
+        NoInstanceOwner             INT            NOT NULL,
         ImprisonmentInstances INT            NOT NULL,
         ImprisonmentOverdue   INT            NOT NULL,
         BranchesCovered       INT            NOT NULL,
@@ -140,7 +153,7 @@ BEGIN
         Flags                 VARCHAR(200)   NULL
     );
 
-    INSERT #rows (RiskType, RiskLabel, Instances, Overdue, Ownerless,
+    INSERT #rows (RiskType, RiskLabel, Instances, Overdue, NoInstanceOwner,
                   ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered)
     SELECT
         r.RiskType,
@@ -222,15 +235,15 @@ BEGIN
       zero, "more than Critical" is 0 > 0 which is false, but the guard makes
       the intent explicit rather than relying on that.
     =====================================================================*/
-    DECLARE @criticalOwnerless INT =
-        (SELECT ISNULL(MAX(Ownerless),0) FROM #rows WHERE RiskType = @criticalRisk);
+    DECLARE @criticalNoInstanceOwner INT =
+        (SELECT ISNULL(MAX(NoInstanceOwner),0) FROM #rows WHERE RiskType = @criticalRisk);
 
     UPDATE #rows SET Flags =
         STUFF(
             CASE WHEN @hasAnyObligations = 1
                   AND Instances > 0
                   AND RiskType <> @criticalRisk
-                  AND Ownerless > @criticalOwnerless
+                  AND NoInstanceOwner > @criticalNoInstanceOwner
                  THEN ',ownership_gap_below_critical' ELSE '' END
         , 1, 1, '');
 
@@ -279,6 +292,18 @@ BEGIN
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
 
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*=====================================================================
@@ -325,11 +350,11 @@ BEGIN
     /*  FINDING 2. Ownership not following severity. Policy-gated. */
     IF (SELECT EmitMode FROM #detector WHERE Detector='ownership_gap_below_critical') = 'individual'
         INSERT #assert
-        SELECT TOP 5 'A-OWNGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY Ownerless DESC) AS VARCHAR(5)),
-               'ownerless', RiskLabel, Ownerless, NULL, NULL,
-               @criticalOwnerless, Ownerless - @criticalOwnerless, 'worse',
+        SELECT TOP 5 'A-OWNGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY NoInstanceOwner DESC) AS VARCHAR(5)),
+               'ownerless', RiskLabel, NoInstanceOwner, NULL, NULL,
+               @criticalNoInstanceOwner, NoInstanceOwner - @criticalNoInstanceOwner, 'worse',
                N'ownership_gap_below_critical: attention follows severity, ownership does not'
-        FROM #rows WHERE Flags LIKE '%ownership_gap_below_critical%' ORDER BY Ownerless DESC;
+        FROM #rows WHERE Flags LIKE '%ownership_gap_below_critical%' ORDER BY NoInstanceOwner DESC;
     ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='ownership_gap_below_critical') = 'aggregate'
         /*  ComparatorValue stays NULL. Value here is a COUNT OF RISK LEVELS; putting
             Critical's ownerless COUNT beside it puts two different units in one
@@ -379,7 +404,7 @@ BEGIN
     INSERT #find
     SELECT 'F-OWNGAP','high',
            CONCAT(N'', ScopeLabel, N' carries ', CAST(Value AS INT),
-                  N' obligations with no assigned owner, more than the Critical tier'),
+                  N' obligations with no INSTANCE-LEVEL owner, more than the Critical tier'),
            AssertionId,
            N'Attention follows severity; ownership does not. The coverage gap is in the middle tiers, not the top one.'
     FROM #assert WHERE AssertionId LIKE 'A-OWNGAP-[0-9]%';
@@ -397,7 +422,25 @@ BEGIN
     /*=====================================================================
       11. DATA QUALITY - declared, never silent
     =====================================================================*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'NoInstanceOwner'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'critical_imprisonment_overlap'        THEN 'ImprisonmentOnCriticalPct'
+                   WHEN 'risk_levels_unused'                   THEN 'RiskLevelsWithObligations'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL

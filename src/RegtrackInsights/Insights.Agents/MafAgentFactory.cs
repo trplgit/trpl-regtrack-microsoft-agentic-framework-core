@@ -4,6 +4,7 @@ using System.ClientModel;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using OpenAI.Responses;
 
 namespace Insights.Agents;
 
@@ -17,21 +18,82 @@ namespace Insights.Agents;
 /// </summary>
 public static class MafAgentFactory
 {
-    /// <summary>For agents whose contract is a JSON object (composition, reflection, narrative).</summary>
-    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json);
+    /// <summary>
+    /// The ActivitySource name Microsoft.Extensions.AI's built-in chat-client instrumentation
+    /// actually uses, in the pinned 10.7.0 build - confirmed by inspecting the compiled
+    /// Microsoft.Extensions.AI.dll directly (2026-08-25: OpenTelemetryConsts.DefaultSourceName is
+    /// the literal string "Microsoft.Extensions.AI", not the "Experimental.Microsoft.Extensions.AI"
+    /// name older preview versions used and some public examples still show). Insights.Worker.
+    /// ObservabilityRegistration's AddSource(...) call must use this exact same constant, or it
+    /// silently matches nothing and every LLM span is dropped before export - no error, just an
+    /// empty LangFuse project.
+    /// </summary>
+    public const string ChatClientActivitySourceName = "Microsoft.Extensions.AI";
 
     /// <summary>
-    /// For agents whose output is NOT JSON - report HTML (05_report_html.md) produces a raw HTML
+    /// For agents whose contract is a JSON object (composition, reflection, narrative).
+    /// <paramref name="reasoningEffort"/> [ADDED 2026-09-14] is optional and defaults to null
+    /// (no ReasoningOptions set - unchanged behavior for every existing caller). Freehand
+    /// dimension composition is the first caller to pass a real value, deliberately configurable
+    /// (FreehandDimensions:ReasoningEffort) rather than hardcoded, so it can be tuned without a
+    /// code change.
+    /// </summary>
+    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
+
+    /// <summary>
+    /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// </summary>
-    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text);
+    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat)
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort)
     {
-        var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint) });
+        /*  [BUG FOUND LIVE, 2026-09-01] The SDK's own default NetworkTimeout is 100 seconds
+            (ClientPipelineOptions.NetworkTimeout - confirmed via the SDK's own
+            TaskCanceledException message, which names this exact property). A real render call
+            for a large tenant (a fixed-holistic report's location_rows can carry 600+ branches,
+            plus up to Agents:MaxTokensPerCall of reasoning+output) can legitimately take longer
+            than that to complete - confirmed live: a direct curl to this exact endpoint with a
+            trivial prompt returned in ~2s, so the endpoint itself was never the problem, but two
+            consecutive full-size render attempts both hit the 100s wall and were reported as
+            "network failure" when the real cause was an undersized client timeout for this
+            workload's size, not a transient connectivity issue. A RETRY does not fix this - the
+            same oversized call hits the same 100s ceiling every time. Every agent this factory
+            builds (Composition/Reflection/Narrative/Reflection/ReportHtml) can carry a
+            comparably large payload, so this is set here, once, for all of them - not per-caller.  */
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint), NetworkTimeout = TimeSpan.FromMinutes(5) });
         IChatClient chatClient = client.GetResponsesClient().AsIChatClient(model);
+
+        /*  [ADDED 2026-09-14] MUST be INNERMOST of all - i.e. wrapped by OpenTelemetryChatClient,
+            not wrapping it - so it runs WHILE the real chat span (Activity.Current) is active, not
+            before it starts or after it has already stopped. See its own doc comment. */
+        chatClient = new LangfuseSessionTaggingChatClient(chatClient);
+
+        /*  OTel wraps the RAW client, innermost, so its span timing measures the actual network
+            call rather than anything the layers above add. EnableSensitiveData gates whether the
+            span carries full prompt/response text (Otel:EnableSensitiveData, design doc Sec.3.2's
+            two-projection audit: full content internally, never shown to a customer) - off by
+            default, since tokens/cost/latency alone are useful without it and turning it on is a
+            deliberate choice, not a default.                                                     */
+        chatClient = new OpenTelemetryChatClient(chatClient, sourceName: ChatClientActivitySourceName)
+        {
+            EnableSensitiveData = enableSensitiveTelemetry,
+        };
+
+        /*  Metering wraps the CHAT CLIENT, so every agent this factory builds is instrumented at
+            one point - including any added later, without anyone remembering to do it. The stage
+            tag is the agent name, which is already a closed set of five values.                 */
+        chatClient = new MeteredChatClient(chatClient, name, model, usage ?? ILlmUsageRecorder.Null, maxTokensPerCall);
+
+        /*  OUTERMOST, deliberately - see ConcurrencyGatedChatClient's doc comment: queue-wait time
+            must never be counted as part of the OTel span's latency or MeteredChatClient's timing,
+            both of which should reflect the real network call only. Null when no concurrency cap
+            is configured (Agents:MaxConcurrentLlmCalls unset) - same "optional, off until a real
+            number is measured" stance as maxTokensPerCall above, not a guessed default.           */
+        if (concurrencyGate is not null)
+            chatClient = new ConcurrencyGatedChatClient(chatClient, concurrencyGate);
 
         var options = new ChatClientAgentOptions
         {
@@ -43,6 +105,39 @@ public static class MafAgentFactory
                 // confirmed via reflection, not guessed (2026-08-20).
                 Instructions = instructions,
                 ResponseFormat = responseFormat,
+                // [MERGED 2026-09-15] Two features landed on this same option independently:
+                // reasoningEffort (reginsights-staging, 2026-09-14) makes the effort level
+                // per-caller-configurable (FreehandDimensions:ReasoningEffort) instead of
+                // hardcoded, so every OTHER caller keeps the model's own default when it passes
+                // null. ReasoningSummaryVerbosity (agent-reasoning-capture, this branch) requests
+                // the vendor's own summary of its reasoning for EVERY call this factory makes,
+                // regardless of effort level - it is the ONLY supported way to get any of the
+                // model's reasoning back (OpenAI's terms forbid extracting raw chain-of-thought by
+                // any other means). "Auto" lets each model pick its own summary style rather than
+                // forcing "concise", which the gpt-5 series rejects per Microsoft's own docs. See
+                // ReasoningSummaryExtractor for how this is read back out of the response. Effort
+                // level and summary verbosity are independent knobs - setting one is never a
+                // reason to skip the other.
+                //
+                // [TRIED 2026-09-15, REVERTED SAME DAY] A requestReasoningSummary flag briefly let
+                // one caller (render_html) skip this - ruled out as the cause of the real
+                // mid-generation content-refusal seen live on Users/Minda (5 live runs: failures
+                // happened with the summary both on and off, no real correlation). See
+                // NormalizeActivity's own doc comment on the ongoing investigation into the real
+                // trigger (the per-user leaderboard section, real employee names).
+                RawRepresentationFactory = _ => new CreateResponseOptions
+                {
+                    ReasoningOptions = reasoningEffort is null
+                        ? new ResponseReasoningOptions
+                        {
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                        }
+                        : new ResponseReasoningOptions
+                        {
+                            ReasoningEffortLevel = reasoningEffort.Value,
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                        },
+                },
             },
         };
 

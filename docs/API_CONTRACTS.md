@@ -92,9 +92,14 @@ immediately stops seeing reports covering the removed scope. (§2.3, closes D4.)
 
 ```
 POST /api/insights/reports
-{ "tenantId": 1490, "reportType": "compliance_health",
-  "scope": { "type": "tenant" }, "period": "FY2025-26" }
+{ "tenantId": 1490, "scope": { "type": "tenant" }, "period": "FY2025-26",
+  "requestedDimensions": null }
 ```
+
+> **[CHANGED 2026-09-15] `reportType` is now optional** - the frontend does not send it. When
+> omitted, the server infers it from `requestedDimensions` alone: non-empty list ->
+> `dimension_selection`, empty/null -> `fixed_holistic`. An explicit `reportType` still overrides
+> the inference if a caller sends one. See `INSIGHTS_API_ENDPOINTS.md` §3 for the full rule.
 
 → `202 Accepted`
 ```jsonc
@@ -120,12 +125,17 @@ GET /api/insights/runs/{runId}/stream        (SignalR / SSE)
 ```
 
 ```jsonc
-{ "runId": "…", "status": "running",
-  "stage": "composing", "stagesComplete": 4, "stagesTotal": 7 }
+{ "runId": "…", "status": "running" }
 ```
 
-Stages: `gathering` → `validating` → `composing` → `narrating` → `verifying` →
-`rendering` → `complete`.
+**[CHANGED 2026-09-14]** `status` is the whole external contract now:
+`queued` | `running` | `complete` | `failed`. The prior 7-stage breakdown
+(`stage`/`stagesComplete`/`stagesTotal` - `gathering` → `validating` →
+`composing` → `narrating` → `verifying` → `rendering` → `complete`) is no
+longer sent on the wire - deliberate product decision, not a regression.
+That detail still exists internally (`InsightsReportOrchestrator.GetStatus`,
+LangFuse traces) for debugging; it is simply not exposed to the customer-
+facing stream anymore.
 
 Terminal: `complete` | `failed`. On `failed`, include a **user-safe** message
 only — never leak gate diagnostics such as "reconciliation variance of 3 on

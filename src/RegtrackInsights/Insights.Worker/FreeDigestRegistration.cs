@@ -1,5 +1,7 @@
 ﻿using Insights.Agents;
+using Insights.Data;
 using Insights.Data.Email;
+using Insights.Persistence;
 using Insights.Presentation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +23,7 @@ public static class FreeDigestRegistration
 {
     private const string LlmClientName = "insights-llm";
     private const string EmailClientName = "insights-email";
+    private const string InsightApiClientName = "insights-insight-api";
 
     public static IServiceCollection AddInsightsFreeDigest(this IServiceCollection services, IConfiguration configuration)
     {
@@ -44,6 +47,7 @@ public static class FreeDigestRegistration
             picks up DNS changes. The factory solves both.                                      */
         services.AddHttpClient(LlmClientName);
         services.AddHttpClient(EmailClientName);
+        services.AddHttpClient(InsightApiClientName, http => http.Timeout = settings.InsightApiTimeout);
 
         services.AddSingleton(settings);
         services.AddSingleton<FreeDigestMetrics>();
@@ -53,24 +57,51 @@ public static class FreeDigestRegistration
         services.AddSingleton(sp =>
             chatClientFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(LlmClientName)));
 
-        services.AddSingleton(sp =>
-            emailSenderFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(EmailClientName)));
+        /*  ADR-0001 (2026-09-10) - every send in this worker passes through the rate limiter here,
+            wrapping whichever concrete provider (or FailoverEmailSender pair) the factory above
+            selected. This is the ONLY IEmailSender registration - nothing sends unrated-limited.  */
+        services.AddSingleton<IEmailSender>(sp =>
+        {
+            var inner = emailSenderFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(EmailClientName));
+            return new RateLimitedEmailSender(inner, settings.EmailRateLimitPerSecond, settings.EmailRateLimitAcquireTimeout);
+        });
 
         services.AddSingleton<FreeDigestWriter>();
+        services.AddSingleton<InsightNarrativeWriter>();
 
-        services.AddScoped(sp => new FreeDigestPipeline(
-            sp.GetRequiredService<Insights.Data.IFreeDigestRepository>(),
-            sp.GetRequiredService<FreeDigestWriter>(),
-            sp.GetRequiredService<FreeDigestEmailRenderer>(),
-            sp.GetRequiredService<IEmailSender>(),
-            settings.TokenCap,
-            settings.FromAddress,
-            settings.FromName,
-            settings.UpgradeUrl));
+        // ADR-0002 (2026-09-11) - the insight JSON POST lane. Registered unconditionally (same
+        // "inert unless configured" pattern as FreeDigestScheduler below) - a named HttpClient with
+        // no traffic costs nothing, and gating registration itself on InsightApiEnabled would mean
+        // flipping the flag on later requires a redeploy just to register the dependency.
+        services.AddSingleton<IInsightJsonRepository>(_ => new SqlInsightJsonRepository(Require(configuration, "ConnectionStrings:RegTrack")));
+        services.AddTransient<Orchestration.Activities.PostInsightJsonActivity>(sp => new Orchestration.Activities.PostInsightJsonActivity(
+            sp.GetRequiredService<IInsightJsonRepository>(),
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(InsightApiClientName),
+            settings,
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<Orchestration.Activities.PostInsightJsonActivity>>()));
 
-        services.AddScoped<IFreeDigestService, FreeDigestService>();
+        /*  ADR-0001 (2026-09-10) - the artifact index (sql/29) and its blob store. Reuses the SAME
+            encryption scheme the paid pipeline uses (RegisterReportCodec, TryAddSingleton - safe
+            to call again even if the paid write path already registered it, see that method's own
+            doc comment), but writes to a SEPARATE container so nothing here can collide with, slow
+            down, or be confused with a paid report. A dedicated AzureReportBlobWriter instance is
+            constructed INLINE rather than through DI's own AzureReportBlobWriter registration,
+            because TryAddSingleton keys on TYPE - a second `TryAddSingleton<AzureReportBlobWriter>`
+            here would silently be skipped and this would end up writing digests into the PAID
+            container instead of its own.                                                        */
+        WorkerRegistration.RegisterReportCodec(services, configuration);
 
-        /*  The weekly lane (10.3). Registered unconditionally but INERT unless
+        var digestBlobConnectionString = Require(configuration, "Azure:BlobConnectionString");
+        var digestBlobContainer = configuration["Azure:DigestBlobContainer"] ?? "insights-digests";
+        services.AddSingleton<IDigestArtifactStore>(sp => new AzureDigestArtifactStore(
+            sp.GetRequiredService<IReportEncryptor>(),
+            sp.GetRequiredService<IReportDecryptor>(),
+            new AzureReportBlobWriter(digestBlobConnectionString, digestBlobContainer)));
+
+        var regTrackConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
+        services.AddSingleton<IFreeDigestArtifactRepository>(_ => new SqlFreeDigestArtifactRepository(regTrackConnectionString));
+
+        /*  The weekly lane (ADR-0001). Registered unconditionally but INERT unless
             FreeDigest:Schedule:Enabled is true - a worker started for any other reason must not
             begin mailing customers because it happened to boot.                                */
         services.AddHostedService<FreeDigestScheduler>();
@@ -78,20 +109,61 @@ public static class FreeDigestRegistration
         return services;
     }
 
-    private static FreeDigestSettings BuildSettings(IConfiguration configuration) => new()
+    private static FreeDigestSettings BuildSettings(IConfiguration configuration)
+    {
+        var settings = BuildSettingsCore(configuration);
+
+        // ADR-0003 D6: auth is mandatory once this lane is live - a lambda-deferred check would
+        // let the worker boot clean and only discover a missing key on the first Sunday POST, in
+        // production. Refuse to start instead (same "fail at startup, not at 3am" stance as
+        // Require() below).
+        if (settings.InsightApiEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(settings.InsightApiUrl) || !Uri.TryCreate(settings.InsightApiUrl, UriKind.Absolute, out _))
+                throw new InvalidOperationException("FreeDigest:InsightApi:BaseUrl must be an absolute URL when FreeDigest:InsightApi:Enabled is true.");
+
+            if (string.IsNullOrWhiteSpace(settings.InsightApiKey))
+                throw new InvalidOperationException("FreeDigest:InsightApi:ApiKey must be set when FreeDigest:InsightApi:Enabled is true.");
+        }
+
+        return settings;
+    }
+
+    private static FreeDigestSettings BuildSettingsCore(IConfiguration configuration) => new()
     {
         TokenCap = configuration.GetValue<int?>("Budget:FreeDigestTokenCap")
                    ?? throw new InvalidOperationException("Budget:FreeDigestTokenCap is not configured."),
+        InsightJsonTokenCap = configuration.GetValue("Budget:InsightJsonTokenCap", 3000),
         FromAddress = Require(configuration, "Email:FromAddress"),
         FromName = configuration["Email:FromName"] ?? "RegTrack Insights",
         UpgradeUrl = Require(configuration, "Email:UpgradeUrl"),
+        PortalUrl = configuration["Email:PortalUrl"],
         UnsubscribeBaseUrl = Require(configuration, "Email:UnsubscribeBaseUrl"),
         UnsubscribeSigningKey = Require(configuration, "Email:UnsubscribeSigningKey"),
         RecipientOverride = configuration["Email:RecipientOverride"],
+        DebugDumpHtmlDir = configuration["FreeDigest:DebugDumpHtmlDir"],
         ScheduleEnabled = configuration.GetValue("FreeDigest:Schedule:Enabled", false),
         ScheduleCheckInterval = TimeSpan.FromMinutes(configuration.GetValue("FreeDigest:Schedule:CheckIntervalMinutes", 60)),
-        ScheduleSendHourUtc = configuration.GetValue("FreeDigest:Schedule:SendHourUtc", 6),
         SchedulePerTenantDelay = TimeSpan.FromMilliseconds(configuration.GetValue("FreeDigest:Schedule:PerTenantDelayMs", 250)),
+
+        // ADR-0001 (2026-09-10) - the two-phase schedule. Default IST: confirmed by the product
+        // owner as the intended zone for "9am" (see FreeDigestScheduler's own doc comment).
+        ScheduleTimeZone = TimeZoneInfo.FindSystemTimeZoneById(configuration["FreeDigest:Schedule:TimeZone"] ?? "India Standard Time"),
+        GenerateDay = Enum.Parse<DayOfWeek>(configuration["FreeDigest:Schedule:GenerateDay"] ?? "Sunday"),
+        SendDay = Enum.Parse<DayOfWeek>(configuration["FreeDigest:Schedule:SendDay"] ?? "Monday"),
+        SendHourLocal = configuration.GetValue("FreeDigest:Schedule:SendHourLocal", 9),
+        ArtifactFreshnessDays = configuration.GetValue("FreeDigest:Artifact:FreshnessDays", 3),
+        ArtifactRetentionDays = configuration.GetValue("FreeDigest:Artifact:RetentionDays", 90),
+        EmailRateLimitPerSecond = configuration.GetValue("Email:RateLimit:RequestsPerSecond", 5),
+        EmailRateLimitAcquireTimeout = TimeSpan.FromSeconds(configuration.GetValue("Email:RateLimit:AcquireTimeoutSeconds", 30)),
+
+        // ADR-0002 (2026-09-11) - deliberately NOT Require()'d. The destination endpoint is not
+        // configured yet (the user will supply it later); the worker must still boot with this
+        // lane simply inert (Enabled=false) rather than refusing to start.
+        InsightApiEnabled = configuration.GetValue("FreeDigest:InsightApi:Enabled", false),
+        InsightApiUrl = configuration["FreeDigest:InsightApi:BaseUrl"],
+        InsightApiKey = configuration["FreeDigest:InsightApi:ApiKey"],
+        InsightApiTimeout = TimeSpan.FromSeconds(configuration.GetValue("FreeDigest:InsightApi:TimeoutSeconds", 30)),
     };
 
     /*  Both factories validate their provider name AND its keys eagerly, then return a closure

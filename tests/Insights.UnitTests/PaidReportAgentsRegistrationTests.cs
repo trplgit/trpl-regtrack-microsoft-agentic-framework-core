@@ -15,10 +15,22 @@ public class PaidReportAgentsRegistrationTests
             ["Llm:Maf:Endpoint"] = "https://example.invalid/openai/v1",
             ["Llm:Maf:Model"] = "gpt-5.2",
             ["Llm:Maf:ApiKey"] = "test-key",
+            ["Llm:VisionQa:Endpoint"] = "https://example.invalid/openai/v1",
+            ["Llm:VisionQa:Model"] = "gpt-5.2",
+            ["Llm:VisionQa:ApiKey"] = "test-key",
             ["Agents:PromptDirectory"] = "./prompts",
         })
         .Build();
 
+    /// <summary>
+    /// [FIXED, STALE TEST FOUND LIVE 2026-09-09] Used to assert
+    /// `provider.GetRequiredService&lt;IReportHtmlAgent&gt;()` directly - that registration shape
+    /// was replaced by `IReadOnlyDictionary&lt;string, IReportHtmlAgent&gt;` back on 2026-09-08
+    /// (see this file's own history comments on the `dimension_selection` entry), and nobody
+    /// updated this test then, so it had been failing independent of any of today's changes.
+    /// Asserts the real registered shape instead - every key `AddInsightsPaidReportAgents`
+    /// actually registers, dimension-specific overrides included.
+    /// </summary>
     [Fact]
     public void AddInsightsPaidReportAgents_RegistersEveryAgentInterface()
     {
@@ -26,11 +38,26 @@ public class PaidReportAgentsRegistrationTests
         services.AddInsightsPaidReportAgents(BuildConfiguration());
         var provider = services.BuildServiceProvider();
 
-        Assert.NotNull(provider.GetRequiredService<ICompositionAgent>());
-        Assert.NotNull(provider.GetRequiredService<ICompositionReflectionAgent>());
         Assert.NotNull(provider.GetRequiredService<INarrativeAgent>());
         Assert.NotNull(provider.GetRequiredService<INarrativeReflectionAgent>());
-        Assert.NotNull(provider.GetRequiredService<IReportHtmlAgent>());
+        Assert.NotNull(provider.GetRequiredService<IVisionQaAgent>());
+
+        var htmlAgents = provider.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
+        Assert.NotNull(htmlAgents["fixed_holistic"]);
+        Assert.NotNull(htmlAgents["dimension_selection"]);
+        Assert.NotNull(htmlAgents["dimension_selection:Location"]);
+        Assert.NotNull(htmlAgents["dimension_selection:Users"]);
+        Assert.NotNull(htmlAgents["dimension_selection:Departments"]);
+        Assert.NotNull(htmlAgents["dimension_selection:BacklogAging"]);
+        Assert.NotNull(htmlAgents["dimension_selection:Act"]);
+        Assert.NotNull(htmlAgents["dimension_selection:Licence"]);
+
+        var compositionAgents = provider.GetRequiredService<IReadOnlyDictionary<string, IFreehandDimensionCompositionAgent>>();
+        Assert.NotNull(compositionAgents["Act"]);
+        Assert.NotNull(compositionAgents["BacklogAging"]);
+        Assert.NotNull(compositionAgents["Departments"]);
+        Assert.NotNull(compositionAgents["Licence"]);
+        Assert.NotNull(compositionAgents["Location"]);
     }
 
     [Fact]

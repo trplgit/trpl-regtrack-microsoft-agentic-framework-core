@@ -41,6 +41,9 @@ public sealed record LocationControlTotals
     public int GhostEntities { get; init; }
     public decimal? TenantMedianClosureRatio { get; init; }
     public bool TenantIsOnboarding { get; init; }
+    public int TenantCompletedEvents { get; init; }
+    public int TenantOnTimeEvents { get; init; }
+    public decimal? TenantOnTimePct { get; init; }
 }
 
 public sealed record LocationRow
@@ -64,6 +67,13 @@ public sealed record LocationRow
     public decimal? OwnerlessPct { get; init; }
     public decimal? ClosureRatio { get; init; }
     public int? OverdueRank { get; init; }
+    // [FIX] StateID/StateName/PeerStateOverduePct/VsPeerStateNormPP: sql/05_dimension_location.sql
+    // has computed these for a while (the peer_coverage_gap detector), but this record never
+    // carried them - Dapper silently dropped the columns. Same class of gap as TenantOnTimePct.
+    public int? StateID { get; init; }
+    public string? StateName { get; init; }
+    public decimal? PeerStateOverduePct { get; init; }
+    public decimal? VsPeerStateNormPP { get; init; }
     public string? Flags { get; init; }
 }
 
@@ -186,13 +196,26 @@ public sealed record NatureRow
 // ── Departments (sql/10) ───────────────────────────────────────────────────────────────
 
 /// <summary>
-/// <see cref="SumOfRows"/> plus <see cref="UnassignedInstances"/> equals <see cref="ScopedInstances"/>.
+/// <see cref="AssignedInstances"/> plus <see cref="UnassignedInstances"/> equals <see cref="ScopedInstances"/>.
 /// Obligations carrying no department appear in no row, so every per-department figure excludes them.
+///
+/// [BUG FOUND LIVE, 2026-09-09] This property used to be named <c>SumOfRows</c>, matching every
+/// other dimension's control-totals shape - but <c>sql/10_dimension_departments.sql</c> itself
+/// deliberately renamed its OWN output column to <c>AssignedInstances</c> (CLAUDE.md Sec.4a's
+/// residual-naming rule: "rows cover only instances WITH a DepartmentID, so a field called
+/// SumOfRows compared against ScopedInstances reads as a gap when it is a declared residual" -
+/// see that file's own comment on the column). Nobody renamed the C# property to match, so Dapper
+/// (this record is materialized directly, no intermediate mapping row) silently left it at its
+/// int default - 0 - on every real fetch since that SQL change, the exact same class of bug
+/// DimensionShapes.cs's own file header warns about for a column with no matching property.
+/// Confirmed live on tenant 29: a dimension_selection:Departments render correctly refused to
+/// trust the value (real end-to-end honesty check working as designed) and flagged the
+/// discrepancy in its own output rather than silently using the wrong number.
 /// </summary>
 public sealed record DepartmentsControlTotals
 {
     public int ScopedInstances { get; init; }
-    public int SumOfRows { get; init; }
+    public int AssignedInstances { get; init; }
     public bool Reconciled { get; init; }
     public int OverdueInstances { get; init; }
     public decimal TenantOverduePct { get; init; }
@@ -284,6 +307,32 @@ public sealed record UsersControlTotals
     public decimal? TenantMedianOnTimePct { get; init; }
     public decimal? TenantMedianPerformerLoad { get; init; }
     public int InstancesWithSoleReviewer { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] Tenant-wide median of (completion date - due date) in days, performer's
+    /// own completed work only. Real ScheduleOn/Dated dates, confirmed live on tenant 1300.
+    /// Events with an implausible (bulk-migration/backdated) gap over 365 days are excluded from
+    /// this median - see <see cref="TimingOutliersExcluded"/>. Median, never a mean - see
+    /// sql/12_dimension_users.sql's own honesty note.
+    /// </summary>
+    public decimal? TenantMedianDaysEarlyLate { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] Count of completed events tenant-wide excluded from every
+    /// MedianDaysEarlyLate figure (tenant and per-user) for showing a gap over 365 days between
+    /// due date and completion date. Cite verbatim in the Completion timing tab's caveat note.
+    /// </summary>
+    public int TimingOutliersExcluded { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-15] Distinct headcount of users with at least one Performer/Reviewer
+    /// assignment - <see cref="UsersHeadcountCalculator"/> computes these deterministically in C#
+    /// over the already-fetched <see cref="UsersRow"/> array (not a new SQL column - sql/12 was
+    /// deliberately left untouched). Added because the render prompt already asked for a
+    /// "Reviewer cover {performerUserCount}:{reviewerUserCount}" chip that no field actually
+    /// backed - confirmed live the model was substituting a different, unrelated number instead
+    /// of counting 300+ rows by hand, which an LLM cannot do reliably anyway.
+    /// </summary>
+    public int PerformerUserCount { get; init; }
+    /// <summary>[ADDED 2026-09-15] See <see cref="PerformerUserCount"/>.</summary>
+    public int ReviewerUserCount { get; init; }
 }
 
 /// <summary>
@@ -300,6 +349,11 @@ public sealed record UsersRow
     public int Instances { get; init; }
     public int PerformerInstances { get; init; }
     public int ReviewerInstances { get; init; }
+    /// <summary>
+    /// RoleID outside {3,4} - e.g. RoleID 6, confirmed live on tenant 1403, not yet in
+    /// DIMENSION_SPECS.md. Never blended into Performer/Reviewer - see sql/12's own trap note.
+    /// </summary>
+    public int OtherRoleInstances { get; init; }
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int ImprisonmentInstances { get; init; }
@@ -310,6 +364,31 @@ public sealed record UsersRow
     public int OnTimeEvents { get; init; }
     public decimal? OnTimePct { get; init; }
     public string? QuadrantOverlay { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] Median of (completion date - due date) in days over this user's own
+    /// completed performer work (real ScheduleOn/Dated dates) - negative = typically early,
+    /// positive = typically late. NULL means no qualifying completed event, never 0 - 0 is a
+    /// real "right on the due date" reading and must not be confused with "no data".
+    /// </summary>
+    public decimal? MedianDaysEarlyLate { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] How many completed events <see cref="MedianDaysEarlyLate"/> is drawn
+    /// from. NULL/0 means no reading - render templates must apply their own materiality floor
+    /// (this dimension's template uses >= 5) before surfacing the median as a finding.
+    /// </summary>
+    public int? TimingSampleSize { get; init; }
+    /// <summary>[ADDED 2026-09-13] Of <see cref="TimingSampleSize"/>, how many finished before the due date (DaysLate &lt; 0).</summary>
+    public int? EarlyCount { get; init; }
+    /// <summary>[ADDED 2026-09-13] Of <see cref="TimingSampleSize"/>, how many finished after the due date (DaysLate &gt; 0).</summary>
+    public int? LateCount { get; init; }
+    /// <summary>[ADDED 2026-09-13] Of <see cref="TimingSampleSize"/>, how many finished exactly on the due date (DaysLate = 0).</summary>
+    public int? OnTimeCount { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] % of <see cref="TimingSampleSize"/> that finished early. DATE-based
+    /// (DaysLate &lt; 0) - NOT the same population or definition as <see cref="OnTimePct"/>,
+    /// which is STATUS-based. Never conflate the two.
+    /// </summary>
+    public decimal? EarlyPct { get; init; }
     public string? Flags { get; init; }
 }
 
@@ -387,5 +466,201 @@ public sealed record EventRow
     public DateTime? LatestStart { get; init; }
     public int InstancesSinceCutoff { get; init; }
     public int DistinctStartDates { get; init; }
+    public string? Flags { get; init; }
+}
+
+// ── Licence (sql/21) ───────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Grain is LICENCE TYPE, not branch - <see cref="LicenceControlTotals.ScopedLicences"/> counts
+/// Lic_tbl_LicenseInstance rows, a different population from every other dimension's
+/// ComplianceInstance-based ScopedInstances. Scope here is BRANCH-ONLY, not the full 2-D
+/// (branch, category) pair every other dimension enforces - see the proc's own header for why.
+/// </summary>
+public sealed record LicenceControlTotals
+{
+    public int ScopedLicences { get; init; }
+    public int TypedLicences { get; init; }
+    public bool Reconciled { get; init; }
+    public decimal TenantLapsedPct { get; init; }
+    public int LicenceTypesReported { get; init; }
+    public int LicenceTypesWithLicences { get; init; }
+    public int UntypedLicences { get; init; }
+    public int ExcludedTerminalStateLicences { get; init; }
+}
+
+public sealed record LicenceRow
+{
+    public int LicenseTypeID { get; init; }
+    public string? LicenseTypeName { get; init; }
+    public bool IsRetired { get; init; }
+    public int TotalLicences { get; init; }
+    public int ActiveLicences { get; init; }
+    public int Lapsed { get; init; }
+    public int ExcludedTerminalState { get; init; }
+    public int LapsingNext30 { get; init; }
+    public int BranchesCovered { get; init; }
+    public decimal? LapsedPct { get; init; }
+    public int? OverdueRank { get; init; }
+    public string? Flags { get; init; }
+}
+
+// ── Backlog aging (sql/22) ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Overdue schedules bucketed by the FY they fell due in - always exactly 3 rows
+/// (current_fy / previous_fy / older). Grain is the SCHEDULE (ComplianceScheduleOnID), not the
+/// instance - one instance can carry overdue schedules in more than one bucket, so
+/// <see cref="DistinctOverdueSchedules"/> is the reconciling total, never a distinct-instance count.
+/// Overdue is a FLOW metric (RecentComplianceTransactionView drifts between runs) - never compare
+/// this figure against a different run.
+/// </summary>
+public sealed record BacklogAgingControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public string CurrentFyLabel { get; init; } = string.Empty;
+    public string PreviousFyLabel { get; init; } = string.Empty;
+    public int SumOfRows { get; init; }
+    public int DistinctOverdueSchedules { get; init; }
+}
+
+public sealed record BacklogAgingRow
+{
+    public string Bucket { get; init; } = string.Empty;
+    public string? FYLabel { get; init; }
+    public int OverdueCount { get; init; }
+    public DateTime? OldestDueDate { get; init; }
+    public DateTime? NewestDueDate { get; init; }
+    public decimal? SharePct { get; init; }
+}
+
+// ── Timeliness by fiscal year (sql/23) ─────────────────────────────────────────────────
+
+/// <summary>
+/// Current-FY vs previous-FY on-time closure rate, anchored on ScheduleOn (due date), not the
+/// completion date. Tenant-wide single fact, not a per-member breakdown - always exactly 2 rows
+/// (current_fy / previous_fy). <see cref="OnTimePctCurrentFY"/>/<see cref="OnTimePctPreviousFY"/>
+/// are NULL, never 0%, when that FY has zero completed events with a known Timeliness
+/// classification - see CLAUDE.md non-negotiable #5, never a fabricated comparative.
+/// </summary>
+public sealed record TimelinessFYControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public string CurrentFyLabel { get; init; } = string.Empty;
+    public string PreviousFyLabel { get; init; } = string.Empty;
+    public int ClosuresCurrentFY { get; init; }
+    public int ClosuresPreviousFY { get; init; }
+    public decimal? OnTimePctCurrentFY { get; init; }
+    public decimal? OnTimePctPreviousFY { get; init; }
+    public decimal? YoyChangePP { get; init; }
+    public string? FyTrend { get; init; }
+}
+
+public sealed record TimelinessFYRow
+{
+    public string FyBucket { get; init; } = string.Empty;
+    public string FYLabel { get; init; } = string.Empty;
+    public int CompletedEvents { get; init; }
+    public int OnTimeEvents { get; init; }
+    public decimal? OnTimePct { get; init; }
+}
+
+// ── Forward pipeline (sql/24) ──────────────────────────────────────────────────────────
+
+/// <summary>
+/// Schedules due in the next 90 days, bucketed into 5 fixed day-windows - real COUNTS only.
+/// `predicted_at_risk` (design doc Sec.3.8's other field) is deliberately NOT built - it is a
+/// projection with no defined model yet, never fabricated as a byproduct of these real counts.
+/// Grain is the SCHEDULE (ComplianceScheduleOnID), same reconciliation trap as BacklogAging.
+/// </summary>
+public sealed record ForwardPipelineControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public int DueNext90d { get; init; }
+    public int SumOfRows { get; init; }
+}
+
+public sealed record ForwardPipelineRow
+{
+    public string WindowLabel { get; init; } = string.Empty;
+    public int MinDaysOut { get; init; }
+    public int MaxDaysOut { get; init; }
+    public int DueCount { get; init; }
+}
+
+// ── Evidence integrity (sql/25) ────────────────────────────────────────────────────────
+
+/// <summary>
+/// Closures with a real multi-step review trail in ComplianceTransaction (more than one recorded
+/// row), a PROXY for a review step having happened - never for document evidence actually being
+/// attached. <see cref="EvidenceInSql"/> is always false: document evidence lives in blob storage,
+/// not this database, per design doc Sec.3.7's own explicit words. Always exactly 2 rows
+/// (has_trail / single_row_only).
+/// </summary>
+public sealed record EvidenceIntegrityControlTotals
+{
+    public int CustomerID { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public int SumOfRows { get; init; }
+    public int DistinctClosedSchedules { get; init; }
+    public decimal? ClosuresWithReviewTrailPct { get; init; }
+    public bool EvidenceInSql { get; init; }
+}
+
+public sealed record EvidenceIntegrityRow
+{
+    public string TrailBucket { get; init; } = string.Empty;
+    public int ScheduleCount { get; init; }
+}
+
+// ── Forward risk (sql/26) ──────────────────────────────────────────────────────────────
+
+/// <summary>
+/// The 90-day window split into three SEGMENTS - not a forecast, a count of facts already true:
+///   carried_forward = the obligation ALREADY has an open overdue schedule AND another occurrence
+///                     due in the window. A known problem recurring.
+///   clean_at_risk   = no existing overdue, but carries >=1 preventable risk factor (no owner,
+///                     owner gone, branch stress). The actionable set.
+///   healthy         = neither.
+/// Grain is the distinct ComplianceInstance (<see cref="DueInWindow"/> = CarriedForward +
+/// CleanAtRisk + Healthy). Deployed proc, live in prod - never modified from here.
+/// </summary>
+public sealed record ForwardRiskControlTotals
+{
+    public int ScopedInstances { get; init; }
+    public int HorizonDays { get; init; }
+    public int DueInWindow { get; init; }
+    public int SumOfRowsDue { get; init; }
+    public bool Reconciled { get; init; }
+    public int SchedulesInWindow { get; init; }
+    public int CarriedForward { get; init; }
+    public int CleanAtRisk { get; init; }
+    public int Healthy { get; init; }
+    public int PredictedAtRisk { get; init; }
+    public int ImprisonmentNeedingAttention { get; init; }
+    public decimal? TenantMedianBranchOverduePct { get; init; }
+    public decimal? BranchStressThresholdPct { get; init; }
+    public int BranchesReported { get; init; }
+    public int BranchesWithNothingDue { get; init; }
+    public bool ForwardWindowEmpty { get; init; }
+    public string? Method { get; init; }
+}
+
+public sealed record ForwardRiskRow
+{
+    public int BranchID { get; init; }
+    public string? BranchName { get; init; }
+    public int DueInWindow { get; init; }
+    public int CarriedForward { get; init; }
+    public int CleanAtRisk { get; init; }
+    public int Healthy { get; init; }
+    public int ImprisonmentDue { get; init; }
+    public int CriticalDue { get; init; }
+    public decimal? CleanAtRiskPct { get; init; }
+    public decimal? CarriedForwardPct { get; init; }
+    public int? CleanAtRiskRank { get; init; }
     public string? Flags { get; init; }
 }

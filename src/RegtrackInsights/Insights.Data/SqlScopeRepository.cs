@@ -84,14 +84,7 @@ public sealed class SqlScopeRepository(string connectionString) : IScopeReposito
     /// check (sql/01) - a ScopeClass this wrapper does not know about must never be
     /// silently treated as any particular access level.
     /// </summary>
-    private static ScopeClass ParseScopeClass(string value) => value switch
-    {
-        "DENY" => ScopeClass.Deny,
-        "tenant_wide" => ScopeClass.TenantWide,
-        "functional" => ScopeClass.Functional,
-        "entity_scoped" => ScopeClass.EntityScoped,
-        _ => throw new InvalidOperationException($"Unknown ScopeClass '{value}' from usp_Insights_ClassifyScope."),
-    };
+    private static ScopeClass ParseScopeClass(string value) => ScopeClassNames.Parse(value);
 
     private sealed record ClassifyScopeRow(
         int UserID, int CustomerID, int ScopeBranches, int TenantBranches,

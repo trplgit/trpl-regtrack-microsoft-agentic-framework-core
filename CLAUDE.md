@@ -19,14 +19,51 @@ Two products, already present in `Product` table of `vitComplianceSystem`:
 | 18 | RegInsights Basic | Free | Weekly email digest |
 | 19 | RegInsights Pro | Paid | In-app interactive report |
 
+### V1 release scope (2026-09-14)
+
+`dimension_selection` ships with exactly **7 dimensions** in this release. Do not assume the other
+2 of the 9 real dimensions (`docs/DIMENSION_SPECS.md`) are in scope - they are explicitly not, yet.
+
+| Dimension | Composition | Render |
+|---|---|---|
+| Entity | Deterministic (`FixedHolisticComposition.Build`) - Entity-alone requests redirect to `fixed_holistic` | The fixed 6-tab template |
+| Users | Deterministic (`DimensionSelectionComposition.Build`) | Own dedicated fixed template (Sambram's design system) |
+| Departments | **Freehand** - real LLM call (`ComposeFreehandDimensionActivity`, `sol`) | Freehand, `sol` |
+| BacklogAging | **Freehand** | Freehand, `sol` |
+| Act | **Freehand** | Freehand, `sol` |
+| Licence | **Freehand** | Freehand, `sol` |
+| Location | **Freehand** | Freehand, `sol` |
+
+"Freehand" means the composition agent genuinely decides section count/order/hero per tenant
+(grounded in that tenant's own real `dimension_rows`/`dimension_control_totals` - never a fixed
+subject) and the render agent gets creative freedom under a shared theme contract (font, palette,
+tab CSS) rather than a fixed document skeleton - see `FreehandDimensions.Names` and
+`src/RegtrackInsights/prompts/02_composition_freehand_*.md`/`05_report_html_dimension_selection_*.md`.
+
+**Risk, Nature, Internal, Event are NOT in v1.** They have neither a dedicated template nor
+freehand treatment yet - a request naming them still renders through the oldest generic template
+(`05_report_html_dimension_selection.md`), with zero LLM judgement on structure. This is a real,
+known gap, not a silent inconsistency - do not add tenant-facing content for these 4 without first
+closing it the same way the other 5 were closed.
+
 ### Authoritative documents — read before implementing a component
 
 | Document | Use it for |
 |---|---|
 | `docs/RegTrack_Insights_System_Design_v1.md` | **The spec.** Every decision + rationale. Section refs below point here. |
-| `docs/DIMENSION_SPECS.md` | Contracts for all 9 dimensions |
+| `docs/DIMENSION_SPECS.md` | Contracts for the 9 core dimensions (`22`-`27` documented in their headers) |
+| `docs/METRIC_CALCULATION_REFERENCE.md` | **Every data point: definition, derivation, traps, QA checks** |
+| `docs/PAID_TIER_SAMPLE_REFERENCE.md` | The target report shape, block by block, and what is not yet built |
+| `docs/LEGAL_BRIEF_peer_comparison.md` | Original counsel brief - **answered by research, see addendum** |
+| `docs/LEGAL_BRIEF_research_addendum.md` | Research findings: state is a defensible primary key but insufficient alone; add headcount band |
+| `samples/` | Reconciled real-data report samples (anonymised) |
 | `docs/RegTrack_Classification_Dictionary_v1.xlsx` | BA-signed status/enum semantics |
 | `PHASE_1A_BUILD_BRIEF.md` | Phase 1a tasks, acceptance criteria, validation findings |
+| `docs/API_CONTRACTS.md` | The five API endpoints; the IDOR rule |
+| `docs/GOLDEN_FIXTURES.md` | CI fixture database — the ONLY place absolute values can be asserted |
+| `docs/CONFIGURATION.md` | Every tunable, with the section that justifies it |
+| `docs/SOLUTION_STRUCTURE.md` | Project layout; Durable Task shape |
+| `prompts/` | Agent prompts — the D7 contract is enforced there |
 | `sql/01`–`sql/06` | Working, production-validated SQL |
 
 ---
@@ -39,6 +76,25 @@ Violating any of these is a build-breaking error, not a style preference.
    Scope resolution, SQL execution, reconciliation, and rendering are **permanently
    deterministic**. The agent decides *what matters, in what order, and how to say
    it* — never *what a number is* or *who may see it*. (§3.1)
+
+   > **[UPDATE 2026-09-11] Composition itself is no longer agentic for either
+   > shipped report type, BY DEFAULT.** `fixed_holistic` (`FixedHolisticComposition.Build()`)
+   > and `dimension_selection` (`DimensionSelectionComposition.Build()`) both
+   > pick block order **deterministically in C#, zero LLM calls** — the dynamic
+   > "compliance_health" composition agent this rule originally described was
+   > removed the same day. `ComposeActivity`/`ReflectOnCompositionActivity`/
+   > `01_composition.md` are deleted from the codebase.
+   >
+   > **[EXCEPTION, ADDED 2026-09-14]** Exactly the dimensions in `FreehandDimensions.Names`
+   > (Departments, BacklogAging, Act, Licence, Location — v1's scope, see §1's "V1
+   > release scope" table) reinstate agentic composition deliberately, per this
+   > rule's own instruction above: `ComposeFreehandDimensionActivity` runs a real
+   > LLM call (`sol`) that decides section count/order/hero per tenant, grounded
+   > in that tenant's own real data — never fabricated. Every OTHER dimension
+   > (Entity, Users, and the not-yet-shipped Risk/Nature/Internal/Event) keeps the
+   > deterministic path. The agent's remaining judgement calls elsewhere are
+   > narrative-only (`NarrateActivity`, prose/emphasis within a fixed block) and
+   > rendering-prompt tile selection — never structure.
 
 2. **Fail closed, and fail loudly.**
    Unknown enum, empty scope, failed reconciliation, unverifiable claim → **refuse
@@ -76,6 +132,34 @@ Violating any of these is a build-breaking error, not a style preference.
 - Let an LLM author SQL, resolve scope, or validate its own output.
 - Use `SELECT ... INTO #t` then `ALTER TABLE #t ADD col` then reference `col` in the
   same procedure body — T-SQL name resolution fails. Declare the table explicitly.
+- Let a helper procedure return a result set if another procedure calls it. A
+  pre-flight `EXEC` that emits a grid makes that grid result set **#1 of the
+  caller**, silently shifting the documented contract. Success is silence;
+  failure is a `THROW`.
+- Put **non-ASCII characters in SQL source** — not in comments, not in string
+  literals. No box-drawing, em-dashes, arrows, stars, `§`, `≠`, `×`. Use `=`,
+  `-`, `->`, `*`, `Sec.`, `!=`, `x`. (See §5a.)
+- Assert a property of the **data** inside a suite that `THROW`s. If an assertion
+  can fail on legitimate data, it belongs in a warning path. (See §11.)
+- Detect characters with plain `LIKE`. The default collation is accent- and
+  width-insensitive, so `LIKE '%'+NCHAR(8377)+'%'` matches things that are not
+  that character. Always `COLLATE Latin1_General_BIN2`, or enumerate code points
+  with `UNICODE()`.
+- Name a field `SumOfRows` when the rows do not sum to the total. (See §4a.)
+- Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an aggregate. `SUM(CASE WHEN NOT EXISTS (...) THEN 1 ELSE 0 END)` raises Msg 130 at **CREATE PROCEDURE time** - so the procedure is never created, while the `DROP` above it HAS succeeded and the object is simply **gone**. A trailing `PRINT '... installed'` still fires, because a failed CREATE does not stop later batches. Flag each row in a CTE first, then `SUM` the flags.
+- Write a detector whose Flagged predicate can match rows outside its Eligible population. `Flagged` and `Eligible` MUST come from the same set. sql/05 flagged `single_point_of_failure` with no `Instances > 0` guard, so all 78 zero-obligation branches flagged too - **120 flagged of 99 eligible, 121.2%**. Every zero-work row will look like a single point of failure, because it has no people on work it does not have. Check every detector: can the flag fire on a row the Eligible count excludes?
+- Leave a temp table unaliased when an inline subquery in the same statement reads it too. `SELECT ... (SELECT COUNT(*) FROM #rows ...) ... FROM #rows ORDER BY col` raises **"Ambiguous column name"** - and it fails at RUN TIME, after earlier result sets have already been emitted, so a caller reading only the first result set never sees it. Alias both.
+- Join `RecentComplianceTransactionView` directly - go through `tvfInsightsLatestStatus`. (See §5.)
+- Drop a past-due schedule because it has no transaction. **BA ruling: never-touched = overdue.**
+  `tvfInsightsOverdueSchedules` includes them with `NeverTouched = 1`.
+- Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
+  over a subquery. Use a `LEFT JOIN` and test for `NULL`.
+- Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an
+  aggregate. `SUM(CASE WHEN NOT EXISTS (...) THEN 1 ELSE 0 END)` raises Msg 130
+  at **CREATE PROCEDURE time** - so the procedure is never created, while the
+  `DROP` above it HAS succeeded and the object is simply **gone**. A trailing
+  `PRINT '... installed'` still fires, because a failed CREATE does not stop
+  later batches. Flag each row in a CTE first, then `SUM` the flags.
 
 ### Always
 - Filter `IsDeleted = 0` at **every** hop (User, Customer, CustomerBranch).
@@ -83,6 +167,15 @@ Violating any of these is a build-breaking error, not a style preference.
 - Count instances at **every** node of the entity tree — leaf *and* intermediate.
 - Anchor entity recursion on **apex OR orphan** (see §5 traps).
 - Validate against **several tenants with different profiles**. Never one.
+- Use the **same estate definition everywhere**. Every query counting "the
+  tenant's obligations" applies the same filters — including
+  `Compliance.IsDeleted = 0`. Two components can each reconcile internally and
+  still disagree with each other.
+- Keep the **rollback script in step** with the install scripts. Verify
+  programmatically: every `CREATE` in `01`–`16` has a matching `DROP` in `99`.
+- Select objects to change **by the condition, not by a list of names** written
+  from memory. `WHERE definition LIKE ...` is self-completing; a hand-written
+  list silently misses things.
 
 ---
 
@@ -110,6 +203,35 @@ Also handle these boundaries — all found in production:
 
 ---
 
+## 4a. The residual rule for dimension contracts
+
+Some dimensions have members that not every instance belongs to (an instance may
+have no `NatureOfCompliance`, no `DepartmentID`, no assignee). Rows then cover
+only part of the estate, which is **correct** — but it must be legible:
+
+```
+rows sum to the total        ->  name the field  SumOfRows
+rows cover only part of it   ->  name it for what it covers, and pair it
+                                 with the named residual
+```
+
+| Dimension | Field | Residual |
+|---|---|---|
+| Nature | `CategorisedInstances` | `UntaggedInstances` |
+| Departments | `AssignedInstances` | `UnassignedInstances` |
+| Users | `AssignedInstancesDistinct` | `UnassignedInstances` |
+| Location, Entity, Risk, Act, Internal, Event | `SumOfRows` | none — rows sum exactly |
+
+A field called `SumOfRows` that does not equal `ScopedInstances` reads as a bug.
+On one tenant that was a phantom 3,946-instance gap.
+
+> Users shows the other half of this: `SumOfPerUserInstances` (8,651) is
+> deliberately larger than the estate (4,814) because an instance has both a
+> performer and a reviewer. Keep distinct and non-distinct counts as **separate,
+> differently-named** fields — conflating them produced the impossible 155%
+> concentration figure during design.
+
+
 ## 5. Schema traps — every one found empirically, several got the wrong answer first
 
 | Area | Trap |
@@ -125,10 +247,92 @@ Also handle these boundaries — all found in production:
 | `CustomerBranch.ParentID` | Active branch may sit under a **soft-deleted** parent. Apex-only recursion loses the whole subtree — measured at **89% of one tenant's estate**, and 3 tenants would have received a 100% EMPTY report |
 | Category join | **Only** via `ComplianceInstance → Compliance → Act.ComplianceCategoryId` |
 | `UserCustomerMapping` | **NOT** a reliable user↔tenant link — many users have zero rows |
-| `RecentComplianceTransactionView` | Actively refreshed; flow metrics drift. ~10 rows have NULL status |
+| Join hints on TVFs | **NEVER use `INNER HASH JOIN` (or any join hint) on a query involving an inline TVF.** A join hint also forces join ORDER for the WHOLE statement, *including inside the inlined function* - so `tvfInsightsOverdueSchedules` could no longer filter by tenant before touching `ComplianceScheduleOn` (29.4M rows). Measured on a **7-branch** tenant: bare join 877 ms, hinted 26,492 ms, materialised-and-indexed 438 ms. Instead: **materialise each side into a temp table with a clustered index, then join** - real cardinality without constraining order |
+| Scope FIRST, then reach | Put `tvfInsightsScopedInstances` into an indexed temp table before joining `ComplianceScheduleOn` / `ComplianceTransaction`. With the tenant filter three joins deep neither can be seeked: TimelinessFY was **183,502 ms**, scope-first is **157 ms** for identical output |
+| `RecentComplianceTransactionView` | **Do not join it.** Non-indexed view over 45.7M `ComplianceTransaction` rows; a tenant filter three joins away is not pushed through, so it computes for ALL rows first. `GoldenInvariants` and `BacklogAging` timed out (>4 min) on production. Use `tvfInsightsLatestStatus` - explicit `TOP 1` seek per schedule on `IX_CT_CSO_Dated_ID`, 611 ms for 52K schedules, verified identical on 400 samples. Its inner join also HID schedules with no transaction at all |
 | `ComplianceTransaction.Penalty` | Essentially empty (~₹300 total). Report **exposure**, never *incurred* |
 | `NatureOfCompliance` | ~49% "Others" on the reference tenant — declare the gap |
 | `Compliance.Frequency` | ~28.5% NULL |
+| **Ownership has TWO mechanisms** | `ComplianceAssignment` (RoleID=3, instance-level) AND `ComplianceScheduleOn.Performerid` (schedule-level, populated on **99.8%** of schedules). Reading only the first overstates "ownerless" by **181x** - 44,480 reported vs 245 actually unowned on one tenant. Seven deployed dimensions have this defect; see `docs/SQL_CHANGES_REQUIRED.md`. The two-way split is genuinely predictive (16.3% vs 64.9% overdue) - keep the distinction, fix the label |
+| `CustomerBranch.Status` | **A SECOND active flag.** `Status = 0` = deactivated: obligations remain but are frozen - not reported, no schedules or alerts. Filter `IsDeleted = 0 AND Status = 1` everywhere. Omitting it overstated overdue by **28%** on one tenant |
+| `CustomerBranch.Type` | **Kind of location**, lookup `dbo.NodeType` (15 rows). 77% are the generic `Branch`; `Store` is rare and carries an identical profile - treat as one class. 17 orphan values exist (23-75) not in `NodeType`; classify as `unknown`, exclude, declare |
+| `CustomerBranch.ComType` | **Legal entity type** (Public/Private/Listed/LLP...), NOT location type. Its ID range overlaps `LocationType.ID` by coincidence; a join on it produces plausible garbage. **No FK references `LocationType` from anywhere** - verify relationships in `sys.foreign_keys`, never from overlapping IDs |
+| `ComplianceInstance.IsAvantis` | **OBSOLETE - ignore it.** Set on 97.6% of instances (3,580,854 of 3,670,054), so it discriminates nothing, and 1.9M of those are NOT Labour. The canonical view `vw_ci_ActiveInstance` maps `IsAvantis -> Labour`; that mapping is **stale**. Use `Act.ComplianceCategoryId` for category |
+| Pre-flight procs | A helper that `SELECT`s shifts the caller's result-set contract by one — and only for callers that invoke it, so offsets differ per procedure |
+| `Compliance.IsDeleted` | Instances can reference a **soft-deleted** Compliance master (70 on one tenant). Omitting the filter makes the control total disagree with every dimension |
+| SQL file encoding | The deployment path is **not** UTF-8 aware. It corrupted a pre-existing RegTrack proc (`USP_GetEscalationCounts_Mobile_Statutory`) as well as ours |
+| Character detection | Default collation is accent-insensitive; `LIKE` gives false positives when detecting non-ASCII |
+
+---
+
+## 5a. SQL source must be pure ASCII
+
+The deployment path reads `.sql` files as ANSI/Windows-1252, so every multi-byte
+UTF-8 character is decoded as several Latin-1 characters: `═` becomes
+`â•<0x90>`, `—` becomes `â€"`. ~2,000 characters were corrupted across three
+procedures and stored in the database, visible in comments **and inside message
+strings that surface in output**. A source file was also corrupted at rest after
+being opened and re-saved by a non-UTF-8 editor.
+
+The scripts already written in pure ASCII were **completely immune**. That is the
+fix: keep SQL source ASCII-only and the entire bug class disappears regardless of
+deployment tooling.
+
+Substitutions in use: `=` box-double, `-` box-light/dashes, `->` arrow, `=>`
+double arrow, `*` star, `Sec.` section sign, `!=`, `<=`, `>=`, `x` multiply.
+
+**Add to CI — fail the build on any result:**
+
+```sql
+SELECT o.name FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id
+WHERE o.name LIKE '%Insights%'
+  AND m.definition COLLATE Latin1_General_BIN2
+      LIKE N'%[^ -~' + NCHAR(9) + NCHAR(10) + NCHAR(13) + N']%';
+```
+
+`COLLATE Latin1_General_BIN2` is required — without it the check silently passes.
+
+
+## 5b. Error code allocation
+
+Every `THROW` code is unique across the whole codebase, and each file owns a
+block of ten. Within a block:
+
+```
+x0        SCOPE DENIED
+x1 - x4   RECONCILIATION FAILED
+x5 - x9   DICTIONARY / MASTER DATA GAP
+```
+
+| Block | File | Block | File |
+|---|---|---|---|
+| 51000-51009 | `01`, `02` | 51120-51129 | `14` event |
+| 51010-51019 | `03` scope | 51130-51139 | `15` digest log |
+| 51020-51029 | `04` entity/entitlement | 51140-51149 | `16` suppression |
+| 51030-51039 | `05` location | 51160-51169 | `21` licence |
+| 51050-51059 | `07` entity | 51170-51176 | `22`-`25` **shared** (see note) |
+| 51060-51069 | `08` risk | 51190-51199 | `26` forward risk |
+| 51070-51079 | `09` nature | 51200-51209 | `27` coverage gaps |
+| 51080-51089 | `10` departments | 51040-51049, 51150-51159, 51177-51189, 51210+ | **free** |
+| 51090-51099 | `11` act | | |
+| 51100-51109 | `12` users | | |
+| 51110-51119 | `13` internal | | |
+
+> **Note on 5117x.** Files `22`-`25` (BacklogAging 70-71, TimelinessFY 72,
+> ForwardPipeline 73-74, EvidenceIntegrity 75-76) share one block. That
+> breaks the one-block-per-file convention, but they were deployed to
+> production before the convention was enforced and each code is still
+> unique across the codebase - so they stay. New files take a fresh block.
+
+> **[TRAP] One code per CONDITION, never per category of condition.** Seven files
+> originally reused a single code for two or three different failures - one used
+> 51101 for three distinct reconciliation errors. An operator seeing the code
+> could not tell which check failed without reading the message text, and two
+> files had also collided on 51130 outright. A code that does not identify a
+> condition is not doing its job.
+
+**Adding a new file:** take the next free block, declare it in the header
+comment (`Error block NNNNN-NNNNN`), and follow the x0/x1-x4/x5-x9 convention.
 
 ---
 
@@ -241,19 +445,54 @@ Way-2 trusted renderer; custom agentic-SQL dimensions; entity-count pricing tier
 - [ ] No status literal, no name-based bucketing anywhere
 - [ ] Scope constrained on both axes, with post-flight audit
 - [ ] Boundary cases covered: single member, zero obligations, empty peer sample
+- [ ] Helper procedures return **no** result set (`EXEC dbo.usp_Insights_AssertStatusCoverage`
+      must produce no grid, so every dimension's grid #1 is `control_totals`)
+- [ ] Encoding check returns zero rows (§5a)
+- [ ] Rollback script drops every object the install scripts create
+- [ ] Residual fields named per §4a
 
 ---
 
 ## 11. Testing discipline — read this twice
 
-**Eight defects were found during design. Every single one passed on the first
-tenant checked.** Single-tenant validation in this codebase is not weak evidence —
-it is actively misleading.
+### Two tiers of test, and why the distinction matters
 
-The strategy had to evolve twice:
+**Structural invariants** (`usp_Insights_GoldenInvariants`) assert relationships
+that hold *regardless of what the data contains* — algebra and graph traversal.
+These **`THROW`**. A failure means the **code** is wrong.
+
+**Data-sanity checks** (`usp_Insights_StatusDataQuality`) are observations about a
+particular dataset. These **warn**. A failure usually means the **data** is
+unusual.
+
+This is not pedantry. An invariant once asserted that imprisonment-bearing items
+concentrate on `RiskType 3` — true of production (98.7% across 528 tenants) but
+inverted in a test environment (96.8% on `RiskType 0`). As a `THROW`ing
+invariant it turned the entire suite red permanently, and **a permanently-red
+suite gets switched off**, which costs far more than the check was ever worth.
+
+> **Test-environment data is arbitrary.** Absolute values can only be asserted
+> against the golden fixture database (`docs/GOLDEN_FIXTURES.md`). Against any
+> other environment, assert **relationships**, not **values**.
+
+### Never validate on one tenant
+
+**Fourteen defects were found building this. Every single one passed on the first
+tenant checked** — eight during design, six more when the SQL was first executed
+against a real database. Single-tenant validation in this codebase is not weak
+evidence — it is actively misleading.
+
+The strategy had to evolve three times:
 1. Single tenant → **multi-tenant with different profiles** (caught 5 defects)
 2. Multi-tenant → **targeted boundary search** once a failure mode was closed
    structurally (caught 2 more: empty peer sample, single-member comparative)
+3. Static review → **actually executing the code** (caught 6 more that no amount
+   of reading found: the result-set contract, a mis-classified invariant, two
+   components disagreeing on the estate definition, encoding corruption, a
+   misleading field name, and a stale rollback script)
+
+**Static review cannot find contract, encoding, or cross-component defects. Run
+the code.**
 
 **Rule:** when a failure mode is closed by construction, stop sampling and start
 hunting boundaries — empty samples, single members, zero denominators. Random

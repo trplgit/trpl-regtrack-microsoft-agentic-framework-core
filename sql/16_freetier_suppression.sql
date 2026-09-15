@@ -1,4 +1,4 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1c
   DIGEST SUPPRESSION - durable per-recipient opt-out and bounce suppression
 

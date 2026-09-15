@@ -13,44 +13,13 @@ public sealed record FreeDigestTenant(int CustomerId, string TenantName);
 /// <summary>
 /// One person who should receive the digest for a tenant.
 ///
-/// The enumeration predicate MIRRORS the one usp_Insights_FreeDigestGate counts with
-/// (ProductID = 18, UserCustomerMapping.IsActive = 0, User.IsDeleted = 0). If the two ever
-/// diverge, the gate's RecipientCount stops agreeing with the list and EXIT_NO_RECIPIENTS
-/// becomes unreliable - two sources of truth for the same question.
+/// Sourced from dbo.tvfInsightsManagementUsers, NOT UserCustomerMapping - that table's
+/// ProductID/IsActive columns cannot answer "who is a recipient" in production (all 65 rows
+/// carry ProductID = NULL, IsActive = 1; see sql/01). The gate (usp_Insights_FreeDigestGate)
+/// uses the same function, but this list is narrower and authoritative: the gate is an
+/// upper-bound cost pre-filter (no email/suppression check on its own count as of the fix
+/// that made both subtract opt-outs, 2026-09-10), while this list also excludes blank emails.
+/// The two counts CAN legitimately disagree - see SqlFreeDigestRepository.GetRecipientsAsync's
+/// doc comment for why that is safe rather than a bug to chase.
 /// </summary>
 public sealed record FreeDigestRecipient(long UserId, string Email, string? Name);
-
-/// <summary>Why one recipient did or did not receive a digest - the raw material for insights.digest.sent_total / skipped_total{reason}.</summary>
-public sealed record FreeDigestRecipientOutcome(
-    long UserId,
-    string Email,
-    bool Sent,
-    FreeDigestSource? Source,
-    string? Reason,
-    string? ProviderUsed);
-
-/// <summary>
-/// Outcome of one tenant's digest run. A tenant the gate refused still returns a result -
-/// with <see cref="Decision"/> explaining why and no recipients - rather than throwing, so a
-/// batch over 600 tenants records refusals instead of aborting on the first one.
-/// </summary>
-public sealed record FreeDigestTenantResult(
-    int CustomerId,
-    string TenantName,
-    EntitlementDecision Decision,
-    string Reason,
-    IReadOnlyList<FreeDigestRecipientOutcome> Recipients)
-{
-    public int SentCount => Recipients.Count(r => r.Sent);
-    public int SkippedCount => Recipients.Count(r => !r.Sent);
-}
-
-/// <summary>Outcome of a whole weekly run.</summary>
-public sealed record FreeDigestBatchResult(IReadOnlyList<FreeDigestTenantResult> Tenants)
-{
-    public int TenantsProcessed => Tenants.Count;
-    public int TenantsSkipped => Tenants.Count(t => t.Decision != EntitlementDecision.Proceed);
-    public int EmailsSent => Tenants.Sum(t => t.SentCount);
-    public int RecipientsSkipped => Tenants.Sum(t => t.SkippedCount);
-}
-

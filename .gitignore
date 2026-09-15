@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local git worktrees (superpowers:using-git-worktrees scratch space)
+.worktrees/
+
 # User-specific files
 *.rsuser
 *.suo

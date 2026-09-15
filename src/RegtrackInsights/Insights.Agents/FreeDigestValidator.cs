@@ -21,7 +21,7 @@ public static partial class FreeDigestValidator
         Design doc Section 10.7 REQUIRES the email to end on the conversion gap, and both the
         prompt and templates/digest_fallback.txt supply the exact sentence:
 
-            "RegInsights Pro shows which locations, which people, and which laws are driving it."
+            "RegInsights Ultimate shows which locations, which people, and which laws are driving it."
 
         That sentence names no location - it names the CATEGORY of thing the paid tier reveals,
         which is the entire sales pitch. Scanning it for the word "location" rejected the one
@@ -33,7 +33,7 @@ public static partial class FreeDigestValidator
 
         The closing is therefore removed before the leak scan runs. Matched loosely so line
         wrapping and the optional "- and what to fix first" tail do not defeat it.            */
-    [GeneratedRegex(@"RegInsights\s+Pro\s+shows\s+which\s+locations\s*,\s*which\s+people\s*,\s*and\s+which\s+laws\s+are\s+driving\s+it",
+    [GeneratedRegex(@"RegInsights\s+Ultimate\s+shows\s+which\s+locations\s*,\s*which\s+people\s*,\s*and\s+which\s+laws\s+are\s+driving\s+it",
         RegexOptions.IgnoreCase)]
     private static partial Regex SanctionedClosing();
 
@@ -49,10 +49,45 @@ public static partial class FreeDigestValidator
           " act "       - matches the ordinary verb ("act now"), not a named Act. Replaced with
                           a capitalised \bAct\b, which is how a named statute reads.
           "manufactur"  - an industry word, not a name. It would reject "manufacturing sites"
-                          in a sentence carrying no name at all.                                */
-    private static readonly string[] LeakMarkers = ["branch", "location", "office", "department", " ltd", " pvt", " limited"];
+                          in a sentence carrying no name at all.
 
-    public static FreeDigestValidationResult Validate(string body, FreeDigestAggregates aggregates)
+        [TRAP] "office" MATCHED AS A PLAIN SUBSTRING. "officer" contains "office", and "for the
+        responsible officer" is the exact phrase this file's OWN worked example uses (§ prompts/
+        06_freetier_digest.md) for the personal-liability figure - so every compliant body using
+        that wording was rejected, the same class of self-defeating check the sanctioned-closing
+        fix above already had to correct once. Word-boundary markers now match on \bword\b so a
+        marker cannot fire on a longer word that merely contains it.
+
+        [TRAP] " limited" HAD THE SAME DISEASE, ONE LEVEL UP. Word-boundary matching alone does
+        not save a marker that IS an ordinary English word - "limited" (as in "limited in
+        number", "limited liability", "a limited window") appears in entirely legitimate,
+        non-leaking prose. Confirmed live: "even if they are limited in number" rejected a
+        compliant body outright. " ltd"/" pvt"/" limited" exist to catch a hallucinated company
+        NAME suffix ("XYZ Limited", "ABC Pvt Ltd") - and a real suffix like that is always
+        capitalised, because it is a proper noun, exactly the same reasoning \bAct\b already uses
+        below to exempt the lowercase verb. Case-SENSITIVE, capitalised, word-boundary matching
+        catches the real leak and cannot fire on the generic lowercase word.                     */
+    private static readonly string[] WordBoundaryLeakMarkers = ["branch", "location", "office", "department"];
+    private static readonly string[] CapitalisedSuffixLeakMarkers = ["Ltd", "Pvt", "Limited"];
+
+    /// <summary>
+    /// <paramref name="extraAllowedNumbers"/> covers numbers that are truthful but do not appear
+    /// literally as a field in <paramref name="aggregates"/> - currently only the insight-JSON
+    /// lane's <c>InsightFocus.Remainder</c> (<c>Denominator - Value</c>, computed deterministically
+    /// before the LLM is ever called, same as <c>Value</c>/<c>Denominator</c> themselves).
+    ///
+    /// [BUG FOUND LIVE, 2026-09-13] Before this parameter existed, ComposeInsightJsonActivity called
+    /// this method with just the 13 aggregates - so ANY narrative that used Remainder (exactly what
+    /// 07_insight_json_narrative.md instructs it to do for the "concrete before -> after" framing)
+    /// was rejected as "inventing" a number, even though Remainder is arithmetic already done for
+    /// the model, not something it computed. This was not an occasional false positive - it fired on
+    /// every case where Remainder did not coincidentally equal one of the 13 aggregates or a window
+    /// label, so the LLM path was burning real tokens and then discarding the result almost every
+    /// time. The free-tier email lane (ComposeDigestActivity) has no Remainder concept and does not
+    /// pass this parameter - its behaviour is unchanged.
+    /// </summary>
+    public static FreeDigestValidationResult Validate(
+        string body, FreeDigestAggregates aggregates, IEnumerable<int>? extraAllowedNumbers = null)
     {
         var failures = new List<string>();
 
@@ -68,21 +103,38 @@ public static partial class FreeDigestValidator
 
         var scannable = SanctionedClosing().Replace(body, string.Empty);
 
-        foreach (var marker in LeakMarkers)
-            if (scannable.Contains(marker, StringComparison.OrdinalIgnoreCase))
-                failures.Add($"contains '{marker.Trim()}' outside the sanctioned closing - the digest has no location/department/Act data to draw this from");
+        foreach (var marker in WordBoundaryLeakMarkers)
+            if (Regex.IsMatch(scannable, $@"\b{Regex.Escape(marker)}\b", RegexOptions.IgnoreCase))
+                failures.Add($"contains '{marker}' outside the sanctioned closing - the digest has no location/department/Act data to draw this from");
+
+        foreach (var marker in CapitalisedSuffixLeakMarkers)
+            if (Regex.IsMatch(scannable, $@"\b{Regex.Escape(marker)}\b"))
+                failures.Add($"contains '{marker}' outside the sanctioned closing - the digest has no location/department/Act data to draw this from");
 
         if (NamedAct().IsMatch(scannable))
             failures.Add("names an Act - the digest has no Act data to draw this from");
 
         var allowedNumbers = AllowedWindowLabels
             .Concat(AggregateValues(aggregates))
+            .Concat(extraAllowedNumbers ?? [])
             .Select(n => n.ToString())
             .ToHashSet();
 
+        /*  [BUG FOUND LIVE, 2026-09-11, first real prod tenant] \d+ alone splits a thousands-
+            separated number at the comma - "2,107" (a real DueNext30 value) matched as TWO
+            tokens, "2" and "107", neither of which is 2107, so a real number was rejected as
+            two fabricated ones. The prompt gives the model a plain integer (2107, no comma) and
+            never asks for comma formatting, but writing "2,107" in prose is ordinary English,
+            not an instruction violation - check 5 (rule "state numbers exactly as given") is
+            about not inventing a DIFFERENT number, not about punctuation. NumberToken now matches
+            a comma-grouped run as ONE token; commas are stripped before the allowed-set lookup so
+            "2,107" is compared as "2107", which the real aggregate value actually is.            */
         foreach (Match match in NumberToken().Matches(body))
-            if (!allowedNumbers.Contains(match.Value))
+        {
+            var normalized = match.Value.Replace(",", "");
+            if (!allowedNumbers.Contains(normalized))
                 failures.Add($"contains the number {match.Value}, which is not one of the 13 aggregates or a window label (7/14/30)");
+        }
 
         var wordCount = body.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
         if (wordCount > MaxWords)
@@ -110,6 +162,7 @@ public static partial class FreeDigestValidator
     [GeneratedRegex(@"\bAct\b")]
     private static partial Regex NamedAct();
 
-    [GeneratedRegex(@"\d+")]
+    /// <summary>Matches a comma-grouped thousands run ("2,107", "12,345,678") as ONE token before falling back to a plain digit run - see the [BUG FOUND LIVE] note at the call site for why.</summary>
+    [GeneratedRegex(@"\d{1,3}(?:,\d{3})+|\d+")]
     private static partial Regex NumberToken();
 }

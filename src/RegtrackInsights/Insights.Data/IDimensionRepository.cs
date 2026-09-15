@@ -3,9 +3,9 @@ using Insights.Domain;
 namespace Insights.Data;
 
 /// <summary>
-/// Wraps the nine dimension procs (sql/05, sql/07 - sql/14). Every one emits the SAME six result
-/// sets in the same order - control_totals, rows, detector_policy, assertions, findings,
-/// data_quality - which is what lets a single repository serve all of them.
+/// Wraps the thirteen dimension procs (sql/05, sql/07 - sql/14, sql/21 - sql/25). Every one emits
+/// the SAME six result sets in the same order - control_totals, rows, detector_policy, assertions,
+/// findings, data_quality - which is what lets a single repository serve all of them.
 ///
 /// EVERY METHOD CAN THROW, and that is the point:
 ///   <see cref="DimensionScopeDeniedException"/>       - caller has no authorised scope
@@ -13,9 +13,19 @@ namespace Insights.Data;
 ///   <see cref="DimensionDictionaryGapException"/>     - a required dictionary value is missing
 ///   <see cref="DimensionContractViolationException"/> - a result-set rule SQL cannot enforce
 ///
-/// A caller catching any of these MUST refuse to publish. None of them may be degraded to a
-/// warning or an empty result: a dimension that silently drops a thousand instances still looks
-/// entirely plausible in a report, which is the failure this whole design exists to prevent.
+/// None of these may EVER be degraded to a warning, an empty result, or the unreconciled numbers -
+/// a dimension that silently drops a thousand instances still looks entirely plausible in a
+/// report, which is the failure this whole design exists to prevent. That rule is absolute and
+/// applies to all four uniformly.
+///
+/// What is NOT absolute: whether one of these failing must refuse the WHOLE report.
+/// FetchDimensionsActivity (design doc Sec.11.4, "Partial generation") catches
+/// DimensionReconciliationException and DimensionContractViolationException specifically - both
+/// represent a bug local to ONE dimension's own procedure - and degrades just that dimension's
+/// slot to a fixed, non-numeric placeholder, publishing the rest of the report. The dimension's
+/// DATA still never reaches the user in any form; only whether the REPORT AS A WHOLE still ships
+/// differs. DimensionScopeDeniedException and DimensionDictionaryGapException remain uncaught and
+/// still fail the entire run - see each exception's own doc comment for why.
 /// </summary>
 public interface IDimensionRepository
 {
@@ -57,4 +67,40 @@ public interface IDimensionRepository
     /// </summary>
     Task<DimensionResult<EventControlTotals, EventRow>> GetEventAsync(
         int userId, int customerId, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default);
+
+    /// <summary>Licences. Grain is licence TYPE, not branch. Branch-only scope (no category axis) - see LicenceControlTotals.</summary>
+    Task<DimensionResult<LicenceControlTotals, LicenceRow>> GetLicenceAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Backlog aging. Overdue schedules by the FY they fell due in - a flow metric, never compare across runs.</summary>
+    Task<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>> GetBacklogAgingAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Timeliness over a caller-supplied window (on-time closures whose ScheduleOn falls in
+    /// [windowStart, windowEnd)), compared to the SAME span one year earlier. The deployed
+    /// usp_Insights_Dimension_TimelinessFY (sql/23) now REQUIRES @WindowStart / @WindowEnd - the
+    /// caller resolves a period-picker choice (or the current-FY-to-date default) to concrete
+    /// dates via ReportPeriodResolver before calling. Passing NULL to the proc THROWs 51177.
+    /// </summary>
+    Task<DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>> GetTimelinessFYAsync(
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Forward pipeline. Real due-next-90d counts by day-window - no "predicted at risk", no model exists yet.</summary>
+    Task<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>> GetForwardPipelineAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evidence integrity over a caller-supplied window (closures whose CLOSURE DATE - latest
+    /// ComplianceTransaction.Dated, not ScheduleOn - falls in [windowStart, windowEnd)). Review-
+    /// trail PROXY only - EvidenceInSql is always false, see EvidenceIntegrityControlTotals. The
+    /// deployed usp_Insights_Dimension_EvidenceIntegrity (sql/25) now REQUIRES @WindowStart /
+    /// @WindowEnd; passing NULL THROWs 51178.
+    /// </summary>
+    Task<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>> GetEvidenceIntegrityAsync(
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Forward risk. The 90-day window split into carried_forward / clean_at_risk / healthy segments - a count of present facts, never a forecast. Deployed proc (sql/26).</summary>
+    Task<DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>> GetForwardRiskAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 }

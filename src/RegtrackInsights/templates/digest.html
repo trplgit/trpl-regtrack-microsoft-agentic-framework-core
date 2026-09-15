@@ -1,38 +1,280 @@
-﻿<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RegTrack Insights - week ending {{WeekEnding}}</title></head>
-<body style="margin:0;padding:0;background:#f4f5f7;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;">
- <tr><td align="center">
-  <table role="presentation" width="600" cellpadding="0" cellspacing="0"
-         style="background:#ffffff;border:1px solid #e1e4e8;border-radius:4px;
-                font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-                color:#24292f;font-size:15px;line-height:1.55;">
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>RegTrack Insights &mdash; {{TenantName}}, week ending {{WeekEnding}}</title>
+<!--
+  ============================================================================
+  REGINSIGHTS DIGEST - EMAIL SHELL TEMPLATE
+  ============================================================================
+  This file is CHROME ONLY - header, upsell banner and footer are fixed and
+  branded. The body is a single injected slot (FreeDigestEmailRenderer.
+  RenderHtmlAsync's {{Body}} token) whose content changes every run: nothing
+  here assumes its length, shape, or which figures it contains.
 
-   <tr><td style="padding:20px 28px;border-bottom:1px solid #e1e4e8;">
-     <div style="font-size:13px;color:#57606a;letter-spacing:.04em;text-transform:uppercase;">
-       RegTrack Insights</div>
-     <div style="font-size:18px;font-weight:600;margin-top:2px;">{{TenantName}}</div>
-     <div style="font-size:13px;color:#57606a;">Week ending {{WeekEnding}}</div>
-   </td></tr>
+  Tokens substituted by FreeDigestEmailRenderer.Substitute (Insights.
+  Presentation/FreeDigestEmailRenderer.cs):
+    {{TenantName}}       Customer.Name
+    {{WeekEnding}}       anchor date, "d MMM yyyy"
+    {{Body}}             LLM prose or the deterministic fallback - HTML-encoded
+                          then **bold** converted to <strong> (FormatBody)
+    {{UpgradeUrl}}       Email:UpgradeUrl - the RegInsights Ultimate upsell link
+    {{PortalUrl}}        Email:PortalUrl - the plain "back into RegTrack" link
+    {{UnsubscribeUrl}}   left as FreeDigestEmailRenderer.UnsubscribeSentinel at
+                          GENERATE time, swapped for a real signed link at SEND
+                          time (SubstituteUnsubscribeUrl) - see the footer,
+                          currently commented out (unsubscribe re-enable is a
+                          separate, not-yet-scheduled decision).
 
-   <tr><td style="padding:24px 28px;white-space:pre-line;">{{Body}}</td></tr>
+  BODY SLOT CONTRACT - the .slot cell carries the base type ramp (15px/24px,
+  ink #646a73) and white-space:pre-line. The generator may emit plain prose
+  with blank lines between paragraphs and <strong> for emphasis, and it will
+  inherit the design system automatically - no class needed on <strong>.
+  06_freetier_digest.md's prompt never emits headings or lists (free tier has
+  no location/user/Act data to structure by), but the .slot h2/h3/ul/ol/li/a
+  rules below exist so ANY tag the generator emits stays inside the design
+  system rather than falling back to browser defaults - this shell is shared
+  chrome, not free-tier-specific markup.
 
-   <tr><td style="padding:0 28px 24px;">
-     <a href="{{UpgradeUrl}}"
-        style="display:inline-block;padding:10px 18px;background:#0969da;color:#ffffff;
-               text-decoration:none;border-radius:4px;font-size:14px;font-weight:500;">
-       See what's driving it</a>
-   </td></tr>
+  ONE RULE FOR ANY FUTURE GENERATOR EMITTING BLOCK TAGS: a blank line means
+  "paragraph break" under white-space:pre-line, so do not leave a blank line
+  immediately around a block-level tag - the newline renders literally AND
+  the block's own margin applies, stacking into a visible gap.
 
-   <tr><td style="padding:16px 28px;border-top:1px solid #e1e4e8;
-                  font-size:12px;color:#57606a;">
-     Figures reflect your authorised scope as at {{WeekEnding}}.<br>
-     <a href="{{UnsubscribeUrl}}" style="color:#57606a;">Unsubscribe from this digest</a>
-   </td></tr>
+  OUTLOOK CAVEAT: Word-engine Outlook ignores white-space:pre-line, so blank
+  lines collapse and free-tier prose arrives as one wall of text. Accepted for
+  now (spec targets Gmail/Apple Mail first) - if Outlook desktop coverage
+  becomes a requirement, the generator needs to emit real <p> tags and this
+  cell needs white-space:pre-line removed.
+
+  DESIGN SYSTEM (shared with the RegTrack login / change-communication,
+  reminder, monthly report and reconciliation emails)
+    Canvas   #eef0f3   Card    #ffffff, 1px #e9ebee, radius 10px
+    Rule bar #1e335c   Accent  #3a679e
+    Heading  #1a1f27   Body    #646a73   Hairline #e9ebee
+    Type: Poppins (size-adjust:93%) -> Segoe UI -> Arial. Every line-height is
+    an integer px (pixel-grid rule).
+
+  PRODUCTION NOTE (resolved 2026-09-12): all 4 images (2 logos, 2 banner icons)
+  are hosted 2x PNGs at insights-email-assets (private blob container, reached
+  via long-lived read-only SAS URLs) - not inline base64. Inline base64 <img>
+  was stripped outright by Gmail regardless of format, and Outlook desktop
+  additionally cannot render SVG at all (inline or hosted), so hosting was
+  required and PNG was required. The two logo files are rasterized at 222x42 /
+  170x62 (2x) but the <img width/height> attributes stay at the original
+  111x21 / 85x32 display size for retina sharpness - do not "fix" these to
+  match the file's pixel dimensions, that would render the logos oversized.
+  ============================================================================
+-->
+<!--[if mso]>
+<style type="text/css">
+  * { font-family: 'Segoe UI', Arial, Helvetica, sans-serif !important; }
+</style>
+<![endif]-->
+<style type="text/css">
+  @font-face { font-family:'Poppins'; font-style:normal; font-weight:400; font-display:swap; size-adjust:93%; src:url(https://fonts.gstatic.com/s/poppins/v24/pxiEyp8kv8JHgFVrJJfecg.woff2) format('woff2'); }
+  @font-face { font-family:'Poppins'; font-style:normal; font-weight:500; font-display:swap; size-adjust:93%; src:url(https://fonts.gstatic.com/s/poppins/v24/pxiByp8kv8JHgFVrLGT9Z1xlFQ.woff2) format('woff2'); }
+  @font-face { font-family:'Poppins'; font-style:normal; font-weight:600; font-display:swap; size-adjust:93%; src:url(https://fonts.gstatic.com/s/poppins/v24/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2) format('woff2'); }
+  @font-face { font-family:'Poppins'; font-style:normal; font-weight:700; font-display:swap; size-adjust:93%; src:url(https://fonts.gstatic.com/s/poppins/v24/pxiByp8kv8JHgFVrLCz7Z1xlFQ.woff2) format('woff2'); }
+
+  /* The body slot is untrusted, variable-length HTML (already HTML-encoded
+     with **bold** converted to <strong> by FormatBody). These rules keep any
+     tag the generator emits inside the design system instead of falling back
+     to browser defaults. Gmail/Apple Mail honour them; Outlook uses the
+     inline styles on the slot cell. */
+  .slot strong, .slot b   { color:#1a1f27; font-weight:600; }
+  .slot a                 { color:#3a679e; font-weight:600; text-decoration:none; }
+  .slot p                 { margin:0 0 14px 0; font-size:15px; line-height:24px; color:#646a73; }
+  .slot p:last-child      { margin-bottom:0; }
+  .slot ul, .slot ol      { margin:0 0 14px 0; padding-left:20px; }
+  .slot li                { font-size:15px; line-height:24px; color:#646a73; padding-bottom:4px; }
+  .slot h2, .slot h3      { margin:20px 0 6px 0; font-size:17px; font-weight:600; line-height:24px; letter-spacing:-0.01em; color:#1a1f27; }
+  .slot table             { border-collapse:collapse; }
+  .slot img               { max-width:100%; height:auto; }
+
+  @media only screen and (max-width: 480px) {
+    .px            { padding-left:24px !important; padding-right:24px !important; }
+    .h1            { font-size:22px !important; line-height:28px !important; }
+    .banner-pad    { padding:18px 18px 18px 18px !important; }
+    .pill-wrap     { width:100% !important; }
+    .pill          { display:block !important; width:100% !important; }
+  }
+</style>
+</head>
+<body style="margin:0; padding:0; background-color:#eef0f3; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+<!-- Preheader (hidden preview text) -->
+<div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  Your RegTrack compliance snapshot for the week ending {{WeekEnding}}.
+</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef0f3;">
+<tr><td align="center" style="padding:24px 12px 32px 12px;">
+
+  <!-- Hybrid width: fluid everywhere, pinned to 600px inside Outlook only. -->
+  <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; background-color:#ffffff; border:1px solid #e9ebee; border-radius:10px;">
+
+  <!-- ============ HEADER ============ -->
+  <tr><td style="height:4px; background-color:#1e335c; font-size:0; line-height:4px; border-radius:10px 10px 0 0;">&nbsp;</td></tr>
+
+  <tr><td class="px" style="padding:30px 40px 0 40px;">
+    <!-- Co-branding: RegTrack product wordmark left, TeamLease RegTech company mark right. -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="left" valign="middle">
+          <img src="https://trplchatgpt9378.blob.core.windows.net/insights-email-assets/regtrack-logo.png?sv=2025-01-05&st=2026-09-12T14%3A46%3A57Z&se=2076-09-12T14%3A51%3A57Z&sr=b&sp=r&sig=vxa%2FRBjXjHjbjFF6RouDE56cOK8lzJ7DK9nzoLAjkMw%3D" width="111" height="21" alt="RegTrack Compliance" style="display:block; border:0; outline:none; text-decoration:none;">
+        </td>
+        <td align="right" valign="middle">
+          <img src="https://trplchatgpt9378.blob.core.windows.net/insights-email-assets/teamlease-regtech-logo.png?sv=2025-01-05&st=2026-09-12T14%3A46%3A57Z&se=2076-09-12T14%3A51%3A57Z&sr=b&sp=r&sig=4XL7lcR7C9N4zC9ZMuJexDhaK7x0MxCRQ0C8b%2FcNigQ%3D" width="85" height="32" alt="TeamLease RegTech" style="display:block; border:0; outline:none; text-decoration:none;">
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <!-- Masthead: eyebrow / customer / period. The three things that are true of
+       every digest run regardless of what the body turns out to say. -->
+  <tr><td class="px" style="padding:28px 40px 0 40px;">
+    <div style="font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:11px; font-weight:600; line-height:15px; letter-spacing:0.08em; text-transform:uppercase; color:#3a679e;">
+      RegTrack Insights
+    </div>
+    <h1 class="h1" style="margin:8px 0 0 0; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:24px; font-weight:600; line-height:32px; letter-spacing:-0.01em; color:#1a1f27;">
+      {{TenantName}}
+    </h1>
+    <div style="font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:13px; font-weight:500; line-height:20px; color:#646a73; padding-top:3px;">
+      Week ending {{WeekEnding}}
+    </div>
+  </td></tr>
+
+  <tr><td class="px" style="padding:20px 40px 0 40px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td style="border-top:1px solid #e9ebee; font-size:0; line-height:0;">&nbsp;</td></tr>
+    </table>
+  </td></tr>
+
+  <!-- ============ BODY SLOT ============ -->
+  <!-- Everything between these two markers is generator-owned. The cell sets
+       the type ramp and the padding box; the content inside is free-form.
+       Do not add sibling rows that assume a body height or a body shape. -->
+  <tr><td class="px slot" style="padding:22px 40px 0 40px;
+             font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+             font-size:15px; line-height:24px; color:#646a73; white-space:pre-line;">
+{{Body}}
+  </td></tr>
+  <!-- ============ /BODY SLOT ============ -->
+
+  <!-- ============ LOCKED FEATURE BANNER (RegInsights Ultimate) ============ -->
+  <!-- Fixed chrome, not data. Gradient: CSS linear-gradient for modern clients,
+       VML for Outlook 2007-2019, solid #1e335c underneath both as the
+       universal fallback (Lotus, older Android, anything that drops both).
+       The card NEVER renders unstyled. Icons are hosted PNG, not SVG,
+       because Outlook desktop will not render SVG. -->
+  <tr><td class="px" style="padding:28px 40px 0 40px;">
+
+    <!--[if gte mso 9]>
+    <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:520px;">
+    <v:fill type="gradient" color="#1e335c" color2="#3a679e" angle="270"/>
+    <v:textbox inset="0,0,0,0"><![endif]-->
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+           style="width:100%; background-color:#1e335c; background-image:linear-gradient(100deg,#1e335c 0%,#2c4a7d 55%,#3a679e 100%); border-radius:10px;">
+      <tr><td class="banner-pad" style="padding:22px 24px 22px 24px;">
+
+        <!-- Row 1: icon tile + label pair -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td width="40" valign="top" style="width:40px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr><td width="38" height="38" align="center" valign="middle" style="width:38px; height:38px; background-color:#34537f; border-radius:9px;">
+                  <img src="https://trplchatgpt9378.blob.core.windows.net/insights-email-assets/feature-icon.png?sv=2025-01-05&st=2026-09-12T14%3A46%3A57Z&se=2076-09-12T14%3A51%3A57Z&sr=b&sp=r&sig=%2Fh5TeCiNRp7iiHOZLPG808fpAizdaO5tK0WWuKEOVI4%3D" width="18" height="18" alt="" style="display:block; border:0; outline:none;">
+                </td></tr>
+              </table>
+            </td>
+            <td width="14" style="width:14px; font-size:0; line-height:0;">&nbsp;</td>
+            <td valign="middle">
+              <div style="font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:10px; font-weight:600; line-height:14px; letter-spacing:0.09em; text-transform:uppercase; color:#9fb8db;">
+                RegInsights Ultimate
+              </div>
+              <div style="font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:17px; font-weight:600; line-height:24px; letter-spacing:-0.01em; color:#ffffff; padding-top:1px;">
+                Detailed insights
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Row 2: description. Full width rather than beside the title, because at
+             520px a side-by-side pill squeezes this to five lines. -->
+        <p style="margin:12px 0 0 0; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:13px; line-height:20px; color:#c5d5ea;">
+          Compliance health score with breakdowns by user, department, branch &amp; location, and statutory vs internal.
+        </p>
+
+        <!-- Row 3: the locked action. White pill, navy padlock, navy label. -->
+        <table role="presentation" class="pill-wrap" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
+          <tr><td class="pill" align="center" style="background-color:#ffffff; border-radius:8px;">
+            <a href="{{UpgradeUrl}}" style="display:block; padding:11px 18px; text-decoration:none;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+                <tr>
+                  <td valign="middle" style="padding-right:8px; font-size:0; line-height:0;">
+                    <img src="https://trplchatgpt9378.blob.core.windows.net/insights-email-assets/feature-icon-locked.png?sv=2025-01-05&st=2026-09-12T14%3A46%3A58Z&se=2076-09-12T14%3A51%3A58Z&sr=b&sp=r&sig=HT%2FiLssrrQLIwI8XsXONNXBge57gQJIRvzK1GfXy8yo%3D" width="14" height="16" alt="Locked" style="display:block; border:0; outline:none;">
+                  </td>
+                  <td valign="middle" style="font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:14px; font-weight:600; line-height:20px; color:#1e335c; white-space:nowrap;">
+                    Unlock detailed insights
+                  </td>
+                </tr>
+              </table>
+            </a>
+          </td></tr>
+        </table>
+
+      </td></tr>
+    </table>
+
+    <!--[if gte mso 9]></v:textbox></v:rect><![endif]-->
+  </td></tr>
+
+
+  <!-- ============ SUPPORT CODA ============ -->
+  <tr><td class="px" style="padding:30px 40px 38px 40px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td align="center" style="border-top:1px solid #e9ebee; padding-top:26px;">
+        <p style="margin:0 auto; max-width:420px; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:14px; line-height:22px; color:#646a73;">
+          Questions about anything in this digest? Reach out to your account manager, or write to
+          <a href="mailto:support@teamleaseregtech.com" style="color:#3a679e; font-weight:600; text-decoration:none;">support@teamleaseregtech.com</a>
+        </p>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <!-- ============ FOOTER ============ -->
+  <tr><td class="px" style="border-top:1px solid #e9ebee; padding:22px 40px 26px 40px; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:12px; line-height:18px; color:#646a73; border-radius:0 0 10px 10px;">
+    Figures reflect your authorised scope as at {{WeekEnding}}.
+    You&#39;re receiving this because your organisation uses RegTrack. This mailbox isn&#39;t monitored &mdash; for help, use the support contact above.
+    <div style="padding-top:8px;">
+      <a href="{{PortalUrl}}" style="color:#3a679e; font-weight:600; text-decoration:underline;">Go to portal</a>
+      <!--
+        Unsubscribe deliberately disabled for now (2026-09-12) - commented out,
+        not removed, at explicit instruction pending a separate decision. See
+        AzureDigestArtifactStore/FreeDigestEmailRenderer's own comments on the
+        sentinel/substitution mechanism this still (harmlessly) feeds.
+      <span style="color:#c3c8ce; padding:0 6px;">|</span>
+      <a href="{{UnsubscribeUrl}}" style="color:#646a73; text-decoration:underline;">Unsubscribe from this digest</a>
+      -->
+    </div>
+  </td></tr>
 
   </table>
- </td></tr>
+  <!--[if mso]></td></tr></table><![endif]-->
+
+  <!-- Canvas footer, outside the card -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px;">
+    <tr><td align="center" style="padding-top:16px; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:12px; line-height:17px; color:#646a73;">
+      &copy; 2026 RegTrack&trade;
+    </td></tr>
+  </table>
+
+</td></tr>
 </table>
-</body></html>
+</body>
+</html>

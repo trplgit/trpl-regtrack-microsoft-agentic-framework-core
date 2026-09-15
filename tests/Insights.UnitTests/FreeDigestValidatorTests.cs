@@ -14,7 +14,7 @@ public sealed class FreeDigestValidatorTests
 {
     /// <summary>The exact closing design doc Section 10.7 requires, as supplied by the prompt and the fallback template.</summary>
     private const string SanctionedClosing =
-        "This digest shows what is coming. RegInsights Pro shows which locations, " +
+        "This digest shows what is coming. RegInsights Ultimate shows which locations, " +
         "which people, and which laws are driving it.";
 
     private static FreeDigestAggregates Aggregates(int dueNext7 = 24, int dueNext30 = 50, int completedLast7 = 12) =>
@@ -64,6 +64,66 @@ public sealed class FreeDigestValidatorTests
         Assert.Contains(result.FailedChecks, f => f.Contains("location", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// [REGRESSION] The "office" leak marker used to match as a plain substring, so it fired on
+    /// "officer" too - and "for the responsible officer" is the exact phrase this prompt's own
+    /// worked example uses for the personal-liability figure. Every compliant body using that
+    /// wording was rejected - the same self-defeating-check class the sanctioned-closing fix
+    /// above already had to correct once. Confirmed live: this discarded all 6/6 LLM calls for
+    /// tenant 23 alongside the date-digit bug. Word-boundary matching fixes it.
+    /// </summary>
+    [Fact]
+    public void ResponsibleOfficer_IsNotTreatedAsAnOfficeLeak()
+    {
+        var body = $"**24 items** carry personal liability for the responsible officer.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, Aggregates());
+
+        Assert.True(result.IsValid, string.Join("; ", result.FailedChecks));
+    }
+
+    /// <summary>A real, standalone "office" mention is still caught.</summary>
+    [Fact]
+    public void StandaloneOfficeMention_IsStillRejected()
+    {
+        var body = $"Your head office has 24 items due.\n\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, Aggregates());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.FailedChecks, f => f.Contains("office", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// [REGRESSION] " limited" used to match as a plain lowercase substring, so any ordinary use
+    /// of the English word "limited" (not a company-name suffix at all) rejected an otherwise
+    /// compliant body. Confirmed live: "even if they are limited in number" was rejected outright.
+    /// Same fix shape as the Act/office cases - a real leaked company-name suffix ("XYZ Limited")
+    /// is always capitalised, a generic adjective is not.
+    /// </summary>
+    [Fact]
+    public void GenericLowercaseWordLimited_IsNotTreatedAsACompanySuffixLeak()
+    {
+        var body = $"**24 items** are due, even if they are limited in number this week.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, Aggregates());
+
+        Assert.True(result.IsValid, string.Join("; ", result.FailedChecks));
+    }
+
+    /// <summary>A real, capitalised company-name suffix is still caught.</summary>
+    [Theory]
+    [InlineData("24 items are due at XYZ Limited this week.")]
+    [InlineData("24 items are due at ABC Pvt Ltd this week.")]
+    public void CapitalisedCompanySuffix_IsStillRejected(string sentence)
+    {
+        var body = $"{sentence}\n\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, Aggregates());
+
+        Assert.False(result.IsValid);
+    }
+
     /// <summary>Check 2 - "overdue" as a level belongs to the paid tier (10.6).</summary>
     [Fact]
     public void OverdueWord_IsRejected()
@@ -85,6 +145,70 @@ public sealed class FreeDigestValidatorTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.FailedChecks, f => f.Contains("999", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [REGRESSION - found live, 2026-09-13] ComposeInsightJsonActivity's own explanation text
+    /// instructs the LLM to use InsightFocus.Remainder (Denominator - Value, computed
+    /// deterministically before the LLM is ever called - see 07_insight_json_narrative.md) for its
+    /// "concrete before -> after" framing. Remainder is truthful arithmetic, not an invented number,
+    /// but it does not appear literally as a field in FreeDigestAggregates - so without the
+    /// extraAllowedNumbers parameter, EVERY narrative that actually used Remainder was rejected as
+    /// fabricating a number, and the LLM path fell back to the deterministic template almost every
+    /// time. Confirmed live: a real run flagged 236 (237 TotalActiveObligations - 1 DueNext30).
+    /// </summary>
+    [Fact]
+    public void RemainderPassedAsExtraAllowedNumber_IsAccepted()
+    {
+        // TotalActiveObligations is fixed at 1893 by the Aggregates() helper above - Denominator
+        // 1893 minus Value 40 (dueNext30) is the Remainder 1853 this body actually uses.
+        var aggregates = Aggregates(dueNext30: 40);
+        var body = $"40 of the estate's 1,893 active obligations fall due soon.\nThe other 1,853 carry no such deadline.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, aggregates, extraAllowedNumbers: [1853]);
+
+        Assert.True(result.IsValid, string.Join("; ", result.FailedChecks));
+    }
+
+    /// <summary>Without the extra allowance, the same body is rejected - proves the fix is what closes the gap, not a coincidence.</summary>
+    [Fact]
+    public void RemainderNotPassedAsExtraAllowedNumber_IsRejected()
+    {
+        var aggregates = Aggregates(dueNext30: 40);
+        var body = $"40 of the estate's 1,893 active obligations fall due soon.\nThe other 1,853 carry no such deadline.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, aggregates);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.FailedChecks, f => f.Contains("1,853", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [REGRESSION - first real prod tenant] \d+ alone split "2,107" (a real DueNext30 value)
+    /// into two separate matches, "2" and "107", neither of which is 2107 - so a real aggregate
+    /// value, written with a completely ordinary thousands separator, was rejected as two
+    /// fabricated numbers. Confirmed live against tenant 1326 (Life Cell Group): 3 of 6 otherwise-
+    /// compliant LLM bodies discarded this way, every one because DueNext30 happened to be >= 1000.
+    /// </summary>
+    [Fact]
+    public void CommaGroupedAggregateValue_IsNotSplitIntoFabricatedFragments()
+    {
+        var aggregates = Aggregates(dueNext30: 2107);
+        var body = $"The next 30 days carry a total of 2,107 obligations.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, aggregates);
+
+        Assert.True(result.IsValid, string.Join("; ", result.FailedChecks));
+    }
+
+    /// <summary>A comma-grouped number that is NOT a real aggregate is still caught, normalised form included.</summary>
+    [Fact]
+    public void CommaGroupedNumberNotInTheAggregates_IsStillRejected()
+    {
+        var result = FreeDigestValidator.Validate($"The next 30 days carry 9,999 obligations.\n{SanctionedClosing}", Aggregates());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.FailedChecks, f => f.Contains("9,999", StringComparison.Ordinal));
     }
 
     /// <summary>

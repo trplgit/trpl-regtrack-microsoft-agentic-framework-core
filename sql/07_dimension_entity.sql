@@ -1,4 +1,4 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1b, Step 2
   ENTITY DIMENSION
 
@@ -86,12 +86,23 @@ BEGIN
     /*=====================================================================
       3. OWNERSHIP - an instance with no performer is ownerless
     =====================================================================*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
     IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #owned
-    FROM ComplianceAssignment ca
-    JOIN #inst i ON i.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;      -- RoleID 3 = performer
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);      -- RoleID 3 = performer
 
     /*=====================================================================
       4. DIRECT COUNTS PER NODE
@@ -106,7 +117,7 @@ BEGIN
         SUM(CASE WHEN i.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END) AS DirectInstances,
         SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END) AS DirectOverdue,
         SUM(CASE WHEN i.ComplianceInstanceID IS NOT NULL
-                  AND w.ComplianceInstanceID IS NULL THEN 1 ELSE 0 END)     AS DirectOwnerless,
+                  AND w.ComplianceInstanceID IS NULL THEN 1 ELSE 0 END)     AS DirectNoInstanceOwner,
         SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END)                 AS DirectImprisonment
     INTO #direct
     FROM dbo.tvfInsightsEntityTree(@CustomerID) t
@@ -133,7 +144,7 @@ BEGIN
         SELECT c.AncestorId, cb.ID
         FROM closure c
         JOIN CustomerBranch cb ON cb.ParentID = c.DescendantId
-        WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0
+        WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1
     )
     SELECT AncestorId, DescendantId
     INTO #closure
@@ -163,7 +174,7 @@ BEGIN
         DirectInstances     INT            NOT NULL,
         SubtreeInstances    INT            NOT NULL,
         SubtreeOverdue      INT            NOT NULL,
-        SubtreeOwnerless    INT            NOT NULL,
+        SubtreeNoInstanceOwner    INT            NOT NULL,
         SubtreeImprisonment INT            NOT NULL,
         ActiveChildren      INT            NOT NULL,
         -- derived, populated below
@@ -174,14 +185,14 @@ BEGIN
     );
 
     INSERT #rows (BranchID, BranchName, ParentID, ApexId, ApexName, RootKind, NodeType, Depth,
-                  DirectInstances, SubtreeInstances, SubtreeOverdue, SubtreeOwnerless,
+                  DirectInstances, SubtreeInstances, SubtreeOverdue, SubtreeNoInstanceOwner,
                   SubtreeImprisonment, ActiveChildren)
     SELECT
         t.BranchID, t.BranchName, t.ParentID, t.ApexId, t.ApexName, t.RootKind, t.NodeType, t.Depth,
         d.DirectInstances,
         0, 0, 0, 0,
         (SELECT COUNT(*) FROM CustomerBranch ch
-          WHERE ch.ParentID = t.BranchID AND ch.IsDeleted = 0)
+          WHERE ch.ParentID = t.BranchID AND ch.IsDeleted = 0 AND ch.Status = 1)
     FROM dbo.tvfInsightsEntityTree(@CustomerID) t
     JOIN #direct d ON d.BranchID = t.BranchID;
 
@@ -189,14 +200,14 @@ BEGIN
     UPDATE r SET
         SubtreeInstances    = s.Inst,
         SubtreeOverdue      = s.Ovd,
-        SubtreeOwnerless    = s.Own,
+        SubtreeNoInstanceOwner    = s.Own,
         SubtreeImprisonment = s.Imp
     FROM #rows r
     JOIN (
         SELECT c.AncestorId,
                SUM(d.DirectInstances)    AS Inst,
                SUM(d.DirectOverdue)      AS Ovd,
-               SUM(d.DirectOwnerless)    AS Own,
+               SUM(d.DirectNoInstanceOwner)    AS Own,
                SUM(d.DirectImprisonment) AS Imp
         FROM #closure c
         JOIN #direct d ON d.BranchID = c.DescendantId
@@ -328,7 +339,7 @@ BEGIN
         @tenantOverduePct                  AS TenantOverduePct,
         (SELECT COUNT(*) FROM #rows)       AS NodesReported,
         (SELECT COUNT(*) FROM CustomerBranch
-          WHERE CustomerID = @CustomerID AND IsDeleted = 0) AS ActiveBranchesInTenant,
+          WHERE CustomerID = @CustomerID AND IsDeleted = 0 AND Status = 1) AS ActiveBranchesInTenant,
         @apexCount                         AS ApexEntityCount,
         @tenantShape                       AS TenantShape,
         ISNULL(@maxApexShare,0)            AS LargestApexSharePct,
@@ -390,6 +401,18 @@ BEGIN
                            WHEN Eligible <= 5      THEN 'individual'
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
+
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
 
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
@@ -598,7 +621,27 @@ BEGIN
     /*=====================================================================
       15. DATA QUALITY - declared, never silent
     =====================================================================*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'NoInstanceOwner'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'orphaned_entities'                    THEN 'RootKind'
+                   WHEN 'instances_on_intermediate_nodes'      THEN 'NodeType'
+                   WHEN 'dominant_apex_comparison_grain'       THEN 'ComparisonGrain'
+                   WHEN 'share_is_scope_relative'              THEN 'LargestApexSharePct'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL

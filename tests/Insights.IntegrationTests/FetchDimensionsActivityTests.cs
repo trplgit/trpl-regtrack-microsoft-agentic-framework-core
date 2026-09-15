@@ -12,14 +12,17 @@ public class FetchDimensionsActivityTests
         ?? throw new InvalidOperationException("Set ConnectionStrings__RegTrack before running this test.");
 
     [Fact]
-    public async Task RunAsync_Tenant23_ReturnsAllNineDimensionsAsJsonStrings()
+    public async Task RunAsync_Tenant23_ReturnsAllFourteenDimensionsAsJsonStrings()
     {
         var repository = new SqlDimensionRepository(ConnectionString);
         var activity = new FetchDimensionsActivity(repository);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(36, 23));
 
-        Assert.Equal(9, result.DimensionResults.Count);
+        // [FIX, 2026-09-02] Was asserting 9 - already stale before this session's own sql/22-25
+        // additions (production FetchDimensionsActivity already called 10, Licence included, by
+        // the time this assertion was last touched). Now 14 for real: sql/05, 07-14, 21-25.
+        Assert.Equal(14, result.DimensionResults.Count);
         Assert.Contains("Location", result.DimensionResults.Keys);
         Assert.Contains("Risk", result.DimensionResults.Keys);
         // Values are JSON strings, not JsonElement (see FetchDimensionsActivity's doc comment for

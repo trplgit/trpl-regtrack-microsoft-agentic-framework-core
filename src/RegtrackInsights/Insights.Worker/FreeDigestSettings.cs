@@ -12,6 +12,21 @@ public sealed class FreeDigestSettings
     /// <summary>Budget:FreeDigestTokenCap. Over budget = skip the LLM and send the template; the email still goes out.</summary>
     public required int TokenCap { get; init; }
 
+    /// <summary>
+    /// Budget:InsightJsonTokenCap - a SEPARATE cap from <see cref="TokenCap"/>, not a reuse of it.
+    ///
+    /// [BUG FOUND LIVE, 2026-09-13] ComposeInsightJsonActivity originally shared TokenCap with the
+    /// free-digest email lane. InsightNarrativeWriter.CompletionTokenBudget estimates the prompt's
+    /// own cost and clamps the completion budget to whatever is left under the cap (floor 60
+    /// tokens) - so when 07_insight_json_narrative.md grew past ~7.8KB (~2100 estimated prompt
+    /// tokens alone), NOTHING was left of the shared 2100 cap, and every insight-JSON call was
+    /// silently clamped to the 60-token floor regardless of what the prompt's own word-count
+    /// guidance asked for. The headline/explanation length looked "stuck short" no matter how the
+    /// prompt was edited, because the real ceiling was the shared budget, not the prompt text.
+    /// A separate cap means growing either prompt file only ever affects its own lane's budget.
+    /// </summary>
+    public int InsightJsonTokenCap { get; init; } = 3000;
+
     /// <summary>Email:FromAddress. Must be a sender verified with the provider, or every send is rejected.</summary>
     public required string FromAddress { get; init; }
 
@@ -20,6 +35,9 @@ public sealed class FreeDigestSettings
 
     /// <summary>Email:UpgradeUrl - the conversion link. The gap between a number and its explanation is the pitch.</summary>
     public required string UpgradeUrl { get; init; }
+
+    /// <summary>Email:PortalUrl - the plain "go to your RegTrack account" link in the footer, distinct from UpgradeUrl (that one sells the paid tier; this one just gets an existing user back into the product they already have). Optional: an empty footer link is a cosmetic gap, not a reason to fail startup.</summary>
+    public string? PortalUrl { get; init; }
 
     /// <summary>Email:UnsubscribeBaseUrl.</summary>
     public required string UnsubscribeBaseUrl { get; init; }
@@ -50,11 +68,75 @@ public sealed class FreeDigestSettings
     /// <summary>How often the weekly lane wakes to look for due tenants. Ticking often is safe - the per-recipient claim is the guarantee.</summary>
     public TimeSpan ScheduleCheckInterval { get; init; } = TimeSpan.FromMinutes(60);
 
-    /// <summary>Hour (UTC) before which the lane will not send, so digests do not arrive overnight.</summary>
-    public int ScheduleSendHourUtc { get; init; } = 6;
-
     /// <summary>Pause between tenants. The free lane is lowest priority (10.3) and must not starve a paying user's on-demand run.</summary>
     public TimeSpan SchedulePerTenantDelay { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// ADR-0001 (2026-09-10) - the two-phase free digest. FreeDigest:Schedule:TimeZone, a Windows/
+    /// ICU timezone id (default "India Standard Time" - confirmed IST per the product decision).
+    /// </summary>
+    public TimeZoneInfo ScheduleTimeZone { get; init; } = TimeZoneInfo.Local;
+
+    /// <summary>FreeDigest:Schedule:GenerateDay. The day the two-phase system generates artifacts. Default Sunday.</summary>
+    public DayOfWeek GenerateDay { get; init; } = DayOfWeek.Sunday;
+
+    /// <summary>FreeDigest:Schedule:SendDay. The day the two-phase system actually mails recipients. Default Monday.</summary>
+    public DayOfWeek SendDay { get; init; } = DayOfWeek.Monday;
+
+    /// <summary>FreeDigest:Schedule:SendHourLocal. Hour, in ScheduleTimeZone, the send window opens. Default 9 (9am).</summary>
+    public int SendHourLocal { get; init; } = 9;
+
+    /// <summary>
+    /// FreeDigest:Artifact:FreshnessDays. An artifact generated more than this many days ago is
+    /// never dispatched, even if found - a stale digest is a wrong digest (sql/29). Default 3:
+    /// generous enough to survive a Sunday generation run that finishes late, tight enough that a
+    /// forgotten artifact from three weeks ago can never suddenly get mailed.
+    /// </summary>
+    public int ArtifactFreshnessDays { get; init; } = 3;
+
+    /// <summary>FreeDigest:Artifact:RetentionDays. How long a dispatched (or never-dispatched) artifact's blob + index row survive before the purge sweep deletes them. ADR-0001 D7 - a placeholder pending a DPO-confirmed retention period.</summary>
+    public int ArtifactRetentionDays { get; init; } = 90;
+
+    /// <summary>
+    /// FreeDigest:InsightApi:Enabled (ADR-0002, 2026-09-11) - the weekly per-user "current
+    /// insight" JSON lane. Off by default: the destination endpoint is not configured yet, and
+    /// this lane must not start POSTing real customer data to a placeholder URL. Read as an
+    /// optional value, NOT via Require() - the worker must be able to boot before the endpoint
+    /// exists (see FreeDigestRegistration.BuildSettings).
+    /// </summary>
+    public bool InsightApiEnabled { get; init; }
+
+    /// <summary>
+    /// FreeDigest:InsightApi:BaseUrl - the environment's ai-report-integration.md base URL (e.g.
+    /// "https://uat.example.com"), NOT a complete endpoint URL. PostInsightJsonActivity appends
+    /// the "/v2/api/ai-report/weekly/upsert" path itself (ADR-0003 D7). Only meaningful when
+    /// <see cref="InsightApiEnabled"/> is true - required (and validated as an absolute URL) at
+    /// startup when it is, see FreeDigestRegistration.BuildSettings.
+    /// </summary>
+    public string? InsightApiUrl { get; init; }
+
+    /// <summary>FreeDigest:InsightApi:ApiKey - sent as a Bearer token. From Key Vault in production, never a literal in appsettings.</summary>
+    public string? InsightApiKey { get; init; }
+
+    /// <summary>FreeDigest:InsightApi:TimeoutSeconds - a wedged endpoint must surface as a failed POST, not hang an activity forever.</summary>
+    public TimeSpan InsightApiTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Email:RateLimit:RequestsPerSecond. The shared ElasticEmail account is used by other services too - this is this project's good-citizen share, not a technical ceiling.</summary>
+    public int EmailRateLimitPerSecond { get; init; } = 5;
+
+    /// <summary>Email:RateLimit:AcquireTimeoutSeconds. A wedged/overwhelmed rate limiter must surface as a failed send, not hang an activity forever.</summary>
+    public TimeSpan EmailRateLimitAcquireTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// TESTING ONLY. FreeDigest:DebugDumpHtmlDir - when set, PersistDigestArtifactActivity writes
+    /// a plain (unencrypted) copy of the exact HTML it is about to store to this local directory,
+    /// alongside the normal encrypted blob write. Lets a manual GENERATE run be inspected by
+    /// opening the file directly, without needing to decrypt the blob or wait for SEND.
+    ///
+    /// Leave unset in production - this is purely a local convenience, not a delivery path, and it
+    /// writes real (if UAT) tenant content to a local disk.
+    /// </summary>
+    public string? DebugDumpHtmlDir { get; init; }
 
     /// <summary>The address a digest should actually be delivered to, honouring <see cref="RecipientOverride"/>.</summary>
     public string ResolveDeliveryAddress(string resolvedRecipientEmail) =>

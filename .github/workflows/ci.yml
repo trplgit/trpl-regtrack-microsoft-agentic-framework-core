@@ -29,17 +29,19 @@ jobs:
   # silently moving a number. It must block the build - never allow a "known failing"
   # state, that is how regression suites die (docs/GOLDEN_FIXTURES.md).
   #
-  # TODO: enable once the fixture database snapshot exists. It needs to:
-  #   1. restore the fixture snapshot (small, fast)
-  #   2. run sql/01 .. sql/06
-  #   3. EXEC usp_Insights_AssertStatusCoverage    -> expect the F-7 THROW, drop that row,
-  #                                                   then re-run clean
-  #   4. EXEC usp_Insights_GoldenInvariants @CustomerID = 999001  -> all PASS
-  #   5. assert the aggregate expectations (on-time % must be 50.0, rollup 25)
-  #   6. EXEC usp_Insights_Dimension_Location ...  -> assert F-12 / F-13 / F-14 flags
+  # sql/00_golden_fixture_999001.sql IS the fixture snapshot - not a restored .bak. It is
+  # additive-only, self-contained DDL+DML generated from real UAT metadata (sys.columns/
+  # sys.types/sys.default_constraints, never hand-typed) and validated live against UAT
+  # (2026-08-26): usp_Insights_GoldenInvariants passes all checks for 999001 and 999002,
+  # aggregate expectations match exactly, and F-12/F-13/F-14's flags all fire correctly.
+  # Never run this file against a shared/production database - see its own header and the
+  # F-7 step below for why (it seeds a ComplianceStatus row that breaks EVERY tenant's
+  # dimension-proc pre-flight system-wide until removed - safe only in this disposable
+  # container).
+  #
+  # NOT yet proven in a real container - this job is the first time it runs against one.
   golden:
     runs-on: ubuntu-latest
-    if: false   # flip on when the fixture snapshot lands
 
     services:
       sql:
@@ -49,6 +51,14 @@ jobs:
           MSSQL_SA_PASSWORD: ${{ secrets.FIXTURE_SA_PASSWORD }}
         ports:
           - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '${{ secrets.FIXTURE_SA_PASSWORD }}' -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SQLCMD: /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P ${{ secrets.FIXTURE_SA_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -57,5 +67,55 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Golden regression
-        run: dotnet test tests/Insights.GoldenTests -c Release
+      # sqlcmd runs on THIS runner (ubuntu-latest), talking to the service container over
+      # localhost:1433 - it is not preinstalled on GitHub-hosted runners, unlike inside the
+      # mssql/server image itself. Standard Microsoft-documented pattern for this exact
+      # service-container shape.
+      - name: Install sqlcmd
+        run: |
+          curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
+          curl -sSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
+          echo "/opt/mssql-tools18/bin" >> "$GITHUB_PATH"
+
+      - name: Create fixture database
+        run: $SQLCMD -Q "CREATE DATABASE vitComplianceSystem_dev;"
+
+      - name: Seed golden fixture (schema, master data, tenant 999001/999002)
+        run: $SQLCMD -d vitComplianceSystem_dev -i sql/00_golden_fixture_999001.sql
+
+      - name: Install classification dictionary + golden regression suite
+        run: |
+          $SQLCMD -d vitComplianceSystem_dev -i sql/01_classification_dictionary.sql
+          $SQLCMD -d vitComplianceSystem_dev -i sql/02_golden_regression.sql
+
+      - name: Install scope resolution + entity hierarchy + entitlement gate
+        run: |
+          $SQLCMD -d vitComplianceSystem_dev -i sql/03_scope_resolution.sql
+          $SQLCMD -d vitComplianceSystem_dev -i sql/04_entity_and_entitlement.sql
+
+      - name: Install location dimension
+        run: $SQLCMD -d vitComplianceSystem_dev -i sql/05_dimension_location.sql
+
+      # docs/GOLDEN_FIXTURES.md CI wiring step 3 - F-7 (unmapped status) must THROW 51001,
+      # then the seeded row is removed so every later step runs clean. This is a scripted
+      # CI step, not baked into sql/00, because leaving the row in place would make every
+      # OTHER dimension-proc call in this same run fail too (the check is system-wide, not
+      # per-tenant).
+      - name: F-7 - assert AssertStatusCoverage THROWs on the unmapped status, then remove it
+        run: |
+          set +e
+          $SQLCMD -d vitComplianceSystem_dev -Q "EXEC usp_Insights_AssertStatusCoverage;"
+          if [ $? -eq 0 ]; then
+            echo "::error::F-7 fixture did not THROW - usp_Insights_AssertStatusCoverage should have failed on the unmapped status 99999."
+            exit 1
+          fi
+          set -e
+          $SQLCMD -d vitComplianceSystem_dev -Q "DELETE FROM ComplianceStatus WHERE ID = 99999;"
+          $SQLCMD -d vitComplianceSystem_dev -Q "EXEC usp_Insights_AssertStatusCoverage;"
+
+      - name: Golden regression (Tier 2 - frozen fixture, tenants 999001/999002)
+        env:
+          ConnectionStrings__RegTrack: "Server=localhost;Database=vitComplianceSystem_dev;User Id=sa;Password=${{ secrets.FIXTURE_SA_PASSWORD }};TrustServerCertificate=True;"
+        run: dotnet test tests/Insights.GoldenTests -c Release --filter "FullyQualifiedName~999001|FullyQualifiedName~999002|FullyQualifiedName~GoldenAggregateExpectationsTests"

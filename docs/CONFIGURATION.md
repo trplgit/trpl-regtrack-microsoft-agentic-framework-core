@@ -32,9 +32,17 @@ spec section before altering them.
 | Key | Default | Notes |
 |---|---|---|
 | `Budget:PerRunTokenCeiling` | `250000` | ⚠ A run exceeding this aborts to the **refusal path**, not to a truncated report |
-| `Budget:PerTenantMonthlyTokenCeiling` | `5000000` | ⚠ Ops safety valve. Should never trigger normally |
+| `Budget:PerTenantMonthlyTokenCeiling` | `5000000` | ⚠ IMPLEMENTED: `CheckTenantTokenBudgetActivity`, node 0 of every run (before GatherScope). Ops safety valve. Should never trigger normally |
 | `Budget:FreeDigestTokenCap` | `1500` | ⚠ Over budget ⇒ **skip the LLM, send the template**. The email never fails to go out (§10.5) |
-| `Budget:AlertAtPercentOfCeiling` | `80` | Warn before the breaker trips |
+| `Budget:AlertAtPercentOfCeiling` | `80` | IMPLEMENTED: same activity, logs a Warning (not a metric - see `insights.tenant` note below) before the breaker trips |
+
+**Per-tenant spend ledger** (`sql/20_tenant_token_usage.sql`, `InsightsTenantTokenUsage`): append-only,
+one row per run, written in a `finally` around the whole orchestrator body regardless of outcome
+(success, gate refusal, or any other exception all represent real spend). Deliberately NOT an OTel
+metric with a `CustomerId` tag - `InsightsCostMetrics`'s own doc comment states the rule this
+follows: cardinality + customer data in a metrics backend. The 80% alert is a log line
+(`ILogger<CheckTenantTokenBudgetActivity>`), which Grafana/Loki (not the metrics backend) alerts on,
+matching Sec.13's own split of responsibilities.
 
 ## Report lifecycle
 
@@ -52,7 +60,7 @@ spec section before altering them.
 |---|---|---|
 | `Schedule:PaidAnchorModulo` | `28` | `day_of_month = hash(tenantId) % 28` — spreads ~600 tenants |
 | `Schedule:FreeAnchorModulo` | `7` | `day_of_week = hash(tenantId) % 7` |
-| `Schedule:LanePriorities` | `paid_interactive,paid_batch,free_weekly` | ⚠ Free must never delay a paying user |
+| `Schedule:LanePriorities` | n/a - **not read at runtime** | §4.4's order is `[LOCKED]`, so it is implemented as the fixed `LlmCallPriority` enum (Interactive=0, Batch=1) in `Insights.Agents`, not as configuration - a priority order is a code invariant, not an ops tunable. Free weekly digest is not a third enum value either: it never reaches `LlmConcurrencyGate` at all (a separate, small `IClaudeClient` budget). This row is retained as documentation of the policy only; do not add this key to appsettings.json expecting it to do anything |
 
 ## Agents  (§3.5)
 
@@ -119,13 +127,20 @@ insights.run.tokens_total              {tenant, report_type, node}
 insights.run.cost_usd                  {tenant, report_type}
 insights.gate.refusals_total           {reason}        ← ALERT on any
 insights.scope.denials_total           {reason}        ← provisioning signal
-insights.queue.depth                   {lane}
-insights.governor.saturation_pct
-insights.dimension.block_failures_total {dimension}
+insights.queue.depth                   {lane}          ← IMPLEMENTED: LlmConcurrencyGateMetrics
+insights.governor.saturation_pct                       ← IMPLEMENTED: LlmConcurrencyGateMetrics
+insights.governor.batch_max_wait_seconds               ← IMPLEMENTED: LlmConcurrencyGateMetrics, ALERT on sustained (see below)
+insights.dimension.block_failures_total {dimension}    ← IMPLEMENTED: DimensionFailureMetrics, ALERT per Sec.13 (block-level bug)
 insights.digest.sent_total / skipped_total {reason}
 ```
 
 **Alert on:** any publish-gate refusal (always — it means a data or dictionary
 problem); sustained transient failures; per-tenant budget above
-`AlertAtPercentOfCeiling`; keep-warm batch not draining in its window; repeated
-failures of the same dimension block.
+`AlertAtPercentOfCeiling`; keep-warm batch not draining in its window (Grafana
+rule over `insights.governor.batch_max_wait_seconds` staying elevated — no
+threshold is fixed by this repo, since the right value depends on
+`Schedule:PaidKeepWarm:CheckIntervalMinutes` and real traffic, not something to
+guess at build time); repeated failures of the same dimension block (Grafana
+rule over `insights.dimension.block_failures_total{dimension}` - a spike on one
+`dimension` tag names the specific broken procedure, per Sec.11.4/Sec.11.5's
+"alert at block level").

@@ -1,4 +1,4 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1b, Step 4
   NATURE DIMENSION
 
@@ -65,7 +65,7 @@ BEGIN
         WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
 
     IF @criticalRisk IS NULL
-        THROW 51072, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+        THROW 51075, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
 
     /*-- 1. SCOPED INSTANCE BASE ----------------------------------------*/
     IF OBJECT_ID('tempdb..#inst') IS NOT NULL DROP TABLE #inst;
@@ -96,12 +96,23 @@ BEGIN
     JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID;
 
     /*-- 3. OWNERSHIP ----------------------------------------------------*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
     IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #owned
-    FROM ComplianceAssignment ca
-    JOIN #inst i ON i.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);
 
     /*-- 4. MEMBER LIST = the nature master, plus retired natures that still
        carry obligations. See the trap note in the header.                */
@@ -114,7 +125,7 @@ BEGIN
        OR EXISTS (SELECT 1 FROM #inst i WHERE i.NatureId = n.ID);
 
     IF NOT EXISTS (SELECT 1 FROM #nature)
-        THROW 51072, N'MASTER DATA GAP - NatureOfCompliance master is empty. Refusing to compute a nature dimension.', 1;
+        THROW 51076, N'MASTER DATA GAP - NatureOfCompliance master is empty. Refusing to compute a nature dimension.', 1;
 
     /*-- 5. ROWS ---------------------------------------------------------*/
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
@@ -125,7 +136,7 @@ BEGIN
         Instances                INT            NOT NULL,
         Overdue                  INT            NOT NULL,
         OverduePct               DECIMAL(5,1)   NULL,
-        Ownerless                INT            NOT NULL,
+        NoInstanceOwner                INT            NOT NULL,
         ImprisonmentInstances    INT            NOT NULL,
         ImprisonmentOverdue      INT            NOT NULL,
         CriticalInstances        INT            NOT NULL,
@@ -140,7 +151,7 @@ BEGIN
         Flags                    VARCHAR(200)   NULL
     );
 
-    INSERT #rows (NatureId, NatureName, IsRetired, Instances, Overdue, Ownerless,
+    INSERT #rows (NatureId, NatureName, IsRetired, Instances, Overdue, NoInstanceOwner,
                   ImprisonmentInstances, ImprisonmentOverdue, CriticalInstances,
                   BranchesCovered, PenaltyBearingInstances,
                   FinancialPenaltyInstances, ClosureRiskInstances)
@@ -174,7 +185,7 @@ BEGIN
         THROW 51071, N'NATURE DIMENSION RECONCILIATION FAILED - an instance carries a NatureOfCompliance absent from the master. This is a referential break, not a tagging gap. Refusing to publish.', 1;
 
     IF @rowSum + @untagged <> @scopedTotal
-        THROW 51071, N'NATURE DIMENSION RECONCILIATION FAILED - per-nature sums plus the untagged bucket do not tie to the scoped instance total. Refusing to publish.', 1;
+        THROW 51072, N'NATURE DIMENSION RECONCILIATION FAILED - per-nature sums plus the untagged bucket do not tie to the scoped instance total. Refusing to publish.', 1;
 
     DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
     DECLARE @tenantOverduePct DECIMAL(5,1) =
@@ -221,7 +232,10 @@ BEGIN
     SELECT
         'control_totals'             AS ResultSet,
         @scopedTotal                 AS ScopedInstances,
-        @rowSum                      AS SumOfRows,
+        @rowSum                      AS CategorisedInstances   /* + UntaggedInstances = ScopedInstances.
+                             Renamed from SumOfRows: rows cover only instances WITH a
+                             nature, so a field called SumOfRows compared against
+                             ScopedInstances reads as a gap when it is a declared residual. */,
         CAST(1 AS BIT)               AS Reconciled,
         (SELECT COUNT(*) FROM #ovd)  AS OverdueInstances,
         @tenantOverduePct            AS TenantOverduePct,
@@ -259,6 +273,18 @@ BEGIN
                            WHEN Eligible <= 5      THEN 'individual'
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
+
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
 
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
@@ -339,7 +365,27 @@ BEGIN
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*-- 11. DATA QUALITY - the uncategorised gap is MANDATORY ------------*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'NoInstanceOwner'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'nature_uncategorised_gap'             THEN 'UncategorisedPct'
+                   WHEN 'nature_untagged'                      THEN 'UntaggedInstances'
+                   WHEN 'nature_retired_still_in_use'          THEN 'RetiredNaturesStillInUse'
+                   WHEN 'natures_unused'                       THEN 'NaturesWithObligations'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL

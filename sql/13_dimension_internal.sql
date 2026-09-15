@@ -1,4 +1,4 @@
-﻿/*===========================================================================
+/*===========================================================================
   RegTrack Insights - Phase 1b, Step 8
   STATUTORY vs INTERNAL DIMENSION
 
@@ -72,11 +72,22 @@ BEGIN
     JOIN #stat s ON s.ComplianceInstanceID = o.ComplianceInstanceID;
 
     IF OBJECT_ID('tempdb..#statOwn') IS NOT NULL DROP TABLE #statOwn;
-    SELECT DISTINCT ca.ComplianceInstanceID
-    INTO #statOwn
-    FROM ComplianceAssignment ca
-    JOIN #stat s ON s.ComplianceInstanceID = ca.ComplianceInstanceID
-    WHERE ca.RoleID = 3 AND ca.UserID > 0;
+    /*  [CORRECTED 2026-09-05] Statutory ownership has TWO mechanisms - see sql/01.
+        #statOwn keeps its original meaning (instance-level) so the rest of this
+        proc is unchanged; #statOwnership carries the full picture.
+
+        NOTE: InternalComplianceScheduleOn has NO performer column, so internal
+        compliance has only ONE mechanism and #intOwn below is already correct.
+        The two populations are therefore NOT measured the same way - that is a
+        schema fact, and it is declared in data_quality below.                  */
+    IF OBJECT_ID('tempdb..#statOwnership') IS NOT NULL DROP TABLE #statOwnership;
+    SELECT o.ComplianceInstanceID, o.NoInstanceOwner, o.NoOwnerAnywhere
+    INTO #statOwnership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_statOwnership ON #statOwnership (ComplianceInstanceID);
+
+    SELECT ComplianceInstanceID INTO #statOwn
+    FROM #statOwnership WHERE NoInstanceOwner = 0;
 
     /*  Internal - branch-axis scoping only, see the header. */
     IF OBJECT_ID('tempdb..#int') IS NOT NULL DROP TABLE #int;
@@ -85,7 +96,7 @@ BEGIN
     FROM InternalComplianceInstance ii
     JOIN CustomerBranch cb ON cb.ID = ii.CustomerBranchID
     JOIN #branch b ON b.BranchID = ii.CustomerBranchID
-    WHERE ii.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.CustomerID = @CustomerID;
+    WHERE ii.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.Status = 1 AND cb.CustomerID = @CustomerID;
 
     /*  Internal overdue, using the SAME dictionary - verified, see header.
         The INNER JOIN is deliberate: a status the dictionary does not know
@@ -123,18 +134,18 @@ BEGIN
         ApexName            NVARCHAR(400)  NULL,
         StatutoryInstances  INT            NOT NULL,
         StatutoryOverdue    INT            NOT NULL,
-        StatutoryOwnerless  INT            NOT NULL,
+        StatutoryNoInstanceOwner  INT            NOT NULL,
         InternalInstances   INT            NOT NULL,
         InternalOverdue     INT            NOT NULL,
-        InternalOwnerless   INT            NOT NULL,
+        InternalNoInstanceOwner   INT            NOT NULL,
         -- derived
-        StatutoryOwnerlessPct DECIMAL(5,1) NULL,
-        InternalOwnerlessPct  DECIMAL(5,1) NULL,
+        StatutoryNoInstanceOwnerPct DECIMAL(5,1) NULL,
+        InternalNoInstanceOwnerPct  DECIMAL(5,1) NULL,
         Flags               VARCHAR(200)   NULL
     );
 
     INSERT #rows (BranchID, BranchName, ApexName, StatutoryInstances, StatutoryOverdue,
-                  StatutoryOwnerless, InternalInstances, InternalOverdue, InternalOwnerless)
+                  StatutoryNoInstanceOwner, InternalInstances, InternalOverdue, InternalNoInstanceOwner)
     SELECT
         t.BranchID, t.BranchName, t.ApexName,
         ISNULL(s.Inst,0), ISNULL(s.Ovd,0), ISNULL(s.Own,0),
@@ -174,18 +185,18 @@ BEGIN
     DECLARE @hasAnyObligations BIT = CASE WHEN @statTotal > 0 OR @intTotal > 0 THEN 1 ELSE 0 END;
 
     UPDATE #rows SET
-        StatutoryOwnerlessPct = CASE WHEN StatutoryInstances = 0 THEN NULL
-                                     ELSE 100.0 * StatutoryOwnerless / StatutoryInstances END,
-        InternalOwnerlessPct  = CASE WHEN InternalInstances  = 0 THEN NULL
-                                     ELSE 100.0 * InternalOwnerless  / InternalInstances  END;
+        StatutoryNoInstanceOwnerPct = CASE WHEN StatutoryInstances = 0 THEN NULL
+                                     ELSE 100.0 * StatutoryNoInstanceOwner / StatutoryInstances END,
+        InternalNoInstanceOwnerPct  = CASE WHEN InternalInstances  = 0 THEN NULL
+                                     ELSE 100.0 * InternalNoInstanceOwner  / InternalInstances  END;
 
     /*-- 4. DETECTIONS ---------------------------------------------------*/
     DECLARE @statOwnPct DECIMAL(5,1) =
         CASE WHEN @statTotal = 0 THEN NULL
-             ELSE 100.0 * (SELECT ISNULL(SUM(StatutoryOwnerless),0) FROM #rows) / @statTotal END;
+             ELSE 100.0 * (SELECT ISNULL(SUM(StatutoryNoInstanceOwner),0) FROM #rows) / @statTotal END;
     DECLARE @intOwnPct DECIMAL(5,1) =
         CASE WHEN @intTotal = 0 THEN NULL
-             ELSE 100.0 * (SELECT ISNULL(SUM(InternalOwnerless),0) FROM #rows) / @intTotal END;
+             ELSE 100.0 * (SELECT ISNULL(SUM(InternalNoInstanceOwner),0) FROM #rows) / @intTotal END;
 
     UPDATE #rows SET Flags =
         STUFF(
@@ -194,7 +205,7 @@ BEGIN
             CASE WHEN @hasAnyObligations = 1 AND StatutoryInstances > 0 AND InternalInstances = 0
                  THEN ',internal_coverage_gap' ELSE '' END +
             CASE WHEN @hasAnyObligations = 1 AND InternalInstances > 0
-                  AND @statOwnPct IS NOT NULL AND InternalOwnerlessPct > @statOwnPct
+                  AND @statOwnPct IS NOT NULL AND InternalNoInstanceOwnerPct > @statOwnPct
                  THEN ',internal_ownerless_rate' ELSE '' END
         , 1, 1, '');
 
@@ -209,8 +220,8 @@ BEGIN
         @intRowSum                      AS SumOfInternalRows,
         (SELECT COUNT(*) FROM #statOvd) AS StatutoryOverdueInstances,
         (SELECT COUNT(*) FROM #intOvd)  AS InternalOverdueInstances,
-        @statOwnPct                     AS StatutoryOwnerlessPct,
-        @intOwnPct                      AS InternalOwnerlessPct,
+        @statOwnPct                     AS StatutoryNoInstanceOwnerPct,
+        @intOwnPct                      AS InternalNoInstanceOwnerPct,
         (SELECT COUNT(*) FROM #rows WHERE StatutoryInstances > 0) AS BranchesWithStatutory,
         (SELECT COUNT(*) FROM #rows WHERE InternalInstances  > 0) AS BranchesWithInternal,
         @internalAbsent                 AS InternalAbsentEntirely,
@@ -240,6 +251,18 @@ BEGIN
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
 
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*-- 6. ASSERTIONS ---------------------------------------------------*/
@@ -251,10 +274,10 @@ BEGIN
         Direction VARCHAR(10) NULL, Caveat NVARCHAR(500) NULL);
 
     IF @statOwnPct IS NOT NULL
-    INSERT #assert VALUES ('A-STAT-OWN','ownerless_pct',N'statutory',@statOwnPct,NULL,@statTotal,NULL,NULL,NULL,NULL);
+    INSERT #assert VALUES ('A-STAT-OWN','no_instance_owner_pct',N'statutory',@statOwnPct,NULL,@statTotal,NULL,NULL,NULL,NULL);
 
     IF @intOwnPct IS NOT NULL
-    INSERT #assert VALUES ('A-INT-OWN','ownerless_pct',N'internal',@intOwnPct,NULL,@intTotal,
+    INSERT #assert VALUES ('A-INT-OWN','no_instance_owner_pct',N'internal',@intOwnPct,NULL,@intTotal,
                            @statOwnPct, @intOwnPct - @statOwnPct,
                            CASE WHEN @intOwnPct > @statOwnPct THEN 'worse' ELSE 'better' END, NULL);
 
@@ -330,7 +353,26 @@ BEGIN
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*-- 8. DATA QUALITY -------------------------------------------------*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'StatutoryNoInstanceOwnerPct'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'internal_scope_is_branch_only'        THEN 'InternalInstances'
+                   WHEN 'internal_unmapped_status'             THEN 'InternalUnmappedStatusRows'
+                   WHEN 'internal_absent'                      THEN 'InternalAbsentEntirely'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL

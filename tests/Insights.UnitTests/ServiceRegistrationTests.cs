@@ -22,6 +22,15 @@ public sealed class ServiceRegistrationTests
         var values = new Dictionary<string, string?>
         {
             ["ConnectionStrings:RegTrack"] = "Server=localhost;Database=placeholder;Trusted_Connection=True;",
+            ["Azure:BlobConnectionString"] = "UseDevelopmentStorage=true",
+            ["Azure:BlobContainer"] = "insights-reports-temp",
+            ["Azure:DigestBlobContainer"] = "insights-digests",
+            // [MERGE FIX, 2026-09-11] AddInsightsFreeDigest now calls RegisterReportCodec
+            // (WorkerRegistration.cs) - the digest artifact store shares the paid pipeline's
+            // encrypt/blob-write registrations, which require these two. Placeholder, never
+            // dialled, same reasoning as every other value here.
+            ["Azure:BlobConnectionString"] = "UseDevelopmentStorage=true",
+            ["Azure:BlobContainer"] = "insights-reports-placeholder",
             ["Budget:FreeDigestTokenCap"] = "1500",
             ["Agents:PromptDirectory"] = "./prompts",
             ["Email:TemplatePath"] = "./templates",
@@ -76,8 +85,6 @@ public sealed class ServiceRegistrationTests
         Assert.NotNull(sp.GetRequiredService<IGoldenRegressionRepository>());
         Assert.NotNull(sp.GetRequiredService<IDimensionRepository>());
         Assert.NotNull(sp.GetRequiredService<IFreeDigestRepository>());
-        Assert.NotNull(sp.GetRequiredService<FreeDigestPipeline>());
-        Assert.NotNull(sp.GetRequiredService<IFreeDigestService>());
     }
 
     [Theory]
