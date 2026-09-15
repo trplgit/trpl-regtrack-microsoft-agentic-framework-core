@@ -1,0 +1,182 @@
+
+name: Deploy RegInsights Worker
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Environment to deploy (staging or production)"
+        required: true
+        type: string
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    env:
+      AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT_NAME }}
+      AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
+      ENVIRONMENT: ${{ inputs.environment }}
+
+    outputs:
+      IMAGE: ${{ steps.set-image.outputs.image }}
+
+    steps:
+
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Install Azure CLI
+      - name: Install Azure CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl apt-transport-https lsb-release gnupg
+
+          sudo mkdir -p /etc/apt/keyrings
+
+          curl -sL https://packages.microsoft.com/keys/microsoft.asc \
+            | gpg --dearmor \
+            | sudo tee /etc/apt/keyrings/microsoft.gpg > /dev/null
+
+          AZ_DIST=$(lsb_release -cs)
+
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $AZ_DIST main" \
+            | sudo tee /etc/apt/sources.list.d/azure-cli.list
+
+          sudo apt-get update
+          sudo apt-get install -y azure-cli
+
+      # Download appsettings.json and Trplclientsecret.dll from Azure Blob
+      - name: Download secure files from Azure Blob
+        run: |
+          set -e
+
+          mkdir -p libs
+
+          echo "Downloading Trplclientsecret.dll..."
+
+          az storage blob download \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name trpl-regtrack-microsoft-agentic-framework-core \
+            --name ${ENVIRONMENT}/Trplclientsecret.dll \
+            --file libs/Trplclientsecret.dll \
+            --overwrite
+
+          echo "Downloading appsettings.json..."
+
+          az storage blob download \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name trpl-regtrack-microsoft-agentic-framework-core \
+            --name ${ENVIRONMENT}/appsettings.json \
+            --file appsettings.json \
+            --overwrite
+
+          echo "Secure files downloaded successfully."
+
+      # Log in to Azure Container Registry
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ vars.ACR_NAME }}.azurecr.io
+          username: ${{ vars.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # Build and push Docker image
+      - name: Build and Push Docker Image
+        id: set-image
+        run: |
+          IMAGE=${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-regtrack-insights-worker:latest
+
+          echo "Building image: $IMAGE"
+
+          docker build --no-cache \
+            -f Dockerfile \
+            -t $IMAGE \
+            .
+
+          docker push $IMAGE
+
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  deploy-to-aks:
+    name: Deploy to AKS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    environment: ${{ inputs.environment }}
+
+    steps:
+
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Azure Login
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Set AKS context
+      - name: Set AKS context
+        run: |
+          az aks get-credentials \
+            --resource-group TRPL-DEMOGROUP \
+            --name TRPL-Demo-Cluster \
+            --overwrite-existing
+
+      # Create namespace if not exists
+      - name: Create namespace
+        run: |
+          kubectl create namespace ${{ inputs.environment }} \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+      # Create image pull secret
+      - name: Create image pull secret
+        run: |
+          kubectl create secret docker-registry acr-pull-secret \
+            --docker-server=${{ vars.ACR_NAME }}.azurecr.io \
+            --docker-username=${{ vars.ACR_USERNAME }} \
+            --docker-password=${{ secrets.ACR_PASSWORD }} \
+            -n ${{ inputs.environment }} \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+      # Apply Kubernetes manifest
+      - name: Apply manifests
+        run: |
+          kubectl apply \
+            -f k8s/deployment.production.yaml \
+            -n ${{ inputs.environment }}
+
+      # Update image
+      - name: Update deployment image
+        run: |
+          kubectl set image deployment/trpl-regtrack-insights-worker \
+            trpl-regtrack-insights-worker=${{ needs.build-and-push.outputs.IMAGE }} \
+            -n ${{ inputs.environment }}
+
+      # Force rollout restart
+      - name: Force rollout restart
+        run: |
+          kubectl rollout restart deployment/trpl-regtrack-insights-worker \
+            -n ${{ inputs.environment }}
+
+      # Wait for rollout
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status \
+            deployment/trpl-regtrack-insights-worker \
+            -n ${{ inputs.environment }} \
+            --timeout=10m || \
+          kubectl get pods \
+            -n ${{ inputs.environment }}
