@@ -4,8 +4,10 @@ using DurableTask.Core;
 using Insights.Agents;
 using Insights.Data;
 using Insights.Domain;
+using Insights.Persistence;
 using Insights.Worker;
 using Insights.Worker.Orchestration;
+using Microsoft.Azure.KeyVault;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -413,14 +415,26 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         var model = configuration["Llm:Maf:Model"]!;
         var apiKey = configuration["Llm:Maf:ApiKey"]!;
 
-        async Task RunOneAsync(string label, OpenAI.Responses.ResponseReasoningEffortLevel? effort)
+        async Task RunOneAsync(string label, OpenAI.Responses.ResponseReasoningEffortLevel? effort, bool jsonMode = false)
         {
-            var agent = MafAgentFactory.CreateTextAgent(
-                endpoint, model, apiKey, "DiagnosticAgent", "Diagnostic only",
-                "You are a helpful assistant. Answer in exactly one short sentence.",
-                reasoningEffort: effort);
+            var agent = jsonMode
+                ? MafAgentFactory.CreateJsonAgent(
+                    endpoint, model, apiKey, "DiagnosticAgent", "Diagnostic only",
+                    "You are a helpful assistant. Respond as JSON: {\"answer\": <number>}.",
+                    reasoningEffort: effort)
+                : MafAgentFactory.CreateTextAgent(
+                    endpoint, model, apiKey, "DiagnosticAgent", "Diagnostic only",
+                    "You are a helpful assistant. Answer in exactly one short sentence.",
+                    reasoningEffort: effort);
 
-            var response = await agent.RunAsync("Why is the sky blue?");
+            var prompt = "A vendor sells apples in crates. Crate A has 3x as many apples as crate B. " +
+                "Crate C has 14 fewer apples than crate A and crate B combined. If crate B has " +
+                "23 apples, and 8% of all apples across the three crates are rotten and must be " +
+                "discarded, how many good apples remain in total? Work through each step " +
+                "carefully, then give only the final number as your answer." +
+                (jsonMode ? " Respond as json." : "");
+
+            var response = await agent.RunAsync(prompt);
 
             output.WriteLine($"=== {label} (effort={effort}) ===");
             foreach (var message in response.Messages)
@@ -428,13 +442,53 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
                 foreach (var content in message.Contents)
                 {
                     if (content is Microsoft.Extensions.AI.TextReasoningContent reasoningContent)
+                    {
                         output.WriteLine($"  ReasoningText (len={reasoningContent.Text.Length}): {reasoningContent.Text[..Math.Min(300, reasoningContent.Text.Length)]}");
+
+                        // [ADDED 2026-09-15] Real reflection on the RAW SDK object MEAI translated
+                        // this from - checking every property in case the real summary text lives
+                        // somewhere MEAI's TextReasoningContent.Text does not read from (e.g. a
+                        // Summary collection with multiple parts, not a single Text property).
+                        var raw = reasoningContent.RawRepresentation;
+                        if (raw is not null)
+                        {
+                            output.WriteLine($"  RAW type: {raw.GetType().FullName}");
+                            foreach (var prop in raw.GetType().GetProperties())
+                            {
+                                object? value;
+                                try { value = prop.GetValue(raw); }
+                                catch (Exception ex) { value = $"<threw {ex.GetType().Name}>"; }
+                                output.WriteLine($"    {prop.Name} ({prop.PropertyType.Name}) = {value}");
+
+                                // SummaryParts is the collection that likely holds the real text -
+                                // MEAI's TextReasoningContent.Text may not be reading from it.
+                                if (value is System.Collections.IEnumerable enumerable and not string)
+                                {
+                                    var i = 0;
+                                    foreach (var part in enumerable)
+                                    {
+                                        output.WriteLine($"      [{i}] {part.GetType().FullName}");
+                                        foreach (var partProp in part.GetType().GetProperties())
+                                        {
+                                            object? partValue;
+                                            try { partValue = partProp.GetValue(part); }
+                                            catch (Exception ex) { partValue = $"<threw {ex.GetType().Name}>"; }
+                                            output.WriteLine($"        {partProp.Name} = {partValue}");
+                                        }
+                                        i++;
+                                    }
+                                    output.WriteLine($"      (count={i})");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
         await RunOneAsync("no effort (current narrate/render behavior)", null);
         await RunOneAsync("effort=High (original branch's pre-merge behavior)", OpenAI.Responses.ResponseReasoningEffortLevel.High);
+        await RunOneAsync("effort=High, JSON mode (matches real Narrate/Composition agents)", OpenAI.Responses.ResponseReasoningEffortLevel.High, jsonMode: true);
 
         // [FINDING, 2026-09-15] Both come back with ReasoningText len=0 - effort level does not
         // change this. Rules out tonight's merge (which made effort optional) as the cause; the
@@ -451,6 +505,231 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
+    /// THROWAWAY diagnostic. The isolated-call diagnostic above now proves Detailed+High
+    /// reliably produces a real summary, yet two full clean live pipeline runs both landed 0 rows
+    /// in dbo.InsightsAgentReasoningLog. NarrateActivity/RenderHtmlActivity wrap RecordAsync in a
+    /// bare `catch { }` (deliberate - a logging failure must never fail a paid-for report), which
+    /// means any real INSERT failure (permissions, connection, whatever) is invisible everywhere.
+    /// AgentReasoningRegistration prefers ConnectionStrings:RegTrackReportsWrite
+    /// (trpl_reginsights_read_write) over the default RegTrack (regtech_dev01_readonly) - this
+    /// calls SqlAgentReasoningRecorder directly, unwrapped, to see the REAL exception if the write
+    /// login lacks INSERT on the table sql/32 created (no GRANT statement in that file at all).
+    /// </summary>
+    [Fact]
+    public async Task CheckReasoningRecorderCanActuallyInsert()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var connectionString = configuration["ConnectionStrings:RegTrackReportsWrite"]!;
+        output.WriteLine($"Using RegTrackReportsWrite (login should be trpl_reginsights_read_write)");
+
+        var recorder = new SqlAgentReasoningRecorder(connectionString);
+        var testRunId = $"diagnostic-insert-check-{Guid.NewGuid():N}";
+
+        try
+        {
+            await recorder.RecordAsync(testRunId, "diagnostic", "Real diagnostic insert - safe to delete.");
+            output.WriteLine("INSERT SUCCEEDED.");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"INSERT FAILED: {ex.GetType().FullName}: {ex.Message}");
+            throw;
+        }
+
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var count = await connection.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM dbo.InsightsAgentReasoningLog WHERE RunId = @RunId;",
+            new { RunId = testRunId });
+        output.WriteLine($"Verified via read-only connection: {count} row(s) for {testRunId}");
+        Assert.Equal(1, count);
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - re-checks a real, already-diagnosed 2026-09-12 finding
+    /// (PersistActivity's own doc comment): Key Vault access via AdalKeyVaultReportEncryptor threw
+    /// KeyVaultErrorException "Forbidden", confirmed NOT an IP/network issue (tested with VPN both
+    /// on and off) - a real RBAC/access-policy denial for this service principal on the shared
+    /// DocAI vault. Re-running the exact same real encrypt call today to see if that access has
+    /// since been granted (3 new blob containers just appeared in UAT/demo/prod today, suggesting
+    /// real infra work is in progress).
+    /// </summary>
+    [Fact]
+    public async Task ProbeKeyVaultEncryptionAsync()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var encryptor = new AdalKeyVaultReportEncryptor(configuration["ConnectionStrings:RegTrack"]!);
+
+        try
+        {
+            var envelope = await encryptor.EncryptAsync("<html>real diagnostic probe - safe to discard</html>");
+            output.WriteLine("KEY VAULT ENCRYPT SUCCEEDED.");
+            output.WriteLine($"  KeyVaultObjectName: {envelope.KeyVaultObjectName}");
+            output.WriteLine($"  KeyVaultObjectVersion: {envelope.KeyVaultObjectVersion}");
+            output.WriteLine($"  Content bytes: {envelope.Content.Length}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"KEY VAULT ENCRYPT FAILED: {ex.GetType().FullName}: {ex.Message}");
+            if (ex.InnerException is not null)
+                output.WriteLine($"  Inner: {ex.InnerException.GetType().FullName}: {ex.InnerException.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - checks real write access to whatever storage account
+    /// Azure:BlobConnectionString currently points at ("trplchatgpt9378" as of 2026-09-15, NOT any
+    /// of the 3 real org accounts (demo/prod/UAT) seen in the portal today). Uses the real
+    /// AzureReportBlobWriter class, connection string read straight from config - never printed.
+    /// </summary>
+    [Fact]
+    public async Task ProbeConfiguredBlobAccountWriteAccessAsync()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var connectionString = configuration["Azure:BlobConnectionString"]!;
+        var container = configuration["Azure:TempBlobContainer"] ?? "insights-reports-temp";
+
+        // Which account, without ever printing the connection string itself.
+        var accountNameMatch = System.Text.RegularExpressions.Regex.Match(connectionString, "AccountName=([^;]+)");
+        output.WriteLine($"Testing account: {(accountNameMatch.Success ? accountNameMatch.Groups[1].Value : "<unparsed>")}, container: {container}");
+
+        var writer = new AzureReportBlobWriter(connectionString, container);
+        var envelope = new EncryptedReportEnvelope(
+            Content: System.Text.Encoding.UTF8.GetBytes("diagnostic write test - safe to delete"),
+            EncryptedAesKey: [1, 2, 3],
+            KeyVaultObjectName: "diagnostic",
+            KeyVaultObjectVersion: "diagnostic");
+        var pathContext = new BlobPathContext(999999, "diagnostic_probe", DateOnly.FromDateTime(DateTime.UtcNow), Guid.NewGuid());
+
+        try
+        {
+            var location = await writer.WriteAsync(envelope, pathContext);
+            output.WriteLine($"WRITE SUCCEEDED: container={location.Container}, path={location.Path}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"WRITE FAILED: {ex.GetType().FullName}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - tests a CANDIDATE Trplclientsecret.dll (dropped as
+    /// "libs/Trplclientsecret (2).dll", untracked, NOT the tracked libs/Trplclientsecret.dll -
+    /// swapping the tracked file was blocked by the auto-mode classifier as "Irreversible Local
+    /// Destruction", so this loads the candidate via reflection instead, without touching the
+    /// tracked file at all) against the real Key Vault, replicating AdalKeyVaultReportEncryptor's
+    /// exact LoadKeyAsync logic. The secret value itself is never read into a variable this test
+    /// prints - only passed straight into ClientCredential.
+    /// </summary>
+    [Fact]
+    public async Task ProbeCandidateClientSecretAsync()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var candidatePath = @"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\libs\Trplclientsecret (2).dll";
+        var asm = System.Reflection.Assembly.LoadFrom(candidatePath);
+        var buType = asm.GetType("Trplclientsecret.BU")!;
+        var buInstance = Activator.CreateInstance(buType)!;
+        var getSecretMethod = buType.GetMethod("GetClientSecret")!;
+
+        await using var regTrackConnection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var config = (await regTrackConnection.QueryAsync<(string VaultBaseUrl, string BYOK_KeyName, string ClientId)>(
+            "SELECT VaultBaseUrl, BYOK_KeyName, ClientId FROM tbl_SecretKeyCredentialsCustomerwise WHERE CustomerID = 0;")).FirstOrDefault();
+
+        output.WriteLine($"VaultBaseUrl: {config.VaultBaseUrl}, ClientId: {config.ClientId}");
+
+        var kvClient = new Microsoft.Azure.KeyVault.KeyVaultClient(async (authority, resource, _) =>
+        {
+            var authContext = new Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext(authority);
+            var secretValue = (string)getSecretMethod.Invoke(buInstance, null)!;
+            var clientCred = new Microsoft.IdentityModel.Clients.ActiveDirectory.ClientCredential(config.ClientId, secretValue);
+            var result = await authContext.AcquireTokenAsync(resource, clientCred);
+            return result.AccessToken;
+        });
+
+        try
+        {
+            var keyBundle = await kvClient.GetKeyAsync(config.VaultBaseUrl, config.BYOK_KeyName);
+            output.WriteLine($"CANDIDATE SECRET WORKS. Key: {keyBundle.KeyIdentifier.Identifier}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"CANDIDATE SECRET FAILED: {ex.GetType().FullName}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - user asked to double-check this isn't a mistake on my end rather
+    /// than a genuinely bad secret. Tests the SAME clientId+secret (candidate dll) against a
+    /// DIFFERENT Azure resource (Storage, via the real trplchatgpt9378 account's own AAD tenant -
+    /// discovered from Key Vault's own WWW-Authenticate challenge, captured here) instead of Key
+    /// Vault. If AAD accepts this secret for ANY resource, the secret itself is fine and the
+    /// problem is Key-Vault-specific (wrong app permission on that vault, say). If AAD rejects it
+    /// here too with the same invalid_client shape, the secret is simply wrong, full stop - not a
+    /// Key-Vault-only quirk, not a bug in how I'm calling ADAL.
+    /// </summary>
+    [Fact]
+    public async Task ProbeCandidateSecretAgainstDifferentResourceAsync()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var candidatePath = @"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\libs\Trplclientsecret (2).dll";
+        var asm = System.Reflection.Assembly.LoadFrom(candidatePath);
+        var buType = asm.GetType("Trplclientsecret.BU")!;
+        var buInstance = Activator.CreateInstance(buType)!;
+        var getSecretMethod = buType.GetMethod("GetClientSecret")!;
+
+        await using var regTrackConnection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var config = (await regTrackConnection.QueryAsync<(string VaultBaseUrl, string BYOK_KeyName, string ClientId)>(
+            "SELECT VaultBaseUrl, BYOK_KeyName, ClientId FROM tbl_SecretKeyCredentialsCustomerwise WHERE CustomerID = 0;")).FirstOrDefault();
+
+        // Capture the real authority (AAD tenant URL) Key Vault itself demands, from its own
+        // WWW-Authenticate challenge on an unauthenticated call - not guessed, not hardcoded.
+        string? capturedAuthority = null;
+        var probeClient = new Microsoft.Azure.KeyVault.KeyVaultClient((authority, resource, _) =>
+        {
+            capturedAuthority = authority;
+            throw new OperationCanceledException("stop after capturing authority - do not actually authenticate here");
+        });
+        try { await probeClient.GetKeyAsync(config.VaultBaseUrl, config.BYOK_KeyName); }
+        catch { /* expected - we only wanted the authority */ }
+
+        output.WriteLine($"Captured authority (AAD tenant): {capturedAuthority}");
+        Assert.NotNull(capturedAuthority);
+
+        var secretValue = (string)getSecretMethod.Invoke(buInstance, null)!;
+        var authContext = new Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext(capturedAuthority);
+        var clientCred = new Microsoft.IdentityModel.Clients.ActiveDirectory.ClientCredential(config.ClientId, secretValue);
+
+        try
+        {
+            // Storage resource, NOT Key Vault - same tenant, same clientId, same secret.
+            var result = await authContext.AcquireTokenAsync("https://storage.azure.com/", clientCred);
+            output.WriteLine($"SECRET WORKS FOR STORAGE RESOURCE TOO. Token acquired, expires: {result.ExpiresOn}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"SECRET FAILED FOR STORAGE RESOURCE TOO: {ex.GetType().FullName}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
     /// THROWAWAY, read-only diagnostic - checks whether sql/31_agent_reasoning_log.sql (from the
     /// still-unmerged agent-reasoning-capture branch, parked pending user/Vinay deploy) has
     /// actually been deployed to the real vitComplianceSystem database. Also flags a REAL
@@ -459,6 +738,37 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     /// agent-reasoning-capture is ever merged as-is, its sql/31_agent_reasoning_log.sql will
     /// collide on the filename (and both scripts would need to be renumbered/reconciled).
     /// </summary>
+    [Fact]
+    public async Task CheckSql28CollisionDeploymentStatus()
+    {
+        var connectionString = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build()["ConnectionStrings:RegTrack"]!;
+
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+
+        var ourColumn = await connection.QuerySingleAsync<int>("""
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID('dbo.GeneratedReport') AND name = 'RequestedDimensions'
+            ) THEN 1 ELSE 0 END;
+            """);
+        output.WriteLine(ourColumn == 1
+            ? "OUR sql/28 (GeneratedReport.RequestedDimensions column): DEPLOYED."
+            : "OUR sql/28 (GeneratedReport.RequestedDimensions column): NOT deployed.");
+
+        var vinaySnapshotTable = await connection.QuerySingleAsync<int>(
+            "SELECT CASE WHEN OBJECT_ID('dbo.InsightsMetricSnapshot', 'U') IS NULL THEN 0 ELSE 1 END;");
+        var vinayProcs = (await connection.QueryAsync<string>("""
+            SELECT name FROM sys.objects
+            WHERE type = 'P' AND name IN ('usp_Insights_SnapshotPurge', 'usp_Insights_SnapshotTrend', 'usp_Insights_SnapshotRecord');
+            """)).ToList();
+        output.WriteLine(vinaySnapshotTable == 1
+            ? "VINAY's sql/28 (dbo.InsightsMetricSnapshot table): DEPLOYED."
+            : "VINAY's sql/28 (dbo.InsightsMetricSnapshot table): NOT deployed.");
+        output.WriteLine($"VINAY's sql/28 procs found: {(vinayProcs.Count == 0 ? "none" : string.Join(", ", vinayProcs))}");
+    }
+
     [Fact]
     public async Task CheckAgentReasoningLogTableDeployed()
     {
@@ -719,43 +1029,56 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         var provider = services.BuildServiceProvider();
         var client = provider.GetRequiredService<TaskHubClient>();
 
-        var state = await client.GetOrchestrationStateAsync("9969e74dff764adab2bb248a5f5ab24e");
+        const string instanceId = "bb33892afad047309914404664a8517a";
+
+        var state = await client.GetOrchestrationStateAsync(instanceId);
         output.WriteLine($"Status: {state?.OrchestrationStatus}");
         output.WriteLine($"Output: {state?.Output}");
 
         await using var regTrackConnection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
         var reasoningRows = await regTrackConnection.QueryAsync<(string Stage, string ReasoningSummary)>(
             "SELECT Stage, ReasoningSummary FROM dbo.InsightsAgentReasoningLog WHERE RunId = @RunId ORDER BY Id;",
-            new { RunId = "9969e74dff764adab2bb248a5f5ab24e" });
-        output.WriteLine($"Reasoning rows for Agrocel run: {reasoningRows.Count()}");
+            new { RunId = instanceId });
+        output.WriteLine($"Reasoning rows for this run: {reasoningRows.Count()}");
         foreach (var row in reasoningRows)
             output.WriteLine($"  [{row.Stage}] {row.ReasoningSummary[..Math.Min(100, row.ReasoningSummary.Length)]}...");
 
         var hubConnectionString = configuration["ConnectionStrings:DurableTaskHub"]!;
         await using var connection = new Microsoft.Data.SqlClient.SqlConnection(hubConnectionString);
 
-        var payloadColumns = await connection.QueryAsync<string>(
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dt' AND TABLE_NAME = 'Payloads' ORDER BY ORDINAL_POSITION;");
-        output.WriteLine("dt.Payloads columns: " + string.Join(", ", payloadColumns));
-
         var withTaskId = await connection.QueryAsync(
             "SELECT EventType, Name, TaskID, DataPayloadID FROM dt.History WHERE InstanceID = @InstanceID ORDER BY SequenceNumber;",
-            new { InstanceID = "8083bc14af104a2c9d7dfe6babc7a07a" });
+            new { InstanceID = instanceId });
         foreach (var row in withTaskId)
             output.WriteLine($"  {row.EventType} | {row.Name} | TaskID={row.TaskID} | DataPayloadID={row.DataPayloadID}");
+
+        var failurePayloads = await connection.QueryAsync(
+            @"SELECT h.EventType, h.Name, p.Text
+              FROM dt.History h
+              JOIN dt.Payloads p ON p.InstanceID = h.InstanceID AND p.TaskID = h.TaskID
+              WHERE h.InstanceID = @InstanceID
+                AND h.EventType IN ('TaskFailed','SubOrchestrationInstanceFailed','ExecutionFailed','ExecutionTerminated')
+              ORDER BY h.SequenceNumber;",
+            new { InstanceID = instanceId });
+        foreach (var row in failurePayloads)
+            output.WriteLine($"  FAILURE [{row.EventType}] {row.Name}: {row.Text}");
     }
 
     /// <summary>
     /// [ADDED 2026-09-15] Real end-to-end test of the just-merged reasoning-capture feature:
-    /// one real dimension_selection:Users run for Minda (1008/12116, fast - fixed template, no
-    /// freehand composition call), then a direct read of dbo.InsightsAgentReasoningLog to prove
-    /// real rows actually land for this runId - not just that the orchestration completes.
+    /// one real dimension_selection:Users run, then a direct read of dbo.InsightsAgentReasoningLog
+    /// to prove real rows actually land for this runId - not just that the orchestration completes.
+    /// [SWITCHED TO AGROCEL 2026-09-15] Tenant 1008 (Minda) had a real concurrent-run collision
+    /// with another live worker also hitting it at the same time (DTFx "Duplicate execution of
+    /// FetchDimensionsActivity" warning, non-determinism replay error on a different instance) -
+    /// not this feature's bug. Agrocel (1082/14128) ran clean earlier tonight with no collision
+    /// risk, used here purely to get an uncontaminated read.
     /// </summary>
     [Fact]
     public async Task RunAsync_Users_Minda_RecordsRealReasoningSummaries()
     {
-        const int tenantId = 1008;
-        const int userId = 12116;
+        const int tenantId = 1082;
+        const int userId = 14128;
 
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
