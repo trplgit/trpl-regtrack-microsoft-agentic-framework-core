@@ -1,4 +1,9 @@
-FROM mcr.microsoft.com/playwright/dotnet:v1.62.0-noble AS build
+```dockerfile
+# ============================================================
+# Build
+# ============================================================
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0.400-noble AS build
 
 WORKDIR /src
 
@@ -12,6 +17,10 @@ RUN dotnet publish src/RegtrackInsights/RegtrackInsights.csproj \
     --no-restore
 
 
+# ============================================================
+# Runtime
+# ============================================================
+
 FROM mcr.microsoft.com/playwright/dotnet:v1.62.0-noble AS runtime
 
 WORKDIR /app
@@ -19,3 +28,4 @@ WORKDIR /app
 COPY --from=build /app/publish .
 
 ENTRYPOINT ["dotnet", "RegtrackInsights.dll"]
+```
