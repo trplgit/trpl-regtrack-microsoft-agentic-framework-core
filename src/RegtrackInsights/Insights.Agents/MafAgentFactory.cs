@@ -32,21 +32,35 @@ public static class MafAgentFactory
 
     /// <summary>
     /// For agents whose contract is a JSON object (composition, reflection, narrative).
-    /// <paramref name="reasoningEffort"/> [ADDED 2026-09-14] is optional and defaults to null
-    /// (no ReasoningOptions set - unchanged behavior for every existing caller). Freehand
-    /// dimension composition is the first caller to pass a real value, deliberately configurable
-    /// (FreehandDimensions:ReasoningEffort) rather than hardcoded, so it can be tuned without a
-    /// code change.
+    /// <paramref name="reasoningEffort"/> [ADDED 2026-09-14, DEFAULT CHANGED 2026-09-15] defaults
+    /// to High, not null - necessary but NOT sufficient on its own (see the real finding below).
     /// </summary>
+    /// <remarks>
+    /// [REAL ROOT CAUSE, FOUND LIVE 2026-09-15] The empty-reasoning-table bug was never about
+    /// effort level or about <c>ReasoningSummaryExtractor</c> reading the wrong field - both of
+    /// those were red herrings chased earlier the same night. The actual cause: this factory's
+    /// <c>ReasoningSummaryVerbosity</c> was hardcoded to <c>Auto</c>, and Auto silently returns
+    /// ZERO summary parts on this Azure deployment regardless of effort level - confirmed live,
+    /// repeatedly, both on a trivial prompt and a genuine multi-step reasoning prompt, at both
+    /// effort=null and effort=High. Switching to <c>ReasoningSummaryVerbosity.Detailed</c> AND
+    /// effort=High TOGETHER is what actually produces a real summary (verified live: SummaryParts
+    /// count 1, real text, AND MEAI's own <c>TextReasoningContent.Text</c> populated too -
+    /// <see cref="ReasoningSummaryExtractor"/> needed no change at all). Detailed+null effort was
+    /// tried and still came back empty - both knobs are required together, neither alone is
+    /// enough. An earlier code comment claimed gpt-5 "rejects Concise" as the reason Auto was
+    /// chosen over an explicit verbosity - that comment never actually tried Detailed; it does
+    /// work, no rejection.
+    /// </remarks>
     public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
+    /// See <see cref="CreateJsonAgent"/>'s own remarks for the real reasoning-summary root cause.
     /// </summary>
     public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High);
 
     private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort)
     {
@@ -113,11 +127,13 @@ public static class MafAgentFactory
                 // the vendor's own summary of its reasoning for EVERY call this factory makes,
                 // regardless of effort level - it is the ONLY supported way to get any of the
                 // model's reasoning back (OpenAI's terms forbid extracting raw chain-of-thought by
-                // any other means). "Auto" lets each model pick its own summary style rather than
-                // forcing "concise", which the gpt-5 series rejects per Microsoft's own docs. See
-                // ReasoningSummaryExtractor for how this is read back out of the response. Effort
-                // level and summary verbosity are independent knobs - setting one is never a
-                // reason to skip the other.
+                // any other means). [CHANGED 2026-09-15, FROM Auto] Auto silently returned ZERO
+                // summary parts on this deployment regardless of effort level, confirmed live -
+                // Detailed does not have that problem (and, contrary to an earlier assumption
+                // here, is NOT rejected by gpt-5 - only Concise ever was). Detailed alone is still
+                // not enough on its own; it must be paired with effort=High (see CreateJsonAgent's
+                // remarks) - both knobs are required together. See ReasoningSummaryExtractor for
+                // how this is read back out of the response.
                 //
                 // [TRIED 2026-09-15, REVERTED SAME DAY] A requestReasoningSummary flag briefly let
                 // one caller (render_html) skip this - ruled out as the cause of the real
@@ -130,12 +146,12 @@ public static class MafAgentFactory
                     ReasoningOptions = reasoningEffort is null
                         ? new ResponseReasoningOptions
                         {
-                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
                         }
                         : new ResponseReasoningOptions
                         {
                             ReasoningEffortLevel = reasoningEffort.Value,
-                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
                         },
                 },
             },
