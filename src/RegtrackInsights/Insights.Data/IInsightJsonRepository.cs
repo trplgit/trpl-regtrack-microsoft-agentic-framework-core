@@ -7,6 +7,9 @@ namespace Insights.Data;
 /// </summary>
 public interface IInsightJsonRepository
 {
+    /// <summary>Returns users who already hold this week's JSON POST claim.</summary>
+    Task<IReadOnlyList<long>> GetClaimedUserIdsAsync(int customerId, DateOnly weekEnding, CancellationToken cancellationToken = default);
+
     /// <summary>Atomically claims this week's POST for one recipient. Returns true to exactly ONE caller per (customer, user, week); everyone after gets false and must not POST.</summary>
     Task<bool> TryClaimPostAsync(int customerId, long userId, DateOnly weekEnding, CancellationToken cancellationToken = default);
 

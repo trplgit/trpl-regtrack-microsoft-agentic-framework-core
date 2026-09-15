@@ -28,9 +28,11 @@ public sealed class ResolveDigestRecipientsActivityTests
     private static ResolveDigestRecipientsActivity Build(
         IReadOnlyList<FreeDigestRecipient> recipients,
         IReadOnlyList<long> claimed,
+        IReadOnlyList<long>? jsonClaimed,
         out Mock<IScopeRepository> scope)
     {
         var repo = new Mock<IFreeDigestRepository>();
+        var jsonRepo = new Mock<IInsightJsonRepository>();
 
         repo.Setup(r => r.GetEntitledTenantsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([new FreeDigestTenant(Tenant, "ABC Training Company")]);
@@ -44,6 +46,8 @@ public sealed class ResolveDigestRecipientsActivityTests
 
         repo.Setup(r => r.GetClaimedUserIdsAsync(Tenant, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(claimed);
+        jsonRepo.Setup(r => r.GetClaimedUserIdsAsync(Tenant, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(jsonClaimed ?? []);
 
         scope = new Mock<IScopeRepository>();
         // Every user shares one scope, so grouping collapses to a single group - keeps these
@@ -52,7 +56,7 @@ public sealed class ResolveDigestRecipientsActivityTests
             .ReturnsAsync([new ScopePair(10, 1)]);
 
         return new ResolveDigestRecipientsActivity(
-            repo.Object, scope.Object, new FreeDigestMetrics(), NullLogger<ResolveDigestRecipientsActivity>.Instance);
+            repo.Object, jsonRepo.Object, scope.Object, new FreeDigestMetrics(), NullLogger<ResolveDigestRecipientsActivity>.Instance);
     }
 
     /// <summary>
@@ -62,7 +66,7 @@ public sealed class ResolveDigestRecipientsActivityTests
     [Fact]
     public async Task AllRecipientsAlreadyClaimed_ProducesNoGroupsToCompose()
     {
-        var activity = Build([R(357), R(1024)], claimed: [357, 1024], out _);
+        var activity = Build([R(357), R(1024)], claimed: [357, 1024], jsonClaimed: [], out _);
 
         var result = await activity.RunAsync(new ResolveDigestRecipientsInput(Tenant, AsOf.ToString("O")));
 
@@ -75,7 +79,7 @@ public sealed class ResolveDigestRecipientsActivityTests
     [Fact]
     public async Task PartiallyClaimed_ExcludesOnlyTheClaimedRecipients()
     {
-        var activity = Build([R(357), R(1024), R(11782)], claimed: [1024], out _);
+        var activity = Build([R(357), R(1024), R(11782)], claimed: [1024], jsonClaimed: [], out _);
 
         var result = await activity.RunAsync(new ResolveDigestRecipientsInput(Tenant, AsOf.ToString("O")));
 
@@ -92,7 +96,7 @@ public sealed class ResolveDigestRecipientsActivityTests
     [Fact]
     public async Task NothingClaimed_KeepsEveryRecipient()
     {
-        var activity = Build([R(357), R(1024)], claimed: [], out _);
+        var activity = Build([R(357), R(1024)], claimed: [], jsonClaimed: [], out _);
 
         var result = await activity.RunAsync(new ResolveDigestRecipientsInput(Tenant, AsOf.ToString("O")));
 
@@ -107,12 +111,49 @@ public sealed class ResolveDigestRecipientsActivityTests
     [Fact]
     public async Task AllRecipientsAlreadyClaimed_DoesNotResolveScope()
     {
-        var activity = Build([R(357), R(1024)], claimed: [357, 1024], out var scope);
+        var activity = Build([R(357), R(1024)], claimed: [357, 1024], jsonClaimed: [], out var scope);
 
         await activity.RunAsync(new ResolveDigestRecipientsInput(Tenant, AsOf.ToString("O")));
 
         scope.Verify(
             s => s.GetScopePairsAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task InsightJsonClaimDomainIgnoresEmailClaims()
+    {
+        var activity = Build([R(357), R(1024)], claimed: [357, 1024], jsonClaimed: [], out _);
+
+        var result = await activity.RunAsync(new ResolveDigestRecipientsInput(
+            Tenant, AsOf.ToString("O"), DigestClaimDomain.InsightJson));
+
+        Assert.True(result.ShouldProceed);
+        Assert.Equal(2, result.Groups.SelectMany(g => g.Recipients).Count());
+    }
+
+    [Fact]
+    public async Task InsightJsonClaimDomainExcludesOnlyJsonClaims()
+    {
+        var activity = Build([R(357), R(1024)], claimed: [], jsonClaimed: [1024], out _);
+
+        var result = await activity.RunAsync(new ResolveDigestRecipientsInput(
+            Tenant, AsOf.ToString("O"), DigestClaimDomain.InsightJson));
+
+        var members = result.Groups.SelectMany(g => g.Recipients).Select(r => r.UserId).ToList();
+        Assert.Single(members);
+        Assert.Equal(357L, members[0]);
+    }
+
+    [Fact]
+    public async Task EmailClaimDomainIgnoresJsonClaims()
+    {
+        var activity = Build([R(357), R(1024)], claimed: [], jsonClaimed: [1024], out _);
+
+        var result = await activity.RunAsync(new ResolveDigestRecipientsInput(
+            Tenant, AsOf.ToString("O"), DigestClaimDomain.Email));
+
+        Assert.True(result.ShouldProceed);
+        Assert.Equal(2, result.Groups.SelectMany(g => g.Recipients).Count());
     }
 }

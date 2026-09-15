@@ -38,7 +38,7 @@ public sealed class FreeDigestInsightJsonOrchestrator : TaskOrchestration<FreeDi
 
         var resolved = await context.ScheduleWithRetry<ResolveDigestRecipientsOutput>(
             typeof(ResolveDigestRecipientsActivity).Name, "1.0", retry,
-            new ResolveDigestRecipientsInput(input.TenantId, input.AsOf));
+            new ResolveDigestRecipientsInput(input.TenantId, input.AsOf, DigestClaimDomain.InsightJson));
 
         if (!resolved.ShouldProceed)
         {

@@ -6,7 +6,16 @@ using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
-public sealed record ResolveDigestRecipientsInput(int TenantId, string? AsOf);
+public enum DigestClaimDomain
+{
+    Email,
+    InsightJson,
+}
+
+public sealed record ResolveDigestRecipientsInput(
+    int TenantId,
+    string? AsOf,
+    DigestClaimDomain ClaimDomain = DigestClaimDomain.Email);
 
 /// <summary>One recipient the digest will be delivered to.</summary>
 public sealed record DigestRecipientRef(long UserId, string Email, string? Name);
@@ -38,6 +47,7 @@ public sealed record ResolveDigestRecipientsOutput(
 /// </summary>
 public sealed class ResolveDigestRecipientsActivity(
     IFreeDigestRepository repository,
+    IInsightJsonRepository insightJsonRepository,
     IScopeRepository scope,
     FreeDigestMetrics metrics,
     ILogger<ResolveDigestRecipientsActivity> logger)
@@ -87,8 +97,14 @@ public sealed class ResolveDigestRecipientsActivity(
             workers resolving in the same instant both see an unclaimed recipient - and that race
             is exactly what the atomic claim is for. This saves the money; that guarantees
             at-most-once.                                                                        */
-        var alreadyClaimed = (await repository.GetClaimedUserIdsAsync(
-            input.TenantId, DigestWeek.EndingFor(asOf))).ToHashSet();
+        var alreadyClaimed = input.ClaimDomain switch
+        {
+            DigestClaimDomain.Email => (await repository.GetClaimedUserIdsAsync(
+                input.TenantId, DigestWeek.EndingFor(asOf))).ToHashSet(),
+            DigestClaimDomain.InsightJson => (await insightJsonRepository.GetClaimedUserIdsAsync(
+                input.TenantId, DigestWeek.EndingFor(asOf))).ToHashSet(),
+            _ => throw new ArgumentOutOfRangeException(nameof(input.ClaimDomain), input.ClaimDomain, "Unknown digest claim domain."),
+        };
 
         if (alreadyClaimed.Count > 0)
         {
