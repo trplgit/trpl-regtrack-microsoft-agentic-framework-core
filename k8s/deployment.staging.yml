@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: trpl-regtrack-insights-worker
+  labels:
+    app: trpl-regtrack-insights-worker
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: trpl-regtrack-insights-worker
+
+  template:
+    metadata:
+      labels:
+        app: trpl-regtrack-insights-worker
+
+    spec:
+      automountServiceAccountToken: false
+
+      imagePullSecrets:
+        - name: acr-pull-secret
+
+      containers:
+        - name: trpl-regtrack-insights-worker
+
+          image: conatinerimages.azurecr.io/staging/trpl-regtrack-insights-worker:latest
+
+          imagePullPolicy: Always
+
+          env:
+            - name: DOTNET_ENVIRONMENT
+              value: "staging"
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
