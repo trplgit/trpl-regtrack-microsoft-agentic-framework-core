@@ -33,6 +33,9 @@ public sealed class FreeDigestSettings
     /// <summary>Email:FromName.</summary>
     public required string FromName { get; init; }
 
+    /// <summary>Base URL for email-hosted images. The digest template owns the asset paths.</summary>
+    public string CdnBaseUrl { get; init; } = string.Empty;
+
     /// <summary>Email:UpgradeUrl - the conversion link. The gap between a number and its explanation is the pitch.</summary>
     public required string UpgradeUrl { get; init; }
 
