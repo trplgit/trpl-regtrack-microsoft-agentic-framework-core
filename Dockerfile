@@ -1,6 +1,7 @@
 
 # ============================================================
-# Build
+# Build stage
+# Project global.json requires .NET SDK 10.0.400
 # ============================================================
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0.400-noble AS build
@@ -18,7 +19,9 @@ RUN dotnet publish src/RegtrackInsights/RegtrackInsights.csproj \
 
 
 # ============================================================
-# Runtime
+# Runtime stage
+# RegInsights targets .NET 8
+# Playwright 1.62.0 is required by the application
 # ============================================================
 
 FROM mcr.microsoft.com/playwright/dotnet:v1.62.0-noble AS runtime
