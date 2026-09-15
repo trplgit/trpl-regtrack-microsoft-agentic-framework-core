@@ -37,7 +37,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
         IReadOnlyList<Assertion> assertions = [];
 
-        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100, "chose a coverage-first layout because..."));
 
         var recorder = new Mock<IAgentReasoningRecorder>();
@@ -56,7 +56,7 @@ public class RenderHtmlActivityTests
         var generatedAt = new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc);
         IReadOnlyList<Assertion> assertions = [];
 
-        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.RenderAsync(plan, narrative, assertions, "Tenant 29 (UAT)", "compliance_health", generatedAt, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html></html>", 3100, "some reasoning"));
 
         var recorder = new Mock<IAgentReasoningRecorder>();
