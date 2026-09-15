@@ -27,6 +27,9 @@ WORKDIR /app
 
 COPY --from=build /app/publish .
 
+# Copy environment-specific appsettings downloaded by GitHub Actions
+COPY appsettings.json /app/appsettings.json
+
 # Playwright / Chromium runtime dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
