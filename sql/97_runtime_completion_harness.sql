@@ -54,6 +54,14 @@ SET NOCOUNT ON;
 DECLARE @UserID     INT = 38;
 DECLARE @CustomerID INT = 29;
 
+/*  [ADDED 2026-09-10] TimelinessFY and EvidenceIntegrity now REQUIRE a window.
+    Both THROW (51177 / 51178) on a NULL or inverted range - deliberately, so a
+    caller cannot silently get a default period. Default here: the last full
+    fiscal year, which gives both a populated window and a real year-over-year
+    comparator. Change these to match whatever the period picker would send.   */
+DECLARE @WindowStart DATETIME = '2025-04-01';
+DECLARE @WindowEnd   DATETIME = '2026-04-01';
+
 IF OBJECT_ID('tempdb..#result') IS NOT NULL DROP TABLE #result;
 CREATE TABLE #result (
     Seq       INT IDENTITY(1,1),
@@ -69,6 +77,13 @@ IF NOT EXISTS (SELECT 1 FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
 BEGIN
     SELECT 'STOP - user has no scope on this tenant. Every dimension will THROW 51030.' AS Problem,
            @UserID AS UserID, @CustomerID AS CustomerID;
+    RETURN;
+END
+
+IF @WindowEnd <= @WindowStart
+BEGIN
+    SELECT 'STOP - @WindowEnd must be after @WindowStart. TimelinessFY and '
+         + 'EvidenceIntegrity would THROW and look like dimension failures.' AS Problem;
     RETURN;
 END
 
@@ -116,7 +131,7 @@ BEGIN TRY EXEC dbo.usp_Insights_Dimension_BacklogAging    @UserID, @CustomerID;
     INSERT #result VALUES ('BacklogAging','COMPLETE - 6 result sets',NULL,NULL,NULL); END TRY
 BEGIN CATCH INSERT #result VALUES ('BacklogAging','*** FAILED ***',ERROR_NUMBER(),ERROR_LINE(),LEFT(ERROR_MESSAGE(),400)); END CATCH
 
-BEGIN TRY EXEC dbo.usp_Insights_Dimension_TimelinessFY    @UserID, @CustomerID;
+BEGIN TRY EXEC dbo.usp_Insights_Dimension_TimelinessFY    @UserID, @CustomerID, @WindowStart, @WindowEnd;
     INSERT #result VALUES ('TimelinessFY','COMPLETE - 6 result sets',NULL,NULL,NULL); END TRY
 BEGIN CATCH INSERT #result VALUES ('TimelinessFY','*** FAILED ***',ERROR_NUMBER(),ERROR_LINE(),LEFT(ERROR_MESSAGE(),400)); END CATCH
 
@@ -124,7 +139,7 @@ BEGIN TRY EXEC dbo.usp_Insights_Dimension_ForwardPipeline @UserID, @CustomerID;
     INSERT #result VALUES ('ForwardPipeline','COMPLETE - 6 result sets',NULL,NULL,NULL); END TRY
 BEGIN CATCH INSERT #result VALUES ('ForwardPipeline','*** FAILED ***',ERROR_NUMBER(),ERROR_LINE(),LEFT(ERROR_MESSAGE(),400)); END CATCH
 
-BEGIN TRY EXEC dbo.usp_Insights_Dimension_EvidenceIntegrity @UserID, @CustomerID;
+BEGIN TRY EXEC dbo.usp_Insights_Dimension_EvidenceIntegrity @UserID, @CustomerID, @WindowStart, @WindowEnd;
     INSERT #result VALUES ('EvidenceIntegrity','COMPLETE - 6 result sets',NULL,NULL,NULL); END TRY
 BEGIN CATCH INSERT #result VALUES ('EvidenceIntegrity','*** FAILED ***',ERROR_NUMBER(),ERROR_LINE(),LEFT(ERROR_MESSAGE(),400)); END CATCH
 

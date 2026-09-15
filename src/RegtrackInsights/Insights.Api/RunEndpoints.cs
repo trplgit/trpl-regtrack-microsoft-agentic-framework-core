@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Api;
 
@@ -46,6 +47,7 @@ public static class RunEndpoints
             [FromServices] ICooldownRepository cooldown,
             [FromServices] IInsightsRunEnqueuer enqueuer,
             [FromServices] IReportRequestRepository requests,
+            [FromServices] ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
             // Same ordering as the stream endpoint: authorise against the AUTHENTICATED caller
@@ -95,21 +97,43 @@ public static class RunEndpoints
             // "A second operation was started on this context instance before a previous operation
             // completed." Sequential instead - each unit's cooldown check + enqueue is a fast SQL/
             // DTFx call, not an LLM call, so there is no real latency cost to serialising them.
+            // [MOVED EARLIER 2026-09-14] Was generated AFTER the fan-out loop - fine for the
+            // grouping-table write below, but too late for GenerateOneReportAsync to forward into
+            // the orchestration input, which is what LangfuseSessionTaggingChatClient needs to tag
+            // every real LLM call this batch makes with the SAME session id. One umbrella id for
+            // the whole fan-out either way, so the frontend can poll ONE thing for combined
+            // progress instead of tracking N runIds itself.
+            var reqId = Guid.NewGuid();
+
             var reports = new List<GeneratedReportUnit>(dimensionsToGenerate.Count);
             foreach (var dimension in dimensionsToGenerate)
             {
-                reports.Add(await GenerateOneReportAsync(request, dimension, caller.UserId, cooldown, enqueuer, cancellationToken));
+                reports.Add(await GenerateOneReportAsync(request, dimension, caller.UserId, cooldown, enqueuer, reqId, cancellationToken));
             }
 
-            // [ADDED 2026-09-11] One umbrella id for the whole fan-out, so the frontend can poll
-            // ONE thing for combined progress instead of tracking N runIds itself. Only units that
-            // actually queued get a row - a "cooldown" unit has no RunId to track. If every unit
-            // hit cooldown, reqId groups zero rows and its own stream endpoint reports "not found",
-            // same as any other reqId nobody ever enqueued anything under.
-            var reqId = Guid.NewGuid();
+            // Only units that actually queued get a row - a "cooldown" unit has no RunId to track.
+            // If every unit hit cooldown, reqId groups zero rows and its own stream endpoint
+            // reports "not found", same as any other reqId nobody ever enqueued anything under.
             var queuedRunIds = reports.Where(r => r.RunId is not null).Select(r => r.RunId!).ToList();
             if (queuedRunIds.Count > 0)
-                await requests.SaveAsync(reqId, queuedRunIds, cancellationToken);
+            {
+                // [BEST-EFFORT, 2026-09-11] The reports themselves are already enqueued and real by
+                // this point - a failure to record the GROUPING must never take that away. Found
+                // live: the write-capable DB account was granted GeneratedReport/InsightsTenantTokenUsage
+                // only, before InsightsReportRequest existed, so this INSERT 500'd the entire
+                // request until the grant catches up. Log and continue instead of throwing - a
+                // caller who then polls this reqId gets a clean 404 (nothing was ever grouped under
+                // it) rather than losing the whole generate call to a convenience feature.
+                try
+                {
+                    await requests.SaveAsync(reqId, queuedRunIds, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    loggerFactory.CreateLogger("Insights.Api.RunEndpoints").LogError(
+                        ex, "Failed to save reqId {ReqId} grouping for {Count} run(s) - reports were still enqueued, only the combined-progress lookup is affected.", reqId, queuedRunIds.Count);
+                }
+            }
 
             return Results.Accepted(value: new { reqId, reports });
         });
@@ -214,7 +238,7 @@ public static class RunEndpoints
     /// </summary>
     private static async Task<GeneratedReportUnit> GenerateOneReportAsync(
         GenerateReportRequest request, string? dimension, int callerUserId,
-        ICooldownRepository cooldown, IInsightsRunEnqueuer enqueuer, CancellationToken cancellationToken)
+        ICooldownRepository cooldown, IInsightsRunEnqueuer enqueuer, Guid reqId, CancellationToken cancellationToken)
     {
         // Product rule (2026-09-11): a caller requesting Entity gets routed to fixed_holistic
         // instead - see ReportTypeRouter's own doc comment. Everything below uses the RESOLVED
@@ -244,7 +268,7 @@ public static class RunEndpoints
         // request.Period) is what makes that key correctly per-dimension - see above.
         var runId = await enqueuer.EnqueueAsync(
             request.TenantId, reportType, request.Scope, effectivePeriod, callerUserId, cancellationToken,
-            requestedDimensions: requestedDimensions);
+            requestedDimensions: requestedDimensions, reqId: reqId.ToString());
 
         return new GeneratedReportUnit(dimension, reportType, "queued", runId, $"/api/insights/runs/{runId}/stream");
     }
@@ -342,13 +366,18 @@ public static class RunEndpoints
     private static async Task WriteFrameAsync(
         HttpContext http, string? eventName, InsightsRunStatus status, CancellationToken cancellationToken)
     {
+        // [CHANGED 2026-09-14, PRODUCT DECISION] Was {runId, status, stage, stagesComplete,
+        // stagesTotal, message} - the detailed 7-stage breakdown is now deliberately NOT sent to
+        // the customer-facing stream. status alone (queued/running/complete/failed) is the whole
+        // external contract now; internal stage detail stays internal (LangFuse/logs), same
+        // "internal diagnostics never reach the response body" stance §11.3 already applies to
+        // failure messages. InsightsRunStatus itself is UNCHANGED (still carries Stage/
+        // StagesComplete/StagesTotal) - only what this one endpoint puts on the wire changed, so
+        // nothing else that reads InsightsRunStatus needed touching.
         var payload = JsonSerializer.Serialize(new
         {
             runId = status.RunId,
             status = status.Status,
-            stage = status.Stage,
-            stagesComplete = status.StagesComplete,
-            stagesTotal = status.StagesTotal,
             // Present only on failure, and user-safe by construction - see InsightsRunStatus.
             message = status.Message,
         });

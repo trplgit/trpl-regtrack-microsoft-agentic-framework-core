@@ -101,19 +101,19 @@ public static partial class CoverageGridInjector
         sb.Append("""<div class="di-pane__head"><span class="di-secnum" aria-hidden="true">03</span><h2 class="di-pane__title">Key indicators</h2></div>""");
         sb.Append("""<div class="di-kpigrid"><article class="di-kpi di-kpi--span12">""")
           .Append("""<div class="di-kpi__head"><div class="di-kpi__headtext"><div class="di-kpi__eyebrow">Coverage</div>""")
-          .Append($"""<h3 class="di-kpi__title">{mappedStores} / {counts.Total} stores mapped &middot; one box per location</h3></div>""")
+          .Append($"""<h3 class="di-kpi__title">{mappedStores} / {counts.Total} locations mapped &middot; one box per location</h3></div>""")
           .Append($"""<span class="di-kpi__tag di-kpi__tag--{tone}"><span class="di-kpi__dot"></span>{toneLabel}</span></div>""")
           .Append("""<div class="di-kpi__pairs">""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Stores mapped</div><div class="di-kpi__pair-val tnum">{mappedStores}</div><div class="di-kpi__pair-sub">{mappedPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}% of {counts.Total} leaf stores</div></div>""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Ownerless obligations</div><div class="di-kpi__pair-val tnum">{totalOwnerless}</div><div class="di-kpi__pair-sub">{leafOwnerless} on leaf stores{(rollupOwnerless > 0 ? $" &middot; {rollupOwnerless} on corporate rollup" : "")}</div></div>""");
+          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Locations mapped</div><div class="di-kpi__pair-val tnum">{mappedStores}</div><div class="di-kpi__pair-sub">{mappedPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}% of {counts.Total} leaf locations</div></div>""")
+          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Ownerless obligations</div><div class="di-kpi__pair-val tnum">{totalOwnerless}</div><div class="di-kpi__pair-sub">{leafOwnerless} on leaf locations{(rollupOwnerless > 0 ? $" &middot; {rollupOwnerless} on corporate rollup" : "")}</div></div>""");
         // Peer-coverage gaps pair - OMITTED, not shown as a fake 0. UnderConfigured is always 0
         // today: no procedure computes a real obligation-COUNT peer norm yet (see
         // LocationCoverageClassifier's own doc comment). Render it the moment that ever changes.
         if (counts.UnderConfigured > 0)
             sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Peer-coverage gaps</div><div class="di-kpi__pair-val tnum">{counts.UnderConfigured}</div></div>""");
-        sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped stores</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
+        sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped locations</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
           .Append("</div>")
-          .Append($"""<p class="di-kpi__narr">Each box is one leaf store, coloured by status. Click a box to open its detail panel. Use the status chips to focus the grid.{(rollupOwnerless > 0 ? $" The corporate-entity rollup node (which holds {rollupOwnerless} ownerless obligations) is not a leaf store and so is not shown as a tile." : "")}</p>""")
+          .Append($"""<p class="di-kpi__narr">Each box is one leaf location, coloured by status. Click a box to open its detail panel. Use the status chips to focus the grid.{(rollupOwnerless > 0 ? $" The corporate-entity rollup node (which holds {rollupOwnerless} ownerless obligations) is not a leaf location and so is not shown as a tile." : "")}</p>""")
           .Append("</article></div>");
 
         sb.Append("""<div class="di-covwrap"><div class="di-covmap"><div class="di-covfilter" role="toolbar" aria-label="Coverage status counts">""")
@@ -163,7 +163,7 @@ public static partial class CoverageGridInjector
         {
             sb.Append("<div class=\"di-covregion\"><div class=\"di-covregion__name\">")
               .Append(WebUtility.HtmlEncode(region.Key))
-              .Append("<small>").Append(region.Count()).Append(" stores</small></div><div class=\"di-covgrid\">");
+              .Append("<small>").Append(region.Count()).Append(" locations</small></div><div class=\"di-covgrid\">");
 
             foreach (var row in region)
                 AppendTile(sb, row, region.Key);

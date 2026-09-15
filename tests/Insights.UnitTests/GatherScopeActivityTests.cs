@@ -24,11 +24,16 @@ public class GatherScopeActivityTests
         entity.Setup(r => r.GetTenantShapeAsync(29, It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new TenantShapeResult(29, 3, EntityCountShape.MultiEntity, 45.0m, ComparisonGrain.Apex, "balanced", []));
 
-        var activity = new GatherScopeActivity(entitlement.Object, scope.Object, entity.Object);
+        var tenants = new Mock<ITenantDirectoryRepository>();
+        tenants.Setup(r => r.IsEligibleAsync(38, 29, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EligibleTenant(29, "Acme Holdings", EntitlementTier.Paid, ScopeClass.TenantWide));
+
+        var activity = new GatherScopeActivity(entitlement.Object, scope.Object, entity.Object, tenants.Object);
         var result = await activity.RunAsync(new GatherScopeInput(38, 29));
 
         Assert.Equal(2, result.ScopePairs.Count);
         Assert.Equal("multi_entity", result.TenantShape);
+        Assert.Equal("Acme Holdings", result.TenantName);
     }
 
     [Fact]
@@ -42,7 +47,8 @@ public class GatherScopeActivityTests
         scope.Setup(r => r.GetScopePairsAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<ScopePair>());
 
-        var activity = new GatherScopeActivity(entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object);
+        var activity = new GatherScopeActivity(
+            entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object, new Mock<ITenantDirectoryRepository>().Object);
 
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() =>
             activity.RunAsync(new GatherScopeInput(38, 29)));
@@ -57,7 +63,8 @@ public class GatherScopeActivityTests
             .ReturnsAsync(new EntitlementGateResult(29, EntitlementTier.Paid, EntitlementDecision.ExitZeroCost, 0, "not entitled", false));
 
         var scope = new Mock<IScopeRepository>();
-        var activity = new GatherScopeActivity(entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object);
+        var activity = new GatherScopeActivity(
+            entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object, new Mock<ITenantDirectoryRepository>().Object);
 
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() =>
             activity.RunAsync(new GatherScopeInput(38, 29)));

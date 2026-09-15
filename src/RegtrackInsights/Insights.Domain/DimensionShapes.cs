@@ -307,6 +307,20 @@ public sealed record UsersControlTotals
     public decimal? TenantMedianOnTimePct { get; init; }
     public decimal? TenantMedianPerformerLoad { get; init; }
     public int InstancesWithSoleReviewer { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] Tenant-wide median of (completion date - due date) in days, performer's
+    /// own completed work only. Real ScheduleOn/Dated dates, confirmed live on tenant 1300.
+    /// Events with an implausible (bulk-migration/backdated) gap over 365 days are excluded from
+    /// this median - see <see cref="TimingOutliersExcluded"/>. Median, never a mean - see
+    /// sql/12_dimension_users.sql's own honesty note.
+    /// </summary>
+    public decimal? TenantMedianDaysEarlyLate { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] Count of completed events tenant-wide excluded from every
+    /// MedianDaysEarlyLate figure (tenant and per-user) for showing a gap over 365 days between
+    /// due date and completion date. Cite verbatim in the Completion timing tab's caveat note.
+    /// </summary>
+    public int TimingOutliersExcluded { get; init; }
 }
 
 /// <summary>
@@ -338,6 +352,31 @@ public sealed record UsersRow
     public int OnTimeEvents { get; init; }
     public decimal? OnTimePct { get; init; }
     public string? QuadrantOverlay { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] Median of (completion date - due date) in days over this user's own
+    /// completed performer work (real ScheduleOn/Dated dates) - negative = typically early,
+    /// positive = typically late. NULL means no qualifying completed event, never 0 - 0 is a
+    /// real "right on the due date" reading and must not be confused with "no data".
+    /// </summary>
+    public decimal? MedianDaysEarlyLate { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] How many completed events <see cref="MedianDaysEarlyLate"/> is drawn
+    /// from. NULL/0 means no reading - render templates must apply their own materiality floor
+    /// (this dimension's template uses >= 5) before surfacing the median as a finding.
+    /// </summary>
+    public int? TimingSampleSize { get; init; }
+    /// <summary>[ADDED 2026-09-13] Of <see cref="TimingSampleSize"/>, how many finished before the due date (DaysLate &lt; 0).</summary>
+    public int? EarlyCount { get; init; }
+    /// <summary>[ADDED 2026-09-13] Of <see cref="TimingSampleSize"/>, how many finished after the due date (DaysLate &gt; 0).</summary>
+    public int? LateCount { get; init; }
+    /// <summary>[ADDED 2026-09-13] Of <see cref="TimingSampleSize"/>, how many finished exactly on the due date (DaysLate = 0).</summary>
+    public int? OnTimeCount { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-13] % of <see cref="TimingSampleSize"/> that finished early. DATE-based
+    /// (DaysLate &lt; 0) - NOT the same population or definition as <see cref="OnTimePct"/>,
+    /// which is STATUS-based. Never conflate the two.
+    /// </summary>
+    public decimal? EarlyPct { get; init; }
     public string? Flags { get; init; }
 }
 

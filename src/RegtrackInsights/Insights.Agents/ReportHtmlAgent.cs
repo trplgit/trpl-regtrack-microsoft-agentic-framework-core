@@ -60,6 +60,15 @@ public interface IReportHtmlAgent
     /// values") - the fix is giving it the real numbers, not asking it to guess harder. Null/empty
     /// for every report type that does not need it.
     /// </summary>
+    /// <param name="previousVisualIssue">
+    /// [ADDED 2026-09-14] Set only on a retry triggered by VisionQaActivity finding a real visual
+    /// defect in the PREVIOUS render attempt (overlap, content escaping its container, broken/
+    /// collapsed structure) - the vision model's own concrete description of exactly what was
+    /// wrong, so this attempt can fix that specific problem rather than blindly re-rolling the
+    /// same prompt. Null on a first attempt, and null on a retry triggered by a structure-gate
+    /// violation instead (that gate's own diagnostics are not user-safe/agent-safe text - see
+    /// PublishGateResult's own doc comment on why gate internals never travel past the gate).
+    /// </param>
     Task<AgentCallResult<string>> RenderAsync(
         CompositionPlan plan,
         NarrativeResult narrative,
@@ -70,6 +79,7 @@ public interface IReportHtmlAgent
         IReadOnlyList<LocationRow>? locationRows = null,
         IReadOnlyDictionary<string, string>? dimensionRowsJson = null,
         IReadOnlyDictionary<string, string>? dimensionControlTotalsJson = null,
+        string? previousVisualIssue = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -91,6 +101,7 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
         IReadOnlyList<LocationRow>? locationRows = null,
         IReadOnlyDictionary<string, string>? dimensionRowsJson = null,
         IReadOnlyDictionary<string, string>? dimensionControlTotalsJson = null,
+        string? previousVisualIssue = null,
         CancellationToken cancellationToken = default)
     {
         // Each value is already a real JSON string (extracted from the dimension's own serialized
@@ -119,7 +130,13 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
             },
             JsonOptions);
 
-        var message = "Render this approved report as a single self-contained HTML document:\n" + payload;
+        // [ADDED 2026-09-14] Prepended, not folded into the JSON payload, so it reads as a direct
+        // instruction rather than another data field to describe in prose.
+        var visualIssuePrefix = string.IsNullOrWhiteSpace(previousVisualIssue)
+            ? ""
+            : $"Your previous attempt had this specific real visual problem - fix it while keeping everything else correct: {previousVisualIssue}\n\n";
+
+        var message = visualIssuePrefix + "Render this approved report as a single self-contained HTML document:\n" + payload;
 
         var response = await agent.RunAsync(message, cancellationToken: cancellationToken);
 

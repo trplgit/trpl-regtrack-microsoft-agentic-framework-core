@@ -306,6 +306,18 @@ BEGIN
     UNION ALL SELECT 'under_configured', @eligible, (SELECT COUNT(*) FROM #rows WHERE UnderConfigured = 1);
     UPDATE #detector SET FlaggedPct = CASE WHEN Eligible=0 THEN 0 ELSE 100.0*Flagged/Eligible END;
     UPDATE #detector SET EmitMode = CASE WHEN Flagged=0 THEN 'none' WHEN FlaggedPct>20.0 THEN 'aggregate' ELSE 'individual' END;
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*-- 10. ASSERTIONS ---------------------------------------------------*/
@@ -389,7 +401,20 @@ BEGIN
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*-- 12. DATA QUALITY - the declared limits of the method ---------------*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'review_candidates_only'               THEN 'Gaps'
+                   WHEN 'headcount_unavailable'                THEN 'Gaps'
+                   WHEN 'shops_act_area_mechanism'             THEN 'GapsReducedConfidence'
+                   WHEN 'unknown_node_types'                   THEN 'UnknownNodeType'
+                   WHEN 'peer_groups_too_small'                THEN 'PeerGroupsTooSmall'
+                   WHEN 'recent_state_amendments'              THEN 'Gaps'
+                   WHEN 'branch_store_labelling'               THEN 'LeafBranchesInScope'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
         SELECT 'review_candidates_only' AS Issue,
                N'Every gap is an inference from peer configuration, not a confirmed obligation. No statutory-applicability rules table exists.' AS Detail
         UNION ALL

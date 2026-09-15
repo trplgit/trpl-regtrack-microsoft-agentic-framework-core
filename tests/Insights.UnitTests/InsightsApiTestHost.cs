@@ -218,8 +218,19 @@ internal sealed class FakeReportRequestRepository : IReportRequestRepository
     public List<(Guid ReqId, IReadOnlyList<string> RunIds)> SaveCalls { get; } = [];
     private readonly Dictionary<Guid, List<string>> _byReqId = [];
 
+    /// <summary>
+    /// [ADDED 2026-09-11] Simulates the real INSERT-permission-denied found live: the write
+    /// account was granted GeneratedReport/InsightsTenantTokenUsage only, before
+    /// InsightsReportRequest existed. Set to make SaveAsync throw, proving the generate endpoint's
+    /// try/catch keeps the reports enqueued rather than 500ing the whole request over this.
+    /// </summary>
+    public bool ThrowOnSave { get; set; }
+
     public Task SaveAsync(Guid reqId, IReadOnlyList<string> runIds, CancellationToken cancellationToken = default)
     {
+        if (ThrowOnSave)
+            throw new InvalidOperationException("INSERT permission was denied on the object 'InsightsReportRequest'.");
+
         SaveCalls.Add((reqId, runIds));
         if (!_byReqId.TryGetValue(reqId, out var existing))
             _byReqId[reqId] = existing = [];
@@ -234,14 +245,14 @@ internal sealed class FakeReportRequestRepository : IReportRequestRepository
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
 internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
 {
-    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions)> Calls { get; } = [];
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions, string? ReqId)> Calls { get; } = [];
 
     public Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null)
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null)
     {
-        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions));
+        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId));
         return Task.FromResult(runIdToReturn);
     }
 }

@@ -105,4 +105,41 @@ public class PersistActivityTests
 
         blobWriter.Verify(w => w.WriteAsync(envelope, It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    /// <summary>
+    /// [ADDED 2026-09-12] Temp workaround for a real, ongoing Key Vault access failure (confirmed
+    /// live: KeyVaultErrorException "Forbidden", unrelated to VPN/IP - see ProbeKeyVaultEncryptionAsync)
+    /// that would otherwise lose every already-billed report at the very last step. When
+    /// localFallbackDirectory is set, this bypasses encrypt/blob/SQL entirely - plaintext HTML
+    /// straight to disk. Default null/empty means completely unchanged behaviour (the two tests
+    /// above). Revert by clearing Reports:LocalFallbackDirectory once Key Vault access is fixed.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_LocalFallbackDirectorySet_WritesPlaintextToDisk_SkipsEncryptorBlobAndDb()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "persist-fallback-test-" + Guid.NewGuid());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var encryptor = new Mock<IReportEncryptor>();
+            var blobWriter = new Mock<IReportBlobWriter>();
+            await using var db = NewInMemoryDb();
+            var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), localFallbackDirectory: tempDir);
+
+            var result = await activity.RunAsync(new PersistInput(
+                "<html>real tenant data</html>", 1008, "fixed_holistic", "90day", "tenant", 12116));
+
+            encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            blobWriter.Verify(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()), Times.Never);
+            Assert.Empty(db.GeneratedReports);
+
+            Assert.NotNull(result.LocalFilePath);
+            Assert.True(File.Exists(result.LocalFilePath));
+            Assert.Equal("<html>real tenant data</html>", await File.ReadAllTextAsync(result.LocalFilePath!));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

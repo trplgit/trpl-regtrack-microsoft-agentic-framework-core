@@ -165,6 +165,18 @@ BEGIN
     UPDATE #detector SET FlaggedPct = CASE WHEN Eligible = 0 THEN 0 ELSE 100.0 * Flagged / Eligible END;
     UPDATE #detector SET EmitMode = CASE WHEN Flagged = 0 THEN 'none' ELSE 'individual' END;
 
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*-- 7. TYPED ASSERTIONS ----------------------------------------------*/
@@ -209,7 +221,16 @@ BEGIN
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*-- 9. DATA-QUALITY NOTES ----------------------------------------------*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'window'                               THEN 'OnTimePctCurrentFY'
+                   WHEN 'no_completed_events_in_window'        THEN 'OnTimePctCurrentFY'
+                   WHEN 'no_year_over_year_comparator'         THEN 'YoyChangePP'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail
     FROM (
         SELECT 'window' AS Issue,
                CONCAT(N'On-time rate computed over the caller-supplied window ',

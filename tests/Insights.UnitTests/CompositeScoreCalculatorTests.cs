@@ -36,12 +36,12 @@ public sealed class CompositeScoreCalculatorTests
         };
         var licence = new LicenceControlTotals { TenantLapsedPct = 25m };
 
-        var result = CompositeScoreCalculator.Compute(risk, location, users, licence, tenantOnTimePct: 70m);
+        var result = CompositeScoreCalculator.Compute(risk, location, users, licence, tenantOnTimePct: 70m, evidenceReviewTrailPct: null);
 
         Assert.NotNull(result.Score);
         Assert.InRange(result.Score!.Value, 0, 100);
         Assert.Equal(7, result.Components.Count);
-        // Evidence has no source yet - always null in this pass.
+        // No EvidenceIntegrity dimension passed this call - degrades to null like any other missing input.
         Assert.Null(result.Components.Single(c => c.DomainKpi == "evidence_integrity").Score);
     }
 
@@ -53,7 +53,7 @@ public sealed class CompositeScoreCalculatorTests
         var licence = new LicenceControlTotals { TenantLapsedPct = 10m };
         var users = new List<UsersRow> { new() { UserID = 1, PerformerInstances = 10, ReviewerInstances = 10 } };
 
-        var result = CompositeScoreCalculator.Compute(risk: null, location: null, users, licence, tenantOnTimePct: null);
+        var result = CompositeScoreCalculator.Compute(risk: null, location: null, users, licence, tenantOnTimePct: null, evidenceReviewTrailPct: null);
 
         Assert.Null(result.Components.Single(c => c.DomainKpi == "risk_weighted").Score);
         Assert.Null(result.Components.Single(c => c.DomainKpi == "coverage").Score);
@@ -66,7 +66,7 @@ public sealed class CompositeScoreCalculatorTests
     public void Compute_NothingScoreable_ThrowsRatherThanFabricatingABand()
     {
         var ex = Record.Exception(() =>
-            CompositeScoreCalculator.Compute(risk: null, location: null, usersRows: null, licenceTotals: null, tenantOnTimePct: null));
+            CompositeScoreCalculator.Compute(risk: null, location: null, usersRows: null, licenceTotals: null, tenantOnTimePct: null, evidenceReviewTrailPct: null));
 
         Assert.IsType<InvalidOperationException>(ex);
     }
@@ -75,9 +75,20 @@ public sealed class CompositeScoreCalculatorTests
     public void Compute_LicenceScore_IsInverseOfLapsedPct()
     {
         var licence = new LicenceControlTotals { TenantLapsedPct = 30m };
-        var result = CompositeScoreCalculator.Compute(risk: null, location: null, usersRows: null, licence, tenantOnTimePct: null);
+        var result = CompositeScoreCalculator.Compute(risk: null, location: null, usersRows: null, licence, tenantOnTimePct: null, evidenceReviewTrailPct: null);
 
         Assert.Equal(70m, result.Components.Single(c => c.DomainKpi == "licence").Score);
+    }
+
+    [Fact]
+    public void Compute_EvidenceScore_UsesReviewTrailPctDirectly_NoInversion()
+    {
+        // Unlike Risk/Licence (100 - x), a higher review-trail % is already "better" - no inversion.
+        var result = CompositeScoreCalculator.Compute(
+            risk: null, location: null, usersRows: null, licenceTotals: null,
+            tenantOnTimePct: null, evidenceReviewTrailPct: 16m);
+
+        Assert.Equal(16m, result.Components.Single(c => c.DomainKpi == "evidence_integrity").Score);
     }
 
     [Fact]
@@ -95,7 +106,7 @@ public sealed class CompositeScoreCalculatorTests
             [], [], [], []);
         var licence = new LicenceControlTotals { TenantLapsedPct = 0m };
 
-        var result = CompositeScoreCalculator.Compute(risk, location: null, usersRows: null, licence, tenantOnTimePct: null);
+        var result = CompositeScoreCalculator.Compute(risk, location: null, usersRows: null, licence, tenantOnTimePct: null, evidenceReviewTrailPct: null);
 
         Assert.Equal(80m, result.Components.Single(c => c.DomainKpi == "risk_weighted").Score);
     }
@@ -110,7 +121,7 @@ public sealed class CompositeScoreCalculatorTests
             new LocationRow { BranchID = 4, Flags = "no_obligations_configured" }); // zero credit
         var licence = new LicenceControlTotals { TenantLapsedPct = 0m };
 
-        var result = CompositeScoreCalculator.Compute(risk: null, location, usersRows: null, licence, tenantOnTimePct: null);
+        var result = CompositeScoreCalculator.Compute(risk: null, location, usersRows: null, licence, tenantOnTimePct: null, evidenceReviewTrailPct: null);
 
         // (2 healthy + 0.5*1 ownerless) / 4 * 100 = 62.5
         Assert.Equal(62.5m, result.Components.Single(c => c.DomainKpi == "coverage").Score);

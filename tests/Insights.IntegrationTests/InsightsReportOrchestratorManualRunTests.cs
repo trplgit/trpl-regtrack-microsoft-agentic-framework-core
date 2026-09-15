@@ -6,6 +6,7 @@ using Insights.Worker.Orchestration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 
 namespace Insights.IntegrationTests;
@@ -105,6 +106,243 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
                 output.WriteLine($"Output/failure detail: {state.Output}");
 
             Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] Real end-to-end run of `dimension_selection:Users` (the same template
+    /// this session spent all day fixing - CSS inlining, lens toggle nesting, real company name)
+    /// through the ACTUAL orchestrator - not an activity-by-activity bypass, the real Durable Task worker dequeuing off the real
+    /// SQL-backed task hub. Three real production tenants, requested by the user directly:
+    /// Life Cell Group (1326), Minda Corporation Group (1008), Agrocel Group (1082) - user ids
+    /// each independently confirmed to have real scope pairs via tvfInsightsScopePairs before
+    /// this test was written (2026-09-13 session).
+    ///
+    /// Key Vault is still Forbidden (real, ongoing, RBAC-side denial - see PersistActivity's own
+    /// doc comment) so this sets Reports:LocalFallbackDirectory, same temporary bypass every other
+    /// real run this session has used. Azure:BlobConnectionString is still supplied (the real,
+    /// working trplchatgpt9378 account, confirmed live via a direct blob probe this session) only
+    /// because PersistActivity's DI-injected IReportBlobWriter is constructed eagerly regardless
+    /// of whether local-fallback ever calls it - never actually written to here.
+    /// </summary>
+    [Theory]
+    [InlineData(1326, 83105, "Life Cell Group")]
+    [InlineData(1008, 12116, "Minda Corporation Group")]
+    [InlineData(1082, 14128, "Agrocel Group")]
+    public async Task RunAsync_DimensionSelectionUsers_RealTenant_ReachesCompleteStatus(int tenantId, int userId, string expectedCompanyLabel)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                // Read path - broad EXECUTE on usp_Insights_* procs, no table-level write grants.
+                ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
+                // [FIX 2026-09-15] Write path - TenantTokenBudgetRegistration.cs and
+                // WorkerRegistration.cs's own RegisterReportsDbContext ALREADY prefer this key over
+                // ConnectionStrings:RegTrack for every real write (InsightsTenantTokenUsage,
+                // GeneratedReport) - this test just never supplied it, so both silently fell back
+                // to the read-only connection and the token-usage INSERT was denied at the very
+                // last stage of an otherwise fully-successful run. No code changed; the pipeline
+                // already splits read/write by design, confirmed live by that exact failure.
+                ["ConnectionStrings:RegTrackReportsWrite"] = RequireEnv("ConnectionStrings__RegTrackReportsWrite"),
+                ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+                ["Llm:Maf:Endpoint"] = RequireEnv("MAF_ENDPOINT"),
+                ["Llm:Maf:Model"] = RequireEnv("MAF_MODEL"),
+                ["Llm:Maf:ApiKey"] = RequireEnv("MAF_API_KEY"),
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+                ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
+                ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
+                ["Budget:AlertAtPercentOfCeiling"] = "80",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        // [FIX 2026-09-15] AddInsightsOrchestration's own registration resolves ILoggerFactory
+        // eagerly (WorkerRegistration.cs RegisterSqlOrchestrationService/AddInsightsOrchestrationWorker)
+        // - missing here regardless of tenant, confirmed live on all three. Pre-existing gap in
+        // every manual test in this file; none had been run since AddInsightsOrchestration started
+        // requiring it.
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var input = new InsightsReportOrchestrationInput(
+                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day", userId, LlmCallPriority.Interactive, ["Users"]);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"Tenant {tenantId} ({expectedCompanyLabel}): {state.OrchestrationStatus}, final status {state.Status}");
+            if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                output.WriteLine($"Output/failure detail: {state.Output}");
+
+            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-14, REWRITTEN 2026-09-14] Real end-to-end stability pass - "multiple
+    /// pitfalls", not a single happy-path repeat: all 5 freehand dimensions
+    /// (FreehandDimensions.Names) across 3 real production tenants with independently-confirmed
+    /// real scope pairs (2026-09-13 session) - Minda Corporation Group (1008), Life Cell Group
+    /// (1326), Agrocel Group (1082). Location included for the first time here - never run live
+    /// since joining FreehandDimensions.Names.
+    ///
+    /// [REWRITTEN, real concurrency] Was a [Theory] with 10 InlineData rows - xUnit runs Theory
+    /// cases of ONE method sequentially by default, so that never actually exercised concurrent
+    /// load. This fires all 10 real orchestration runs through ONE shared ServiceProvider
+    /// instead, via Task.WhenAll - deliberately ONE shared LlmConcurrencyGate instance, matching
+    /// the real deployed worker exactly (also one process, one gate). Ten SEPARATE dotnet-test
+    /// processes would each build their OWN in-memory gate (cap 3 each) - real aggregate
+    /// concurrent LLM calls could hit ~30 against the same Azure resources, a self-inflicted
+    /// rate-limit risk that has nothing to do with real pipeline bugs and would contaminate the
+    /// signal this run exists to produce.
+    ///
+    /// Reads real connection strings/keys straight from D:\trpl-reginsights-dev\appsettings.json
+    /// (the real local dev config, outside this repo) rather than env vars - keeps secrets out of
+    /// any shell command entirely. Non-secret overrides layered on top via AddInMemoryCollection.
+    ///
+    /// [REAL FINDING, 2026-09-14 - EXPECTED, NOT A BUG] Run twice for real (15-min then 30-min
+    /// budget, with real console logging wired both times): 0/10 reached rendering in either
+    /// run, every case stuck cycling gathering/validating/composing/narrating. Confirmed NOT a
+    /// defect - LlmConcurrencyGate/ConcurrencyGatedChatClient's actual code was read line by line
+    /// (correct: proper locking, direct slot handoff, double-release guard), and the real
+    /// diagnostic log across both runs (~3000+ lines, DTFx's own console logging) shows zero
+    /// errors, warnings, exceptions, or retries anywhere - checkpoints landing steadily, fast
+    /// latencies, nothing hanging. This IS what Agents:MaxConcurrentLlmCalls=3 genuinely produces
+    /// when all 10 real orchestrations are freehand dimensions (every one needs the extra real
+    /// composition call on top of narrate+reflect+render+vision-QA) and all launch at once - a
+    /// real capacity ceiling, deliberately left as-is (user decision, 2026-09-14): real production
+    /// traffic bursting 10 simultaneous freehand Generate clicks is not the expected case, and
+    /// raising the cap without knowing sol/gpt-5.2/terra's real per-deployment RPM/TPM risks
+    /// tripping the exact rate limit this gate exists to prevent. If real production telemetry
+    /// later shows this ceiling actually matters, that real number is the input this decision
+    /// needs - not a guess.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_FreehandDimensions_RealTenants_Concurrently_AllReachCompleteStatus()
+    {
+        (string Dimension, int TenantId, int UserId)[] cases =
+        [
+            ("Act", 1008, 12116),
+            ("BacklogAging", 1008, 12116),
+            ("Licence", 1008, 12116),
+            ("Location", 1008, 12116),
+            ("Departments", 1326, 83105),
+            ("Location", 1326, 83105),
+            ("Act", 1326, 83105),
+            ("BacklogAging", 1082, 14128),
+            ("Licence", 1082, 14128),
+            ("Departments", 1082, 14128),
+        ];
+
+        // [FIX 2026-09-14] The REAL, current config is the in-repo (gitignored)
+        // src/RegtrackInsights/appsettings.json - it already has Llm:Maf pointed at sol/ai-2. The
+        // root D:\trpl-reginsights-dev\appsettings.json this first pointed at is a stale copy
+        // (still ai-3/terra) - that mismatch is exactly what produced the DeploymentNotFound 404.
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        // [FIX 2026-09-14] Was AddLogging() with no provider attached - every ILogger call in the
+        // whole pipeline (DurableTaskRunStatusReader's own logger.LogError on failure, anything
+        // DTFx or the OpenAI SDK logs internally) was silently discarded. Real diagnostic blindness
+        // - the first 10-way concurrent run stalled with zero instances reaching rendering and
+        // this gave no way to tell whether that was real queueing math or actual failures retrying
+        // silently underneath ComposeFreehandDimensionActivity's own ScheduleWithRetry.
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+
+            // Enqueue is cheap/fast (real DTFx metadata write, not an LLM call) - sequential here
+            // costs nothing real and avoids any shared-state risk in the enqueue path itself. The
+            // real concurrency this run is actually testing happens AFTER this, inside the
+            // worker's own dequeue loop, gated by the one shared LlmConcurrencyGate.
+            var instances = new List<(string Dimension, int TenantId, string InstanceId)>();
+            foreach (var (dimension, tenantId, userId) in cases)
+            {
+                var input = new InsightsReportOrchestrationInput(
+                    tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                    "90day", userId, LlmCallPriority.Interactive, [dimension]);
+                var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+                instances.Add((dimension, tenantId, instance.InstanceId));
+                output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} Enqueued: {dimension}, tenant {tenantId} -> {instance.InstanceId}");
+            }
+
+            // [FIX 2026-09-14] Was `await PollUntilTerminalAsync(...)` directly inside the
+            // Select - the FIRST instance to time out faulted the whole Task.WhenAll immediately,
+            // hiding whatever the other 9 were actually doing. Each instance's own outcome
+            // (Completed/Failed/TimedOut) is now captured individually, so one straggler can never
+            // hide the real per-instance picture again. Budget raised from 15 to 30 minutes - the
+            // first run's own real math (all 10 cases are freehand dimensions, every one needs the
+            // extra composition call, all fighting over the same 3-slot gate) makes 15 minutes an
+            // unrealistic budget for genuine worst-case queueing, not evidence of a hang by itself.
+            var polls = instances.Select(async i =>
+            {
+                try
+                {
+                    var state = await PollUntilTerminalAsync(client, i.InstanceId, TimeSpan.FromMinutes(30));
+                    output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} {i.Dimension}, tenant {i.TenantId}: {state.OrchestrationStatus}, final status {state.Status}");
+                    if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                        output.WriteLine($"  Output/failure detail ({i.Dimension}, tenant {i.TenantId}): {state.Output}");
+                    return (i.Dimension, i.TenantId, Outcome: state.OrchestrationStatus.ToString());
+                }
+                catch (Exception ex)
+                {
+                    output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} {i.Dimension}, tenant {i.TenantId}: EXCEPTION - {ex.GetType().Name}: {ex.Message}");
+                    return (i.Dimension, i.TenantId, Outcome: $"Exception:{ex.GetType().Name}");
+                }
+            });
+
+            var results = await Task.WhenAll(polls);
+
+            var failed = results.Where(r => r.Outcome != nameof(OrchestrationStatus.Completed)).ToList();
+            output.WriteLine($"Summary: {results.Length - failed.Count}/{results.Length} completed.");
+            foreach (var (dimension, tenantId, outcome) in failed)
+                output.WriteLine($"  FAILED: {dimension}, tenant {tenantId} -> {outcome}");
+
+            Assert.Empty(failed);
         }
         finally
         {

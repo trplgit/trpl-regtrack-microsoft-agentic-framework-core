@@ -131,10 +131,12 @@ cooldown check for `(scope, resolvedReportType, period+dimension)` → if open, 
 one-active-run-per-key lock and enqueue; if closed, report `"cooldown"` for that dimension only.
 **Best-effort, not all-or-nothing** — one dimension on cooldown does not block the others.
 
-**202 Accepted** — always `{ "reports": [...] }`, one entry per requested dimension (or a single
-one-element array for `fixed_holistic`/a single dimension — the shape never changes):
+**202 Accepted** — `{ "reqId": "...", "reports": [...] }`, one `reports` entry per requested
+dimension (or a single one-element array for `fixed_holistic`/a single dimension — that array
+shape never changes):
 ```jsonc
 {
+  "reqId": "b6e2a1c4-9f3d-4e7a-8b2c-1d5f6a7e8b9c",
   "reports": [
     { "dimension": "Location", "reportType": "dimension_selection", "status": "queued",
       "runId": "insights-1490-...", "streamUrl": "/api/insights/runs/insights-1490-.../stream" },
@@ -145,6 +147,12 @@ one-element array for `fixed_holistic`/a single dimension — the shape never ch
   ]
 }
 ```
+
+> **[ADDED 2026-09-11] `reqId`** — one umbrella id for the whole fan-out, grouping every unit that
+> actually queued (a unit on cooldown has no `runId`, so it is not grouped). Poll this ONE id
+> instead of tracking every `runId` yourself (endpoint 4a below). If every requested dimension hit
+> cooldown, `reqId` groups zero runs and its own stream 404s — same as any reqId nobody ever
+> enqueued anything under.
 
 | Field | Present when | Notes |
 |---|---|---|
@@ -178,11 +186,14 @@ store, not the connection).
 
 **Event payload**
 ```jsonc
-{ "runId": "t1490-…", "status": "running",
-  "stage": "composing", "stagesComplete": 4, "stagesTotal": 7 }
+{ "runId": "t1490-…", "status": "running" }
 ```
 
-- `stage`: `gathering` → `validating` → `composing` → `narrating` → `verifying` → `rendering` → `complete`
+> **[CHANGED 2026-09-14]** Was `{runId, status, stage, stagesComplete, stagesTotal}` - the
+> detailed 7-stage breakdown is no longer sent on the wire, deliberately (product decision, not
+> a regression). `status` alone is the whole external contract now.
+
+- `status`: `queued` | `running` | `complete` | `failed`.
 - Terminal `status`: `complete` | `failed`.
 - On `failed`, `message` is **user-safe only** — never gate diagnostics. Internal detail goes to
   LangFuse / Grafana.
@@ -190,6 +201,40 @@ store, not the connection).
 
 `runId` is not a bare id — `InsightsRunId.TryParse` recovers the tenant from it, and the endpoint
 authorises against that before streaming.
+
+---
+
+## 4a. Fan-out progress (combined, one id) — [ADDED 2026-09-11]
+
+```
+GET /api/insights/requests/{reqId}/stream
+```
+
+Auth required. Same SSE shape and 15-minute connection cap as endpoint 4, but rolls up EVERY
+sub-run under one `reqId` (from endpoint 3's response) into one combined status — poll this
+instead of tracking N `runId`s yourself when a request named several dimensions.
+
+**Event payload**
+```jsonc
+{ "reqId": "b6e2a1c4-...", "status": "in_progress" }
+```
+
+- `status`: `queued` | `in_progress` | `completed` | `error` — **worst-first roll-up**:
+  `error` (any sub-run failed) > `in_progress` (any sub-run running) > `queued` (rest still queued,
+  nothing running yet) > `completed` (every sub-run done). One failed dimension shows `error`
+  immediately, even while siblings are still running or already succeeded — it is never hidden
+  behind an optimistic status.
+- Terminal `status`: `completed` | `error`.
+- No `stage`/per-dimension detail on this endpoint by design — poll the individual `runId`
+  (endpoint 4) for a specific dimension's own stage if you need that.
+
+**Auth ordering differs from endpoint 4, deliberately:** `reqId` is `Guid.NewGuid()` — unlike
+`runId`, it is not derived from the tenant and is not guessable — so existence is checked BEFORE
+eligibility. An unknown `reqId` is a 404 regardless of who asks; a known `reqId` for a tenant the
+caller is not eligible for is a 403.
+
+**404** — `REPORT_NOT_VISIBLE`, no such `reqId` (nothing was ever grouped under it).
+**403** — `TENANT_NOT_ELIGIBLE`.
 
 ---
 

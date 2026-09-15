@@ -292,6 +292,18 @@ BEGIN
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
 
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*=====================================================================
@@ -392,7 +404,7 @@ BEGIN
     INSERT #find
     SELECT 'F-OWNGAP','high',
            CONCAT(N'', ScopeLabel, N' carries ', CAST(Value AS INT),
-                  N' obligations with no assigned owner, more than the Critical tier'),
+                  N' obligations with no INSTANCE-LEVEL owner, more than the Critical tier'),
            AssertionId,
            N'Attention follows severity; ownership does not. The coverage gap is in the middle tiers, not the top one.'
     FROM #assert WHERE AssertionId LIKE 'A-OWNGAP-[0-9]%';
@@ -410,7 +422,25 @@ BEGIN
     /*=====================================================================
       11. DATA QUALITY - declared, never silent
     =====================================================================*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'NoInstanceOwner'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'critical_imprisonment_overlap'        THEN 'ImprisonmentOnCriticalPct'
+                   WHEN 'risk_levels_unused'                   THEN 'RiskLevelsWithObligations'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL

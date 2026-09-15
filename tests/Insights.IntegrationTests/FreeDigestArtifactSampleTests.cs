@@ -63,8 +63,8 @@ public sealed class FreeDigestArtifactSampleTests(ITestOutputHelper output)
         services.AddInsightsFreeDigest(configuration);
         // ResolveDigestRecipientsActivity/ComposeDigestActivity are normally registered by
         // WorkerRegistration's TaskHubWorker wiring (AddInsightsOrchestration), not by
-        // AddInsightsFreeDigest alone - added here directly, same reasoning ModelComparisonLabTests
-        // uses for calling activities as plain objects instead of through DTFx.
+        // AddInsightsFreeDigest alone - added here directly so they can be called as plain
+        // objects instead of through DTFx.
         services.AddTransient<ResolveDigestRecipientsActivity>();
         services.AddTransient<ComposeDigestActivity>();
         services.AddSingleton<FreeDigestMetrics>();

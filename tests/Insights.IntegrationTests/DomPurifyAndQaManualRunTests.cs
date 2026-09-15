@@ -213,13 +213,15 @@ public sealed class DomPurifyAndQaManualRunTests(ITestOutputHelper output)
 
         var screenshotPath = Environment.GetEnvironmentVariable("REPORT_QA_SCREENSHOT_PATH")
             ?? Path.Combine(Path.GetDirectoryName(inputPath)!, "rendered-report-screenshot.png");
-        await File.WriteAllBytesAsync(screenshotPath, qaResult.Screenshot);
-        output.WriteLine($"Screenshot written to: {screenshotPath} ({qaResult.Screenshot.Length} bytes)");
+        // [CHANGED 2026-09-14] ReportQaResult.Screenshot -> Screenshots (one per real tab now) -
+        // this manual test only ever wanted the default view, so [0].
+        await File.WriteAllBytesAsync(screenshotPath, qaResult.Screenshots[0]);
+        output.WriteLine($"Screenshot written to: {screenshotPath} ({qaResult.Screenshots[0].Length} bytes)");
 
         // Cosmetic QA is advisory, never a security control (Presentation:RunPlaywrightQa,
         // ReportQaResult's own doc comment) - the assertions here only prove the pipeline ran
         // and produced a real result, not that the report is issue-free.
         Assert.NotNull(sanitized);
-        Assert.NotEmpty(qaResult.Screenshot);
+        Assert.NotEmpty(qaResult.Screenshots);
     }
 }

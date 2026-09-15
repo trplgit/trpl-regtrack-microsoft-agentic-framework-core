@@ -109,6 +109,7 @@ public static class WorkerRegistration
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
         services.AddTransient<ComputeScoreActivity>();
+        services.AddTransient<ComposeFreehandDimensionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
         services.AddTransient<PublishGateActivity>();
@@ -124,8 +125,17 @@ public static class WorkerRegistration
         services.AddTransient<NormalizeActivity>();
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient<ValidateUserDimensionStructureActivity>();
         services.AddTransient<PlaywrightQaActivity>();
-        services.AddTransient<PersistActivity>();
+        services.AddTransient<VisionQaActivity>();
+        // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
+        // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
+        // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
+        services.AddTransient(sp => new PersistActivity(
+            sp.GetRequiredService<IReportEncryptor>(),
+            sp.GetRequiredService<IReportBlobWriter>(),
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            configuration["Reports:LocalFallbackDirectory"]));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
         RegisterReportCodec(services, configuration);
@@ -180,7 +190,7 @@ public static class WorkerRegistration
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
-                ActivityCreator<ComputeScoreActivity>(sp),
+                ActivityCreator<ComputeScoreActivity>(sp), ActivityCreator<ComposeFreehandDimensionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
@@ -189,7 +199,8 @@ public static class WorkerRegistration
                 ActivityCreator<InjectForwardLookActivity>(sp), ActivityCreator<InjectForwardLookCssActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
-                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
+                ActivityCreator<ValidateUserDimensionStructureActivity>(sp),
+                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
                 ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),

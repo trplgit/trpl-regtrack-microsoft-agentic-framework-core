@@ -116,6 +116,42 @@ public sealed class GenerateReportEndpointTests
         var saveCall = Assert.Single(requests.SaveCalls);
         Assert.Equal(reqId, saveCall.ReqId);
         Assert.Equal([runId], saveCall.RunIds);
+
+        // [ADDED 2026-09-14] The SAME reqId returned to the caller and saved into the grouping
+        // table must also reach the orchestration input (InsightsReportOrchestrationInput.ReqId,
+        // via IInsightsRunEnqueuer.EnqueueAsync's reqId param) - that is what lets
+        // LangfuseSessionTaggingChatClient tag every real LLM call this run makes with it.
+        var enqueueCall = Assert.Single(enqueuer.Calls);
+        Assert.Equal(reqId.ToString(), enqueueCall.ReqId);
+    }
+
+    /// <summary>
+    /// [BUG FOUND LIVE, 2026-09-11] The write-capable DB account was granted GeneratedReport/
+    /// InsightsTenantTokenUsage only, before InsightsReportRequest existed - this INSERT 500'd
+    /// the ENTIRE generate call (report already genuinely enqueued) until the grant catches up.
+    /// The reqId grouping is a convenience on top of real, already-enqueued reports; its own
+    /// failure must never take those down with it.
+    /// </summary>
+    [Fact]
+    public async Task Generate_StillReturns202AndTheRealReports_WhenSavingTheReqIdGroupingFails()
+    {
+        const string runId = "insights-1490-abc123";
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer(runId);
+        var requests = new FakeReportRequestRepository { ThrowOnSave = true };
+
+        var client = await InsightsApiTestHost.StartAsync(
+            Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown(), requests: requests);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", Request());
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(json.RootElement.TryGetProperty("reqId", out _));
+        var reports = json.RootElement.GetProperty("reports");
+        Assert.Equal(runId, reports[0].GetProperty("runId").GetString());
     }
 
     /// <summary>

@@ -439,6 +439,39 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             {
                 plan = FixedHolisticComposition.Build();
             }
+            else if (input.ReportType == DimensionSelectionComposition.ReportType
+                && input.RequestedDimensions is [var soleDimension] && FreehandDimensions.Names.Contains(soleDimension))
+            {
+                // [ADDED 2026-09-14] Real LLM composition for exactly these four dimensions -
+                // see FreehandDimensions' own doc comment for why. dimensions.DimensionResults[d]
+                // already carries Rows/ControlTotals/DataQuality as one serialized JSON object
+                // (DimensionResult<,>'s own shape) - same raw source dimensionRowsJson/
+                // dimensionControlTotalsJson extract from further below for render, pulled here
+                // too since composition needs it earlier in the pipeline.
+                // [ADDED 2026-09-14, STABILITY REVIEW] Real LLM call, same transient-failure risk
+                // class as RenderHtmlActivity - a network blip or one-off malformed response used
+                // to fail the WHOLE run outright here, no retry, unlike render. Same RetryOptions
+                // shape as render's own ScheduleWithRetry: 3 attempts, exponential backoff, never
+                // retrying a deterministic OrchestrationRefusedException (this activity does not
+                // throw that today, but the filter is what keeps it true if that ever changes -
+                // same reasoning as render's own comment on this exact pattern).
+                var dimensionJson = System.Text.Json.JsonDocument.Parse(dimensions.DimensionResults[soleDimension]).RootElement;
+                var composeResult = await context.ScheduleWithRetry<ComposeFreehandDimensionOutput>(
+                    typeof(ComposeFreehandDimensionActivity).Name, "1.0",
+                    new RetryOptions(TimeSpan.FromSeconds(3), maxNumberOfAttempts: 3)
+                    {
+                        BackoffCoefficient = 2.0,
+                        Handle = ex => ex is not OrchestrationRefusedException,
+                    },
+                    new ComposeFreehandDimensionInput(
+                        soleDimension, dimensions.Assertions, dimensions.Findings,
+                        dimensionJson.GetProperty("Rows").GetRawText(),
+                        dimensionJson.GetProperty("ControlTotals").GetRawText(),
+                        dimensionJson.GetProperty("DataQuality").GetRawText(),
+                        input.Priority, input.ReqId));
+                ChargeAndCheck(composeResult.TotalTokens);
+                plan = composeResult.Plan;
+            }
             else if (input.ReportType == DimensionSelectionComposition.ReportType)
             {
                 plan = DimensionSelectionComposition.Build(input.RequestedDimensions!);
@@ -464,20 +497,20 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
             SetStage(InsightsRunStage.Narrating);
             var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority));
+                new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority, input.ReqId));
             ChargeAndCheck(narrateResult.TotalTokens);
             var narrative = narrateResult.Narrative;
 
             for (var i = 0; i < maxReflectionIterations; i++)
             {
                 var reflection = await context.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0",
-                    new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings, input.Priority));
+                    new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings, input.Priority, input.ReqId));
                 ChargeAndCheck(reflection.TotalTokens);
                 if (reflection.Result.Verdict == ReflectionVerdict.Approve)
                     break;
 
                 var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority));
+                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority, input.ReqId));
                 ChargeAndCheck(revised.TotalTokens);
                 narrative = revised.Narrative;
             }
@@ -575,6 +608,15 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             const int maxRenderAttempts = 3;
             ValidateFixedHolisticStructureOutput? structureChecked = null;
 
+            // [ADDED 2026-09-14] Set from VisionQaActivity's own OUTPUT (a real ScheduleTask
+            // result, safely replayable) right before throwing on a real visual defect below -
+            // deliberately NOT read back out of the caught exception on the next iteration, per
+            // the [BUG FOUND LIVE, 2026-09-07] note further down: a custom exception's own content
+            // does not reliably survive a DTFx replay pass, so deriving this value from it would
+            // be a real non-determinism risk. Reading it from the activity output instead is safe
+            // because that is exactly what DTFx replay re-derives identically from history.
+            string? previousVisualIssue = null;
+
             for (var renderAttempt = 1; renderAttempt <= maxRenderAttempts; renderAttempt++)
             {
                 // [BUG FOUND LIVE, 2026-09-01] Render is the one call in this whole pipeline with
@@ -599,7 +641,10 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         BackoffCoefficient = 2.0,
                         Handle = ex => ex is not OrchestrationRefusedException,
                     },
-                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, $"Tenant {input.TenantId}", input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson));
+                    new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson,
+                        DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null,
+                        ReqId: input.ReqId,
+                        PreviousVisualIssue: previousVisualIssue));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
@@ -726,6 +771,43 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 {
                     structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
                         typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html, input.ReportType));
+
+                    // [ADDED 2026-09-12] Same retry-on-refusal treatment as the fixed_holistic gate
+                    // just above - a real render for dimension_selection:Users ignored the rewritten
+                    // 4-tab/donut/role-strip template entirely (see UserDimensionStructureGate's own
+                    // doc comment). No-op for every other report shape (guarded on ReportType +
+                    // RequestedDimensions inside the activity itself).
+                    // [ADDED 2026-09-15] UsersRowsJson - lets the activity tell the gate whether a
+                    // real qualifying row exists (TimingSampleSize >= 5) for the completion-timing
+                    // info line check. Same dimensionRowsJson already built above for RenderHtmlInput -
+                    // no new fetch, just threaded one hop further.
+                    var usersRowsJson = dimensionRowsJson?.GetValueOrDefault("Users");
+                    var userStructureChecked = await context.ScheduleTask<ValidateUserDimensionStructureOutput>(
+                        typeof(ValidateUserDimensionStructureActivity).Name, "1.0",
+                        new ValidateUserDimensionStructureInput(structureChecked.Html, input.ReportType, input.RequestedDimensions, usersRowsJson));
+                    structureChecked = new ValidateFixedHolisticStructureOutput(userStructureChecked.Html);
+
+                    // [ADDED 2026-09-14] Real vision-model gate - runs inside this SAME
+                    // render-retry loop, same "structural defect the render agent can plausibly
+                    // fix on a fresh attempt" reasoning the structure gate above already
+                    // documents. Deliberately AFTER the structure gate (cheaper, deterministic
+                    // checks run first) and still inside the try, so a real visual defect reuses
+                    // the exact same catch-and-retry mechanism.
+                    var visionResult = await context.ScheduleTask<VisionQaOutput>(
+                        typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
+                    ChargeAndCheck(visionResult.TotalTokens);
+
+                    if (visionResult.HasVisualDefect)
+                    {
+                        // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
+                        // see this loop's own doc comment on why that matters for replay safety.
+                        previousVisualIssue = visionResult.Issue;
+                        throw new OrchestrationRefusedException(
+                            "VISUAL_DEFECT_DETECTED",
+                            "We couldn't generate this report to our accuracy standard. Our team has been notified.",
+                            internalDiagnostics: [visionResult.Issue ?? "Vision QA flagged a defect with no issue text."]);
+                    }
+
                     break;
                 }
                 catch (Exception) when (renderAttempt < maxRenderAttempts)

@@ -225,6 +225,18 @@ BEGIN
                            WHEN FlaggedPct > 20.0  THEN 'aggregate'
                            ELSE 'individual' END;
 
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
     SELECT 'detector_policy' AS ResultSet, * FROM #detector;
 
     /*-- 9. ASSERTIONS ---------------------------------------------------*/
@@ -295,15 +307,19 @@ BEGIN
 
     INSERT #find
     SELECT 'F-OWN','high',
-           CONCAT(N'', ScopeLabel, N' has ', Value, N'% of obligations with no assigned owner'),
-           AssertionId, NULL
+           CONCAT(N'', ScopeLabel, N' has ', Value, N'% of obligations with no INSTANCE-LEVEL owner'),
+           AssertionId,
+           N'NOT "nobody is doing this" - most of these have a performer named on each occurrence. '
+         + N'They lack an owner on the obligation itself.'
     FROM #assert WHERE AssertionId LIKE 'A-OWN-[0-9]%';
 
     INSERT #find
     SELECT 'F-OWN-AGG','high',
            CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' departments (', VsComparatorPP,
-                  N'%) have 10%+ of obligations with no assigned owner'),
-           AssertionId, NULL
+                  N'%) have 10%+ of obligations with no INSTANCE-LEVEL owner'),
+           AssertionId,
+           N'NOT "nobody is doing this" - most of these have a performer named on each occurrence. '
+         + N'They lack an owner on the obligation itself.'
     FROM #assert WHERE AssertionId = 'A-OWN-AGG';
 
     INSERT #find
@@ -322,9 +338,27 @@ BEGIN
     SELECT 'findings' AS ResultSet, * FROM #find;
 
     /*-- 11. DATA QUALITY ------------------------------------------------*/
-    SELECT 'data_quality' AS ResultSet, Issue, Detail FROM (
-        SELECT 'flow_metric_drift' AS Issue,
-               N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'TenantNoInstanceOwnerPct'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'unassigned_department'                THEN 'UnassignedPct'
+                   WHEN 'departments_unused'                   THEN 'DepartmentsWithObligations'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
+        SELECT 'flow_metric_drift',
+               N'Overdue is a live figure and moves between runs; stock metrics are stable.'
         UNION ALL
         SELECT 'unassigned_department',
                CONCAT(N'', @unassigned, N' obligation(s) in this scope carry no department, or a department '

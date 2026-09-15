@@ -31,7 +31,7 @@ unbuilt features, not defects.
 | `kpis.licence`, `forward_pipeline` | **Not yet built** |
 | `kpis.evidence_integrity` | **Not yet built** — see §3.7, it is mostly a data gap |
 | `overall_health` composite | **Not yet built** — model is illustrative, §2 |
-| `priority_actions` | **Not yet built** — this is the composition agent's job |
+| `priority_actions` | **Not yet built** — see 2026-09-11 note below (no composition agent exists anymore to hand this to; a cross-dimension ranking algorithm needs to be built deterministically or as its own narrow agent step) |
 | `ledger` | **Not yet built** — belongs with report persistence |
 
 ---
@@ -213,8 +213,16 @@ Notable design decisions worth carrying forward:
 
 **`priority_actions`** — 6 ranked items, each with `action`, `target_population`,
 `effort`, `linked_kpi`, `outcome_metric`, `detail`. Every one names a **measurable
-outcome** ("top-3 performer share below 40%"), not an aspiration. In the built
-engine this is the **composition agent's** output, not a stored proc's.
+outcome** ("top-3 performer share below 40%"), not an aspiration.
+
+> **[UPDATE 2026-09-11]** The composition agent this section originally
+> attributed `priority_actions` to no longer exists — `ComposeActivity`/
+> `ReflectOnCompositionActivity` were removed; both shipped report types build
+> block structure deterministically (`FixedHolisticComposition.Build()` /
+> `DimensionSelectionComposition.Build()`). `priority_actions` stays **not yet
+> built**; when it is, it needs a real owner — either a deterministic
+> cross-dimension ranking proc, or a narrow, purpose-built agent step, not the
+> now-deleted general composition agent.
 
 **`caveats`** — four, each qualifying interpretation. The first is the most
 important:
@@ -242,7 +250,7 @@ so a re-run can be recognised as superseding an earlier one. Maps onto the
 | `by_user` | Users dimension (five facets) |
 | `risk_weighted` | Risk dimension |
 | `backlog`, `timeliness` | Dictionary-driven overdue / timeliness metrics |
-| `priority_actions` | Composition + narrative agents |
+| `priority_actions` | Not yet built — composition agent removed 2026-09-11, needs a new owner (see §4 note) |
 | `caveats` | `data_quality` result set |
 | `ledger` | `GeneratedReport` index row |
 | `overall_health` | **Nothing — not yet specified** |
