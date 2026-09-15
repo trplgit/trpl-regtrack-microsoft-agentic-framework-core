@@ -27,9 +27,9 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
     /// with an empty string, which would otherwise fail open).
     /// </summary>
     public async Task<string> RenderHtmlForArtifactAsync(
-        string body, string tenantName, DateTime weekEnding, string upgradeUrl, CancellationToken cancellationToken = default)
+        string body, string tenantName, DateTime weekEnding, string upgradeUrl, string? portalUrl = null, CancellationToken cancellationToken = default)
     {
-        var html = await RenderHtmlAsync(body, tenantName, weekEnding, upgradeUrl, UnsubscribeSentinel, cancellationToken);
+        var html = await RenderHtmlAsync(body, tenantName, weekEnding, upgradeUrl, UnsubscribeSentinel, portalUrl, cancellationToken);
 
         // Unsubscribe link removed from digest.html - the sentinel no longer appears in the
         // rendered shell, so the exactly-once assertion below would always throw. Commented out
@@ -79,7 +79,9 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
         return Substitute(template, TokensFor(aggregates, recipientName, weekEnding));
     }
 
-    public async Task<string> RenderHtmlAsync(string body, string tenantName, DateTime weekEnding, string upgradeUrl, string unsubscribeUrl, CancellationToken cancellationToken = default)
+    public async Task<string> RenderHtmlAsync(
+        string body, string tenantName, DateTime weekEnding, string upgradeUrl, string unsubscribeUrl,
+        string? portalUrl = null, CancellationToken cancellationToken = default)
     {
         var template = await ReadTemplateAsync("digest.html", cancellationToken);
         var tokens = new Dictionary<string, string>
@@ -89,6 +91,7 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
             ["WeekEnding"] = weekEnding.ToString("d MMM yyyy"),
             ["UpgradeUrl"] = upgradeUrl,
             ["UnsubscribeUrl"] = unsubscribeUrl,
+            ["PortalUrl"] = portalUrl ?? string.Empty,
         };
         return Substitute(template, tokens);
     }

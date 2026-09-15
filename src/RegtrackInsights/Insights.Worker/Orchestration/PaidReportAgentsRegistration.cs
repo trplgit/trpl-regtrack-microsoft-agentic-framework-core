@@ -1,9 +1,13 @@
+#pragma warning disable OPENAI001 // ResponseReasoningEffortLevel - experimental in this SDK version, same pragma MafAgentFactory already carries.
+
 using Insights.Agents;
+using Insights.Domain;
 using Insights.Presentation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Playwright;
+using OpenAI.Responses;
 
 namespace Insights.Worker.Orchestration;
 
@@ -21,6 +25,32 @@ public static class PaidReportAgentsRegistration
         var model = Require(configuration, "Llm:Maf:Model");
         var apiKey = Require(configuration, "Llm:Maf:ApiKey");
         var promptDirectory = Require(configuration, "Agents:PromptDirectory");
+
+        // [ADDED 2026-09-14, CORRECTED 2026-09-14] The four FreehandDimensions agents (composition
+        // + their four render overrides) deliberately use a DIFFERENT deployment (sol) than every
+        // other agent this file registers, and a configurable reasoning effort - explicit product
+        // decision to be able to tune it without a code change ("play with reasoning levels").
+        // [BUG FOUND LIVE] First wired assuming sol shared Llm:Maf's endpoint/key (same Azure AI
+        // Foundry project, different deployment name only) - confirmed WRONG via a real run: sol
+        // 404s (DeploymentNotFound) on trpl-prod-saas-ai-3 (Llm:Maf's endpoint), because it is
+        // actually deployed on a DIFFERENT resource, trpl-prod-saas-ai-2. Endpoint/ApiKey are now
+        // independently configurable (FreehandDimensions:Endpoint/ApiKey), each falling back to
+        // Llm:Maf's own value only so a fresh environment with nothing configured still starts -
+        // that fallback will keep 404ing until FreehandDimensions:Endpoint/ApiKey are actually set.
+        var freehandEndpoint = configuration["FreehandDimensions:Endpoint"] is { Length: > 0 } fe ? fe : endpoint;
+        var freehandApiKey = configuration["FreehandDimensions:ApiKey"] is { Length: > 0 } fk ? fk : apiKey;
+        var freehandModel = configuration["FreehandDimensions:Model"] is { Length: > 0 } fm ? fm : "gpt-5.6-sol";
+        var freehandReasoningEffort = configuration["FreehandDimensions:ReasoningEffort"] is { Length: > 0 } fre
+            ? Enum.Parse<ResponseReasoningEffortLevel>(fre, ignoreCase: true)
+            : ResponseReasoningEffortLevel.High;
+
+        // [ADDED 2026-09-14] Vision QA's own deployment - a real, different Azure resource again
+        // (trpl-prod-saas-ai-3, not ai-2/sol or the shared Llm:Maf one), same "confirm before
+        // wiring, do not assume it shares an endpoint" lesson FreehandDimensions' own [BUG FOUND
+        // LIVE] note already paid for once tonight.
+        var visionQaEndpoint = Require(configuration, "Llm:VisionQa:Endpoint");
+        var visionQaModel = Require(configuration, "Llm:VisionQa:Model");
+        var visionQaApiKey = Require(configuration, "Llm:VisionQa:ApiKey");
 
         /*  Item 17 - cost instrumentation. Registered as one singleton exposed under two service
             types so the agents depend on the ILlmUsageRecorder contract while anything that needs
@@ -72,6 +102,30 @@ public static class PaidReportAgentsRegistration
         // build their CompositionPlan deterministically in C# (FixedHolisticComposition.Build /
         // DimensionSelectionComposition.Build), zero LLM calls, so nothing replaces this.
 
+        // [ADDED 2026-09-14] Real LLM composition for FreehandDimensions.Names - see that class's
+        // doc comment. One agent per dimension (each gets its own prompt, since real fields/traps
+        // differ per dimension), keyed by dimension name, same dictionary-not-keyed-DI reasoning
+        // as the render dictionary below.
+        services.AddSingleton<IReadOnlyDictionary<string, IFreehandDimensionCompositionAgent>>(sp =>
+        {
+            var usage = sp.GetRequiredService<ILlmUsageRecorder>();
+            var gate = sp.GetService<LlmConcurrencyGate>();
+
+            IFreehandDimensionCompositionAgent Build(string dimension, string promptFile) =>
+                new MafFreehandDimensionCompositionAgent(MafAgentFactory.CreateJsonAgent(
+                    freehandEndpoint, freehandModel, freehandApiKey, $"FreehandComposition{dimension}Agent", $"Decides structure/hero/emphasis for a freehand {dimension} insight from real tenant data.",
+                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate, freehandReasoningEffort));
+
+            return new Dictionary<string, IFreehandDimensionCompositionAgent>
+            {
+                ["Act"] = Build("Act", "02_composition_freehand_act.md"),
+                ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging.md"),
+                ["Departments"] = Build("Departments", "02_composition_freehand_departments.md"),
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence.md"),
+                ["Location"] = Build("Location", "02_composition_freehand_location.md"),
+            };
+        });
+
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",
             LoadPromptSync(sp, "03_narrative.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
@@ -79,6 +133,14 @@ public static class PaidReportAgentsRegistration
         services.AddSingleton<INarrativeReflectionAgent>(sp => new MafNarrativeReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
             LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+
+        // [ADDED 2026-09-14] Real vision-model gate inside the render-retry loop - see
+        // VisionQaActivity's own doc comment for why this is a real gate, not advisory like
+        // PlaywrightQaActivity. CreateJsonAgent, not CreateTextAgent - the output contract is
+        // {has_visual_defect, issue}, same JSON-mode reasoning as every other structured agent.
+        services.AddSingleton<IVisionQaAgent>(sp => new MafVisionQaAgent(MafAgentFactory.CreateJsonAgent(
+            visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
+            LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
@@ -101,10 +163,19 @@ public static class PaidReportAgentsRegistration
             var usage = sp.GetRequiredService<ILlmUsageRecorder>();
             var gate = sp.GetService<LlmConcurrencyGate>();
 
-            IReportHtmlAgent Build(string name, string description, string promptFile) =>
+            // [TRAP] `modelOverride is null ? null : freehandReasoningEffort` looks equivalent but
+            // is NOT: ResponseReasoningEffortLevel has an implicit conversion FROM string, so the
+            // compiler resolves that ternary's common type as the non-nullable struct itself
+            // (preferring the string-conversion path over wrapping in Nullable<T>) and tries to
+            // implicitly-convert the null LITERAL through THAT operator - crashing at runtime with
+            // ArgumentNullException deep inside the SDK, not a compile error. Confirmed via an
+            // isolated repro against the pinned OpenAI 2.11.0 package. The explicit cast forces the
+            // nullable target type instead.
+            IReportHtmlAgent Build(string name, string description, string promptFile, string? modelOverride = null) =>
                 new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
-                    endpoint, model, apiKey, name, description,
-                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate));
+                    modelOverride is null ? endpoint : freehandEndpoint, modelOverride ?? model, modelOverride is null ? apiKey : freehandApiKey, name, description,
+                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate,
+                    modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort));
 
             return new Dictionary<string, IReportHtmlAgent>
             {
@@ -119,11 +190,15 @@ public static class PaidReportAgentsRegistration
                 // AFTER the generic dimension_selection prompt above was built on Trent's design -
                 // Location gets its own specific-key override here rather than changing the
                 // generic prompt (which still serves every dimension without its own specific
-                // key, e.g. Nature/Entity/Risk/Act/Internal/Event, on Trent's system for now -
-                // flagged as a real, not-yet-closed gap, not a silent inconsistency).
+                // key, e.g. Nature/Risk/Internal/Event, on Trent's system for now - flagged as a
+                // real, not-yet-closed gap, not a silent inconsistency; NOT part of v1's release
+                // scope - see the freehand-dimensions-v1-scope memory).
+                // [REPLACED 2026-09-14] Location joined FreehandDimensions.Names the same day as
+                // v1's scope was confirmed - same reasoning as the Departments/BacklogAging/Act/
+                // Licence entries below: real LLM composition ahead of render, sol deployment.
                 ["dimension_selection:Location"] = Build(
-                    "DimensionSelectionLocationReportHtmlAgent", "Renders a single-Location-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_location.md"),
+                    "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_location.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Dimension-specific override for a
                 // single-"Users" request - RenderHtmlActivity's own doc comment explains the
                 // "{ReportType}:{DimensionName}" key-preference rule this depends on. First built
@@ -142,23 +217,24 @@ public static class PaidReportAgentsRegistration
                 // Angular-mirroring version carried (both honest not-available blocks, no real
                 // backing) don't exist as structural slots in Sambram's single-section shape at
                 // all any more - the gap is gone along with the tabs, not papered over.
+                // [REPLACED 2026-09-14] Departments/BacklogAging/Act/Licence no longer use
+                // Sambram's fixed single-section template - FreehandDimensions.Names now gives
+                // each its own real LLM composition step (ComposeFreehandDimensionActivity) ahead
+                // of render, so the render agent gets a genuinely agent-decided structure/hero to
+                // build from rather than a fixed document shape. Deliberately on the sol deployment
+                // (freehandModel), not the shared `model` every other agent in this file uses.
                 ["dimension_selection:Departments"] = Build(
-                    "DimensionSelectionDepartmentReportHtmlAgent", "Renders a single-Departments-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_department.md"),
-                // [ADDED 2026-09-10] Three more dimension-specific overrides, built the same way as
-                // the three above: Sambram's single-section visual system, content/analysis
-                // mimicked from the matching Trent report (03 Backlog Aging / 05 Acts & Regulators
-                // / 06 Licences). Each prompt file carries its own "Real vs. NOT AVAILABLE" table
-                // grounded in the real SQL (sql/22, sql/11, sql/21) - never guessed.
+                    "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_department.md", freehandModel),
                 ["dimension_selection:BacklogAging"] = Build(
-                    "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a single-BacklogAging-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_backlogaging.md"),
+                    "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_backlogaging.md", freehandModel),
                 ["dimension_selection:Act"] = Build(
-                    "DimensionSelectionActReportHtmlAgent", "Renders a single-Act-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_act.md"),
+                    "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_act.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
-                    "DimensionSelectionLicenceReportHtmlAgent", "Renders a single-Licence-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_licence.md"),
+                    "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_licence.md", freehandModel),
             };
         });
 

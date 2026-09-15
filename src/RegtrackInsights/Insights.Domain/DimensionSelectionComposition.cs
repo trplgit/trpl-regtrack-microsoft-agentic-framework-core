@@ -14,8 +14,8 @@ namespace Insights.Domain;
 /// RunEndpoints.cs before anything is enqueued (see that file's own doc comment). This function
 /// itself is unchanged and still technically accepts a multi-dimension list - every real
 /// production caller now only ever passes exactly one, since fan-out already split the request
-/// before InsightsReportOrchestrator ever sees it. Multi-dimension calls remain valid for
-/// ad-hoc/lab use (see ModelComparisonLabTests), just no longer how the shipped product works.
+/// before InsightsReportOrchestrator ever sees it. Multi-dimension calls remain a valid shape
+/// for ad-hoc/manual use, just no longer how the shipped product works.
 ///
 /// Zero LLM involvement in structure, same reasoning as FixedHolisticComposition: which
 /// dimensions appear and in what order is not a judgement call once the caller has already named

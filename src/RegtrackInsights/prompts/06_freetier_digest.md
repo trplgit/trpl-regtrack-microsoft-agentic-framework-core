@@ -87,7 +87,7 @@ scary-but-accurate figure, then stop.
 
 Close by naming the gap plainly — no hard sell:
 
-> "This digest shows what is coming. RegInsights Pro shows which locations, which
+> "This digest shows what is coming. RegInsights Ultimate shows which locations, which
 > people, and which laws are driving it."
 
 ## Tone
@@ -122,7 +122,7 @@ per paragraph, never more, and never in the closing paragraph.
 >
 > **214 completions** were recorded last week across the estate.
 >
-> This digest shows what is coming. RegInsights Pro shows which locations, which
+> This digest shows what is coming. RegInsights Ultimate shows which locations, which
 > people, and which laws are driving it — and what to fix first.
 
 Note what the example does **not** do: no ratio, no "overdue", no location

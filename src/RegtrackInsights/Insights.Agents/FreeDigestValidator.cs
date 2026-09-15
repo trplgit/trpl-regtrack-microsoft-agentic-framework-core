@@ -21,7 +21,7 @@ public static partial class FreeDigestValidator
         Design doc Section 10.7 REQUIRES the email to end on the conversion gap, and both the
         prompt and templates/digest_fallback.txt supply the exact sentence:
 
-            "RegInsights Pro shows which locations, which people, and which laws are driving it."
+            "RegInsights Ultimate shows which locations, which people, and which laws are driving it."
 
         That sentence names no location - it names the CATEGORY of thing the paid tier reveals,
         which is the entire sales pitch. Scanning it for the word "location" rejected the one
@@ -33,7 +33,7 @@ public static partial class FreeDigestValidator
 
         The closing is therefore removed before the leak scan runs. Matched loosely so line
         wrapping and the optional "- and what to fix first" tail do not defeat it.            */
-    [GeneratedRegex(@"RegInsights\s+Pro\s+shows\s+which\s+locations\s*,\s*which\s+people\s*,\s*and\s+which\s+laws\s+are\s+driving\s+it",
+    [GeneratedRegex(@"RegInsights\s+Ultimate\s+shows\s+which\s+locations\s*,\s*which\s+people\s*,\s*and\s+which\s+laws\s+are\s+driving\s+it",
         RegexOptions.IgnoreCase)]
     private static partial Regex SanctionedClosing();
 
@@ -70,7 +70,24 @@ public static partial class FreeDigestValidator
     private static readonly string[] WordBoundaryLeakMarkers = ["branch", "location", "office", "department"];
     private static readonly string[] CapitalisedSuffixLeakMarkers = ["Ltd", "Pvt", "Limited"];
 
-    public static FreeDigestValidationResult Validate(string body, FreeDigestAggregates aggregates)
+    /// <summary>
+    /// <paramref name="extraAllowedNumbers"/> covers numbers that are truthful but do not appear
+    /// literally as a field in <paramref name="aggregates"/> - currently only the insight-JSON
+    /// lane's <c>InsightFocus.Remainder</c> (<c>Denominator - Value</c>, computed deterministically
+    /// before the LLM is ever called, same as <c>Value</c>/<c>Denominator</c> themselves).
+    ///
+    /// [BUG FOUND LIVE, 2026-09-13] Before this parameter existed, ComposeInsightJsonActivity called
+    /// this method with just the 13 aggregates - so ANY narrative that used Remainder (exactly what
+    /// 07_insight_json_narrative.md instructs it to do for the "concrete before -> after" framing)
+    /// was rejected as "inventing" a number, even though Remainder is arithmetic already done for
+    /// the model, not something it computed. This was not an occasional false positive - it fired on
+    /// every case where Remainder did not coincidentally equal one of the 13 aggregates or a window
+    /// label, so the LLM path was burning real tokens and then discarding the result almost every
+    /// time. The free-tier email lane (ComposeDigestActivity) has no Remainder concept and does not
+    /// pass this parameter - its behaviour is unchanged.
+    /// </summary>
+    public static FreeDigestValidationResult Validate(
+        string body, FreeDigestAggregates aggregates, IEnumerable<int>? extraAllowedNumbers = null)
     {
         var failures = new List<string>();
 
@@ -99,6 +116,7 @@ public static partial class FreeDigestValidator
 
         var allowedNumbers = AllowedWindowLabels
             .Concat(AggregateValues(aggregates))
+            .Concat(extraAllowedNumbers ?? [])
             .Select(n => n.ToString())
             .ToHashSet();
 

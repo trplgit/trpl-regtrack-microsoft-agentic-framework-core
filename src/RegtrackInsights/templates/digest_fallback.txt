@@ -6,5 +6,5 @@ Looking further out, the next 30 days carry **{{DueNext30}} {{DueNext30Word}}** 
 
 **{{CompletedLast7}} {{CompletedWord}}** {{CompletedVerb}} recorded last week across the estate.
 
-This digest shows what is coming. RegInsights Pro shows which locations,
+This digest shows what is coming. RegInsights Ultimate shows which locations,
 which people, and which laws are driving it.

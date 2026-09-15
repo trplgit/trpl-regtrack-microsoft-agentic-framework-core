@@ -109,6 +109,7 @@ public static class WorkerRegistration
         services.AddTransient<GatherScopeActivity>();
         services.AddTransient<FetchDimensionsActivity>();
         services.AddTransient<ComputeScoreActivity>();
+        services.AddTransient<ComposeFreehandDimensionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
         services.AddTransient<PublishGateActivity>();
@@ -126,6 +127,7 @@ public static class WorkerRegistration
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
         services.AddTransient<ValidateUserDimensionStructureActivity>();
         services.AddTransient<PlaywrightQaActivity>();
+        services.AddTransient<VisionQaActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
         // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
         // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
@@ -154,6 +156,13 @@ public static class WorkerRegistration
         services.AddTransient<SendDigestFromArtifactActivity>();
         services.AddTransient<MarkDigestArtifactDispatchedActivity>();
 
+        // ADR-0002 (2026-09-11) - the per-user insight JSON lane, Sunday-only, sibling to the
+        // GENERATE phase above. ComposeInsightJsonActivity has no special construction needs, so
+        // it registers here like every other activity; PostInsightJsonActivity is registered by
+        // AddInsightsFreeDigest instead (it needs the named insights-insight-api HttpClient),
+        // which runs before this method - see Program.cs's registration order.
+        services.AddTransient<ComposeInsightJsonActivity>();
+
         services.AddSingleton(sp =>
         {
             var service = sp.GetRequiredService<SqlOrchestrationService>();
@@ -175,11 +184,13 @@ public static class WorkerRegistration
                 FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)));
             worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
                 FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)));
+            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
+                FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)));
 
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
-                ActivityCreator<ComputeScoreActivity>(sp),
+                ActivityCreator<ComputeScoreActivity>(sp), ActivityCreator<ComposeFreehandDimensionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
@@ -189,12 +200,13 @@ public static class WorkerRegistration
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
                 ActivityCreator<ValidateUserDimensionStructureActivity>(sp),
-                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
+                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
                 ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),
                 ActivityCreator<FetchDigestArtifactActivity>(sp), ActivityCreator<SendDigestFromArtifactActivity>(sp),
-                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp));
+                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp),
+                ActivityCreator<ComposeInsightJsonActivity>(sp), ActivityCreator<PostInsightJsonActivity>(sp));
 
             return worker;
         });

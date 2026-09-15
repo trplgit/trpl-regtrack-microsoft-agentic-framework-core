@@ -10,7 +10,21 @@ public sealed record RenderHtmlInput(
     LlmCallPriority Priority = LlmCallPriority.Interactive,
     IReadOnlyList<LocationRow>? LocationRows = null,
     IReadOnlyDictionary<string, string>? DimensionRowsJson = null,
-    IReadOnlyDictionary<string, string>? DimensionControlTotalsJson = null);
+    IReadOnlyDictionary<string, string>? DimensionControlTotalsJson = null,
+    // [ADDED 2026-09-14] The requested dimension name for a single-dimension dimension_selection
+    // request - null for every other case. Previously the specific-agent key was derived from
+    // Plan.Blocks[0].Block, which only ever worked because DimensionSelectionComposition.Build
+    // happened to produce exactly one block named after the dimension. That coupling breaks for a
+    // freehand-composed plan (ComposeFreehandDimensionActivity can genuinely produce several named
+    // blocks - hero + supporting sections, the agent's own judgement call), so the specific key is
+    // now driven directly by which dimension was requested, never by how many blocks composition
+    // decided to produce.
+    string? DimensionName = null,
+    string? ReqId = null,
+    // [ADDED 2026-09-14] Set only when this attempt is a retry triggered by VisionQaActivity
+    // finding a real visual defect in the PREVIOUS attempt - see IReportHtmlAgent.RenderAsync's
+    // own doc comment on this same field.
+    string? PreviousVisualIssue = null);
 public sealed record RenderHtmlOutput(string Html, long TotalTokens);
 
 /// <summary>
@@ -55,10 +69,10 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         // Design spec (docs/superpowers/specs/2026-09-09-per-dimension-render-template-design.md
         // Sec.4.1) - a single-dimension request tries a dimension-specific key first
         // ("{ReportType}:{DimensionName}"), falling back to the plain ReportType key when no
-        // dimension-specific template is registered yet (today's state for every dimension).
-        // The dimension name comes from the plan itself (Plan.Blocks[0].Block) - never a new
-        // field that could drift from what the plan actually says.
-        var specificKey = input.Plan.Blocks.Count == 1 ? $"{input.ReportType}:{input.Plan.Blocks[0].Block}" : null;
+        // dimension-specific template is registered yet. Keyed off input.DimensionName (the
+        // requested dimension), not the plan's own block shape - see RenderHtmlInput's own doc
+        // comment on why that coupling was removed.
+        var specificKey = input.DimensionName is not null ? $"{input.ReportType}:{input.DimensionName}" : null;
 
         if ((specificKey is null || !htmlAgentsByReportType.TryGetValue(specificKey, out var htmlAgent))
             && !htmlAgentsByReportType.TryGetValue(input.ReportType, out htmlAgent))
@@ -68,9 +82,10 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
         }
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
+        using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
-            input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, CancellationToken.None);
+            input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.PreviousVisualIssue, CancellationToken.None);
 
         if (runId is not null)
         {

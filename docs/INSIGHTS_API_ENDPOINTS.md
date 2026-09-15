@@ -186,11 +186,14 @@ store, not the connection).
 
 **Event payload**
 ```jsonc
-{ "runId": "t1490-…", "status": "running",
-  "stage": "composing", "stagesComplete": 4, "stagesTotal": 7 }
+{ "runId": "t1490-…", "status": "running" }
 ```
 
-- `stage`: `gathering` → `validating` → `composing` → `narrating` → `verifying` → `rendering` → `complete`
+> **[CHANGED 2026-09-14]** Was `{runId, status, stage, stagesComplete, stagesTotal}` - the
+> detailed 7-stage breakdown is no longer sent on the wire, deliberately (product decision, not
+> a regression). `status` alone is the whole external contract now.
+
+- `status`: `queued` | `running` | `complete` | `failed`.
 - Terminal `status`: `complete` | `failed`.
 - On `failed`, `message` is **user-safe only** — never gate diagnostics. Internal detail goes to
   LangFuse / Grafana.

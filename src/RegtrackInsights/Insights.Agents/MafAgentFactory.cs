@@ -30,18 +30,25 @@ public static class MafAgentFactory
     /// </summary>
     public const string ChatClientActivitySourceName = "Microsoft.Extensions.AI";
 
-    /// <summary>For agents whose contract is a JSON object (composition, reflection, narrative).</summary>
-    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
+    /// <summary>
+    /// For agents whose contract is a JSON object (composition, reflection, narrative).
+    /// <paramref name="reasoningEffort"/> [ADDED 2026-09-14] is optional and defaults to null
+    /// (no ReasoningOptions set - unchanged behavior for every existing caller). Freehand
+    /// dimension composition is the first caller to pass a real value, deliberately configurable
+    /// (FreehandDimensions:ReasoningEffort) rather than hardcoded, so it can be tuned without a
+    /// code change.
+    /// </summary>
+    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// </summary>
-    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate);
+    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate)
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort)
     {
         /*  [BUG FOUND LIVE, 2026-09-01] The SDK's own default NetworkTimeout is 100 seconds
             (ClientPipelineOptions.NetworkTimeout - confirmed via the SDK's own
@@ -58,6 +65,11 @@ public static class MafAgentFactory
             comparably large payload, so this is set here, once, for all of them - not per-caller.  */
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), new OpenAIClientOptions { Endpoint = new Uri(endpoint), NetworkTimeout = TimeSpan.FromMinutes(5) });
         IChatClient chatClient = client.GetResponsesClient().AsIChatClient(model);
+
+        /*  [ADDED 2026-09-14] MUST be INNERMOST of all - i.e. wrapped by OpenTelemetryChatClient,
+            not wrapping it - so it runs WHILE the real chat span (Activity.Current) is active, not
+            before it starts or after it has already stopped. See its own doc comment. */
+        chatClient = new LangfuseSessionTaggingChatClient(chatClient);
 
         /*  OTel wraps the RAW client, innermost, so its span timing measures the actual network
             call rather than anything the layers above add. EnableSensitiveData gates whether the
@@ -93,21 +105,31 @@ public static class MafAgentFactory
                 // confirmed via reflection, not guessed (2026-08-20).
                 Instructions = instructions,
                 ResponseFormat = responseFormat,
-                // [ADDED 2026-09-14] Requests the vendor's own summary of its reasoning for every
-                // call this factory makes (composition reflection/narrative/reflection/report
-                // HTML - the five agents this factory builds). ReasoningSummaryVerbosity is the
-                // ONLY supported way to get any of the model's reasoning back - OpenAI's terms
-                // forbid extracting raw chain-of-thought by any other means. "Auto" lets each
-                // model pick its own summary style rather than forcing "concise", which the gpt-5
-                // series rejects per Microsoft's own docs. See ReasoningSummaryExtractor for how
-                // this is read back out of the response.
+                // [MERGED 2026-09-15] Two features landed on this same option independently:
+                // reasoningEffort (reginsights-staging, 2026-09-14) makes the effort level
+                // per-caller-configurable (FreehandDimensions:ReasoningEffort) instead of
+                // hardcoded, so every OTHER caller keeps the model's own default when it passes
+                // null. ReasoningSummaryVerbosity (agent-reasoning-capture, this branch) requests
+                // the vendor's own summary of its reasoning for EVERY call this factory makes,
+                // regardless of effort level - it is the ONLY supported way to get any of the
+                // model's reasoning back (OpenAI's terms forbid extracting raw chain-of-thought by
+                // any other means). "Auto" lets each model pick its own summary style rather than
+                // forcing "concise", which the gpt-5 series rejects per Microsoft's own docs. See
+                // ReasoningSummaryExtractor for how this is read back out of the response. Effort
+                // level and summary verbosity are independent knobs - setting one is never a
+                // reason to skip the other.
                 RawRepresentationFactory = _ => new CreateResponseOptions
                 {
-                    ReasoningOptions = new ResponseReasoningOptions
-                    {
-                        ReasoningEffortLevel = ResponseReasoningEffortLevel.High,
-                        ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
-                    },
+                    ReasoningOptions = reasoningEffort is null
+                        ? new ResponseReasoningOptions
+                        {
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                        }
+                        : new ResponseReasoningOptions
+                        {
+                            ReasoningEffortLevel = reasoningEffort.Value,
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                        },
                 },
             },
         };

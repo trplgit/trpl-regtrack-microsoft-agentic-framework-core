@@ -55,7 +55,14 @@ public sealed class FreeDigestScheduler(
                 var localNow = TimeZoneInfo.ConvertTimeFromUtc(utcNow, settings.ScheduleTimeZone);
 
                 if (localNow.DayOfWeek == settings.GenerateDay)
+                {
                     await RunDueTenantsAsync(GeneratePhase, utcNow, stoppingToken);
+
+                    // ADR-0002 (2026-09-11) - separately gated: this lane must not enqueue a
+                    // single instance while the destination endpoint is unconfigured.
+                    if (settings.InsightApiEnabled)
+                        await RunDueTenantsAsync(InsightJsonPhase, utcNow, stoppingToken);
+                }
 
                 if (localNow.DayOfWeek == settings.SendDay && localNow.Hour >= settings.SendHourLocal)
                     await RunDueTenantsAsync(SendPhase, utcNow, stoppingToken);
@@ -121,6 +128,19 @@ public sealed class FreeDigestScheduler(
             new FreeDigestGenerateOrchestrationInput(tenant.CustomerId, null));
 
         logger.LogInformation("Tenant {CustomerId}: digest generation enqueued as {InstanceId}.", tenant.CustomerId, instanceId);
+    }
+
+    /// <summary>ADR-0002 (2026-09-11). Same enqueue-not-run-inline, keyed-instance shape as GeneratePhase - a second tick the same Sunday attaches to the existing run rather than starting a parallel one.</summary>
+    private async Task InsightJsonPhase(TaskHubClient client, FreeDigestTenant tenant, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        var weekEnding = DigestWeek.EndingFor(utcNow).ToString("yyyy-MM-dd");
+        var instanceId = $"freedigest-insight-{tenant.CustomerId}-{weekEnding}";
+
+        await client.CreateOrchestrationInstanceAsync(
+            FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, instanceId,
+            new FreeDigestInsightJsonOrchestrationInput(tenant.CustomerId, null));
+
+        logger.LogInformation("Tenant {CustomerId}: insight JSON generation enqueued as {InstanceId}.", tenant.CustomerId, instanceId);
     }
 
     private async Task SendPhase(TaskHubClient client, FreeDigestTenant tenant, DateTime utcNow, CancellationToken cancellationToken)

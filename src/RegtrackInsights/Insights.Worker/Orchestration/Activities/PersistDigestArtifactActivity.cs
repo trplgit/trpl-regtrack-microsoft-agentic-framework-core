@@ -42,7 +42,10 @@ public sealed class PersistDigestArtifactActivity(
             throw new InvalidOperationException("PersistDigestArtifactActivity: ArtifactId must not be empty.");
 
         var html = await renderer.RenderHtmlForArtifactAsync(
-            input.Body, input.TenantName, weekEnding.ToDateTime(TimeOnly.MinValue), settings.UpgradeUrl);
+            input.Body, input.TenantName, weekEnding.ToDateTime(TimeOnly.MinValue), settings.UpgradeUrl, settings.PortalUrl);
+
+        if (!string.IsNullOrWhiteSpace(settings.DebugDumpHtmlDir))
+            await DumpForDebuggingAsync(settings.DebugDumpHtmlDir, input.CustomerId, input.WeekEnding, artifactId, html);
 
         var identity = new DigestArtifactIdentity(input.CustomerId, weekEnding, artifactId);
         var content = await store.WriteAsync(html, identity);
@@ -52,5 +55,26 @@ public sealed class PersistDigestArtifactActivity(
             content.BlobContainer, content.BlobPath, content.EncryptedAesKey, content.KeyVaultObjectName, content.KeyVaultObjectVersion);
 
         return new PersistDigestArtifactOutput(true);
+    }
+
+    /// <summary>
+    /// TESTING ONLY - see FreeDigestSettings.DebugDumpHtmlDir's own doc comment. Writes the exact
+    /// same HTML that is about to be encrypted and stored, unencrypted, to a local file - so a
+    /// manual GENERATE run can be opened directly in a browser without decrypting the blob.
+    /// Deliberately does not throw on a write failure (permissions, missing drive, etc.) - a debug
+    /// convenience must never fail the real artifact write it is riding alongside.
+    /// </summary>
+    private static async Task DumpForDebuggingAsync(string dir, int customerId, string weekEnding, Guid artifactId, string html)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"tenant-{customerId}-{weekEnding}-{artifactId}.html");
+            await File.WriteAllTextAsync(path, html);
+        }
+        catch
+        {
+            // Best-effort only - see the doc comment above.
+        }
     }
 }

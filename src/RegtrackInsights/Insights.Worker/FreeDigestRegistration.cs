@@ -23,6 +23,7 @@ public static class FreeDigestRegistration
 {
     private const string LlmClientName = "insights-llm";
     private const string EmailClientName = "insights-email";
+    private const string InsightApiClientName = "insights-insight-api";
 
     public static IServiceCollection AddInsightsFreeDigest(this IServiceCollection services, IConfiguration configuration)
     {
@@ -46,6 +47,7 @@ public static class FreeDigestRegistration
             picks up DNS changes. The factory solves both.                                      */
         services.AddHttpClient(LlmClientName);
         services.AddHttpClient(EmailClientName);
+        services.AddHttpClient(InsightApiClientName, http => http.Timeout = settings.InsightApiTimeout);
 
         services.AddSingleton(settings);
         services.AddSingleton<FreeDigestMetrics>();
@@ -65,6 +67,18 @@ public static class FreeDigestRegistration
         });
 
         services.AddSingleton<FreeDigestWriter>();
+        services.AddSingleton<InsightNarrativeWriter>();
+
+        // ADR-0002 (2026-09-11) - the insight JSON POST lane. Registered unconditionally (same
+        // "inert unless configured" pattern as FreeDigestScheduler below) - a named HttpClient with
+        // no traffic costs nothing, and gating registration itself on InsightApiEnabled would mean
+        // flipping the flag on later requires a redeploy just to register the dependency.
+        services.AddSingleton<IInsightJsonRepository>(_ => new SqlInsightJsonRepository(Require(configuration, "ConnectionStrings:RegTrack")));
+        services.AddTransient<Orchestration.Activities.PostInsightJsonActivity>(sp => new Orchestration.Activities.PostInsightJsonActivity(
+            sp.GetRequiredService<IInsightJsonRepository>(),
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(InsightApiClientName),
+            settings,
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<Orchestration.Activities.PostInsightJsonActivity>>()));
 
         /*  ADR-0001 (2026-09-10) - the artifact index (sql/29) and its blob store. Reuses the SAME
             encryption scheme the paid pipeline uses (RegisterReportCodec, TryAddSingleton - safe
@@ -95,16 +109,39 @@ public static class FreeDigestRegistration
         return services;
     }
 
-    private static FreeDigestSettings BuildSettings(IConfiguration configuration) => new()
+    private static FreeDigestSettings BuildSettings(IConfiguration configuration)
+    {
+        var settings = BuildSettingsCore(configuration);
+
+        // ADR-0003 D6: auth is mandatory once this lane is live - a lambda-deferred check would
+        // let the worker boot clean and only discover a missing key on the first Sunday POST, in
+        // production. Refuse to start instead (same "fail at startup, not at 3am" stance as
+        // Require() below).
+        if (settings.InsightApiEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(settings.InsightApiUrl) || !Uri.TryCreate(settings.InsightApiUrl, UriKind.Absolute, out _))
+                throw new InvalidOperationException("FreeDigest:InsightApi:BaseUrl must be an absolute URL when FreeDigest:InsightApi:Enabled is true.");
+
+            if (string.IsNullOrWhiteSpace(settings.InsightApiKey))
+                throw new InvalidOperationException("FreeDigest:InsightApi:ApiKey must be set when FreeDigest:InsightApi:Enabled is true.");
+        }
+
+        return settings;
+    }
+
+    private static FreeDigestSettings BuildSettingsCore(IConfiguration configuration) => new()
     {
         TokenCap = configuration.GetValue<int?>("Budget:FreeDigestTokenCap")
                    ?? throw new InvalidOperationException("Budget:FreeDigestTokenCap is not configured."),
+        InsightJsonTokenCap = configuration.GetValue("Budget:InsightJsonTokenCap", 3000),
         FromAddress = Require(configuration, "Email:FromAddress"),
         FromName = configuration["Email:FromName"] ?? "RegTrack Insights",
         UpgradeUrl = Require(configuration, "Email:UpgradeUrl"),
+        PortalUrl = configuration["Email:PortalUrl"],
         UnsubscribeBaseUrl = Require(configuration, "Email:UnsubscribeBaseUrl"),
         UnsubscribeSigningKey = Require(configuration, "Email:UnsubscribeSigningKey"),
         RecipientOverride = configuration["Email:RecipientOverride"],
+        DebugDumpHtmlDir = configuration["FreeDigest:DebugDumpHtmlDir"],
         ScheduleEnabled = configuration.GetValue("FreeDigest:Schedule:Enabled", false),
         ScheduleCheckInterval = TimeSpan.FromMinutes(configuration.GetValue("FreeDigest:Schedule:CheckIntervalMinutes", 60)),
         SchedulePerTenantDelay = TimeSpan.FromMilliseconds(configuration.GetValue("FreeDigest:Schedule:PerTenantDelayMs", 250)),
@@ -119,6 +156,14 @@ public static class FreeDigestRegistration
         ArtifactRetentionDays = configuration.GetValue("FreeDigest:Artifact:RetentionDays", 90),
         EmailRateLimitPerSecond = configuration.GetValue("Email:RateLimit:RequestsPerSecond", 5),
         EmailRateLimitAcquireTimeout = TimeSpan.FromSeconds(configuration.GetValue("Email:RateLimit:AcquireTimeoutSeconds", 30)),
+
+        // ADR-0002 (2026-09-11) - deliberately NOT Require()'d. The destination endpoint is not
+        // configured yet (the user will supply it later); the worker must still boot with this
+        // lane simply inert (Enabled=false) rather than refusing to start.
+        InsightApiEnabled = configuration.GetValue("FreeDigest:InsightApi:Enabled", false),
+        InsightApiUrl = configuration["FreeDigest:InsightApi:BaseUrl"],
+        InsightApiKey = configuration["FreeDigest:InsightApi:ApiKey"],
+        InsightApiTimeout = TimeSpan.FromSeconds(configuration.GetValue("FreeDigest:InsightApi:TimeoutSeconds", 30)),
     };
 
     /*  Both factories validate their provider name AND its keys eagerly, then return a closure

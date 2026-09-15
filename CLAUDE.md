@@ -19,6 +19,33 @@ Two products, already present in `Product` table of `vitComplianceSystem`:
 | 18 | RegInsights Basic | Free | Weekly email digest |
 | 19 | RegInsights Pro | Paid | In-app interactive report |
 
+### V1 release scope (2026-09-14)
+
+`dimension_selection` ships with exactly **7 dimensions** in this release. Do not assume the other
+2 of the 9 real dimensions (`docs/DIMENSION_SPECS.md`) are in scope - they are explicitly not, yet.
+
+| Dimension | Composition | Render |
+|---|---|---|
+| Entity | Deterministic (`FixedHolisticComposition.Build`) - Entity-alone requests redirect to `fixed_holistic` | The fixed 6-tab template |
+| Users | Deterministic (`DimensionSelectionComposition.Build`) | Own dedicated fixed template (Sambram's design system) |
+| Departments | **Freehand** - real LLM call (`ComposeFreehandDimensionActivity`, `sol`) | Freehand, `sol` |
+| BacklogAging | **Freehand** | Freehand, `sol` |
+| Act | **Freehand** | Freehand, `sol` |
+| Licence | **Freehand** | Freehand, `sol` |
+| Location | **Freehand** | Freehand, `sol` |
+
+"Freehand" means the composition agent genuinely decides section count/order/hero per tenant
+(grounded in that tenant's own real `dimension_rows`/`dimension_control_totals` - never a fixed
+subject) and the render agent gets creative freedom under a shared theme contract (font, palette,
+tab CSS) rather than a fixed document skeleton - see `FreehandDimensions.Names` and
+`src/RegtrackInsights/prompts/02_composition_freehand_*.md`/`05_report_html_dimension_selection_*.md`.
+
+**Risk, Nature, Internal, Event are NOT in v1.** They have neither a dedicated template nor
+freehand treatment yet - a request naming them still renders through the oldest generic template
+(`05_report_html_dimension_selection.md`), with zero LLM judgement on structure. This is a real,
+known gap, not a silent inconsistency - do not add tenant-facing content for these 4 without first
+closing it the same way the other 5 were closed.
+
 ### Authoritative documents — read before implementing a component
 
 | Document | Use it for |
@@ -51,16 +78,23 @@ Violating any of these is a build-breaking error, not a style preference.
    it* — never *what a number is* or *who may see it*. (§3.1)
 
    > **[UPDATE 2026-09-11] Composition itself is no longer agentic for either
-   > shipped report type.** `fixed_holistic` (`FixedHolisticComposition.Build()`)
+   > shipped report type, BY DEFAULT.** `fixed_holistic` (`FixedHolisticComposition.Build()`)
    > and `dimension_selection` (`DimensionSelectionComposition.Build()`) both
    > pick block order **deterministically in C#, zero LLM calls** — the dynamic
    > "compliance_health" composition agent this rule originally described was
    > removed the same day. `ComposeActivity`/`ReflectOnCompositionActivity`/
-   > `01_composition.md` are deleted from the codebase. The agent's remaining
-   > judgement calls are narrative-only (`NarrateActivity`, prose/emphasis within
-   > a fixed block) and rendering-prompt tile selection — never structure. If a
-   > future report type needs the LLM to choose block order again, reinstate this
-   > rule for that type explicitly; don't assume it still applies by default.
+   > `01_composition.md` are deleted from the codebase.
+   >
+   > **[EXCEPTION, ADDED 2026-09-14]** Exactly the dimensions in `FreehandDimensions.Names`
+   > (Departments, BacklogAging, Act, Licence, Location — v1's scope, see §1's "V1
+   > release scope" table) reinstate agentic composition deliberately, per this
+   > rule's own instruction above: `ComposeFreehandDimensionActivity` runs a real
+   > LLM call (`sol`) that decides section count/order/hero per tenant, grounded
+   > in that tenant's own real data — never fabricated. Every OTHER dimension
+   > (Entity, Users, and the not-yet-shipped Risk/Nature/Internal/Event) keeps the
+   > deterministic path. The agent's remaining judgement calls elsewhere are
+   > narrative-only (`NarrateActivity`, prose/emphasis within a fixed block) and
+   > rendering-prompt tile selection — never structure.
 
 2. **Fail closed, and fail loudly.**
    Unknown enum, empty scope, failed reconciliation, unverifiable claim → **refuse

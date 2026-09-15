@@ -19,7 +19,15 @@ namespace Insights.Worker.Orchestration;
 /// existed - trailing optional default, same reasoning as Priority above, so every existing
 /// positional construction keeps compiling and keeps its pre-existing meaning.
 /// </summary>
+/// <summary>
+/// ReqId [ADDED 2026-09-14] - the API-level fan-out request id (RunEndpoints.cs), one per POST
+/// regardless of how many dimensions it fans out to. Used ONLY for LangFuse session grouping
+/// (LangfuseSessionContext/LangfuseSessionTaggingChatClient) - never a scope/auth/identity
+/// concern. Null for callers with no such concept (manual tests, the CLI trigger,
+/// PaidKeepWarmScheduler); every activity falls back to the DTFx run id itself when this is null.
+/// </summary>
 public sealed record InsightsReportOrchestrationInput(
     int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId,
     LlmCallPriority Priority = LlmCallPriority.Interactive,
-    IReadOnlyList<string>? RequestedDimensions = null);
+    IReadOnlyList<string>? RequestedDimensions = null,
+    string? ReqId = null);

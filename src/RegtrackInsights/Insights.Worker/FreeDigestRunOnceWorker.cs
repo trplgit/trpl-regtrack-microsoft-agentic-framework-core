@@ -20,10 +20,18 @@ namespace Insights.Worker;
 /// Does nothing unless FreeDigest:RunOnce=true, so a bare `dotnet run` starts an idle host:
 ///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23 --FreeDigest:Phase=generate
 ///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23 --FreeDigest:Phase=send
+///   dotnet run -- --FreeDigest:RunOnce=true --FreeDigest:CustomerId=23 --FreeDigest:Phase=insight
 ///
 /// [ADDED - ADR-0001, 2026-09-10] --FreeDigest:Phase selects which half of the two-phase digest to
 /// run: "generate" (default) enqueues FreeDigestGenerateOrchestrator, "send" enqueues
 /// FreeDigestSendOrchestrator.
+///
+/// [ADDED - ADR-0002, 2026-09-11] "insight" enqueues FreeDigestInsightJsonOrchestrator - the
+/// per-user "current insight" JSON lane. With FreeDigest:InsightApi:Enabled left false (the
+/// default), this exercises the REAL SP call and REAL LLM narrative end-to-end and logs the exact
+/// JSON that would be POSTed, without needing a live endpoint or touching the weekly claim - see
+/// PostInsightJsonActivity's own doc comment on its dry-run mode. Once a real endpoint exists, set
+/// FreeDigest:InsightApi:Enabled=true and BaseUrl, and the SAME command actually posts.
 /// </summary>
 public sealed class FreeDigestRunOnceWorker(
     IServiceProvider services,
@@ -91,8 +99,16 @@ public sealed class FreeDigestRunOnceWorker(
                         new FreeDigestSendOrchestrationInput(tenantId, settings.ArtifactFreshnessDays));
                     break;
 
+                case "insight":
+                    instanceId = $"freedigest-insight-{tenantId}-{weekEnding}";
+                    logger.LogInformation("Enqueuing FreeDigestInsightJsonOrchestrator for tenant {TenantId} as {InstanceId}.", tenantId, instanceId);
+                    instance = await client.CreateOrchestrationInstanceAsync(
+                        FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, instanceId,
+                        new FreeDigestInsightJsonOrchestrationInput(tenantId, asOf));
+                    break;
+
                 default:
-                    logger.LogError("Unknown FreeDigest:Phase '{Phase}'. Expected generate or send.", phase);
+                    logger.LogError("Unknown FreeDigest:Phase '{Phase}'. Expected generate, send or insight.", phase);
                     Environment.ExitCode = 1;
                     return;
             }
@@ -110,6 +126,8 @@ public sealed class FreeDigestRunOnceWorker(
 
                 if (string.Equals(phase, "generate", StringComparison.OrdinalIgnoreCase))
                     LogGenerateCostAndScopeSummary(state.Output, tenantId, stopwatch.Elapsed);
+                else if (string.Equals(phase, "insight", StringComparison.OrdinalIgnoreCase))
+                    LogInsightCostAndPostSummary(state.Output, tenantId, stopwatch.Elapsed);
             }
             else
             {
@@ -181,6 +199,50 @@ public sealed class FreeDigestRunOnceWorker(
             // A cost/scope summary that fails to parse must never mask that the run itself
             // already succeeded (logged above, unconditionally) - this is purely additive.
             logger.LogWarning(ex, "Could not parse the orchestration output to log a cost/scope summary - the run itself still completed successfully.");
+        }
+    }
+
+    /// <summary>
+    /// ADR-0002 (2026-09-11) equivalent of LogGenerateCostAndScopeSummary - Posted/Skipped counts
+    /// instead of Generated/AlreadyGenerated. With FreeDigest:InsightApi:Enabled=false every
+    /// recipient shows up under Skipped (dry run, see PostInsightJsonActivity) - that is expected,
+    /// not a failure; the actual JSON payload for each recipient is logged separately by that
+    /// activity at Information level.
+    /// </summary>
+    private void LogInsightCostAndPostSummary(string orchestrationOutputJson, int tenantId, TimeSpan elapsed)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(orchestrationOutputJson);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("TotalInputTokens", out var inTokensEl) ||
+                !root.TryGetProperty("TotalOutputTokens", out var outTokensEl))
+                return;
+
+            var inputTokens = inTokensEl.GetInt32();
+            var outputTokens = outTokensEl.GetInt32();
+            var scopeGroups = root.TryGetProperty("ScopeGroups", out var sg) ? sg.GetInt32() : 0;
+            var llmCalls = root.TryGetProperty("LlmCalls", out var lc) ? lc.GetInt32() : 0;
+            var posted = root.TryGetProperty("Posted", out var p) ? p.GetInt32() : 0;
+            var skipped = root.TryGetProperty("Skipped", out var s) ? s.GetInt32() : 0;
+
+            var estimatedCost = inputTokens / 1_000_000m * InputTokenCostPerMillion
+                               + outputTokens / 1_000_000m * OutputTokenCostPerMillion;
+
+            logger.LogInformation(
+                "INSIGHT SUMMARY - tenant {TenantId}: {ScopeGroups} scope group(s) resolved -> {LlmCalls} LLM call(s) made " +
+                "({Posted} recipient(s) posted, {Skipped} skipped - dry run or already posted this week; see the log lines above for each recipient's outcome). " +
+                "Tokens: {InputTokens} in + {OutputTokens} out = {TotalTokens} total. " +
+                "Estimated cost: ${EstimatedCost:F6} (see LogGenerateCostAndScopeSummary's own doc comment on why this is an estimate). " +
+                "Wall time: {ElapsedSeconds:F1}s enqueue-to-completion.",
+                tenantId, scopeGroups, llmCalls, posted, skipped,
+                inputTokens, outputTokens, inputTokens + outputTokens,
+                estimatedCost, elapsed.TotalSeconds);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Could not parse the orchestration output to log a cost/post summary - the run itself still completed successfully.");
         }
     }
 }

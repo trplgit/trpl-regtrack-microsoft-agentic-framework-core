@@ -116,6 +116,13 @@ public sealed class GenerateReportEndpointTests
         var saveCall = Assert.Single(requests.SaveCalls);
         Assert.Equal(reqId, saveCall.ReqId);
         Assert.Equal([runId], saveCall.RunIds);
+
+        // [ADDED 2026-09-14] The SAME reqId returned to the caller and saved into the grouping
+        // table must also reach the orchestration input (InsightsReportOrchestrationInput.ReqId,
+        // via IInsightsRunEnqueuer.EnqueueAsync's reqId param) - that is what lets
+        // LangfuseSessionTaggingChatClient tag every real LLM call this run makes with it.
+        var enqueueCall = Assert.Single(enqueuer.Calls);
+        Assert.Equal(reqId.ToString(), enqueueCall.ReqId);
     }
 
     /// <summary>

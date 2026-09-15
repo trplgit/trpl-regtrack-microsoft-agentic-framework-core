@@ -14,7 +14,7 @@ public sealed class FreeDigestValidatorTests
 {
     /// <summary>The exact closing design doc Section 10.7 requires, as supplied by the prompt and the fallback template.</summary>
     private const string SanctionedClosing =
-        "This digest shows what is coming. RegInsights Pro shows which locations, " +
+        "This digest shows what is coming. RegInsights Ultimate shows which locations, " +
         "which people, and which laws are driving it.";
 
     private static FreeDigestAggregates Aggregates(int dueNext7 = 24, int dueNext30 = 50, int completedLast7 = 12) =>
@@ -145,6 +145,42 @@ public sealed class FreeDigestValidatorTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.FailedChecks, f => f.Contains("999", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [REGRESSION - found live, 2026-09-13] ComposeInsightJsonActivity's own explanation text
+    /// instructs the LLM to use InsightFocus.Remainder (Denominator - Value, computed
+    /// deterministically before the LLM is ever called - see 07_insight_json_narrative.md) for its
+    /// "concrete before -> after" framing. Remainder is truthful arithmetic, not an invented number,
+    /// but it does not appear literally as a field in FreeDigestAggregates - so without the
+    /// extraAllowedNumbers parameter, EVERY narrative that actually used Remainder was rejected as
+    /// fabricating a number, and the LLM path fell back to the deterministic template almost every
+    /// time. Confirmed live: a real run flagged 236 (237 TotalActiveObligations - 1 DueNext30).
+    /// </summary>
+    [Fact]
+    public void RemainderPassedAsExtraAllowedNumber_IsAccepted()
+    {
+        // TotalActiveObligations is fixed at 1893 by the Aggregates() helper above - Denominator
+        // 1893 minus Value 40 (dueNext30) is the Remainder 1853 this body actually uses.
+        var aggregates = Aggregates(dueNext30: 40);
+        var body = $"40 of the estate's 1,893 active obligations fall due soon.\nThe other 1,853 carry no such deadline.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, aggregates, extraAllowedNumbers: [1853]);
+
+        Assert.True(result.IsValid, string.Join("; ", result.FailedChecks));
+    }
+
+    /// <summary>Without the extra allowance, the same body is rejected - proves the fix is what closes the gap, not a coincidence.</summary>
+    [Fact]
+    public void RemainderNotPassedAsExtraAllowedNumber_IsRejected()
+    {
+        var aggregates = Aggregates(dueNext30: 40);
+        var body = $"40 of the estate's 1,893 active obligations fall due soon.\nThe other 1,853 carry no such deadline.\n{SanctionedClosing}";
+
+        var result = FreeDigestValidator.Validate(body, aggregates);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.FailedChecks, f => f.Contains("1,853", StringComparison.Ordinal));
     }
 
     /// <summary>

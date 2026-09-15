@@ -113,8 +113,12 @@ public sealed class RunEndpointsTests
 
         using var json = JsonDocument.Parse(frame.Substring("data: ".Length));
         Assert.Equal("complete", json.RootElement.GetProperty("status").GetString());
-        Assert.Equal(7, json.RootElement.GetProperty("stagesComplete").GetInt32());
-        Assert.Equal(7, json.RootElement.GetProperty("stagesTotal").GetInt32());
+
+        // [CHANGED 2026-09-14, PRODUCT DECISION] The detailed stage breakdown is deliberately not
+        // sent on the wire anymore - status alone is the whole external contract now.
+        Assert.False(json.RootElement.TryGetProperty("stage", out _));
+        Assert.False(json.RootElement.TryGetProperty("stagesComplete", out _));
+        Assert.False(json.RootElement.TryGetProperty("stagesTotal", out _));
     }
 
     /// <summary>
