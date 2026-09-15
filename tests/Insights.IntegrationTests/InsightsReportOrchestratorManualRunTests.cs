@@ -672,6 +672,105 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
+    /// THROWAWAY diagnostic - real lead found in UatTestDataManualTests.cs (pre-existing, tied to
+    /// Tanvi's own machine per a nearby comment referencing C:\Users\tanvig\...): it hardcodes a
+    /// COMPLETELY DIFFERENT ClientId ("449821d0-9ff9-4f87-a535-bda5cb484287") from the one
+    /// tbl_SecretKeyCredentialsCustomerwise gives us ("eb185e2f-..."). Tests whether the TRACKED
+    /// (real, current) Trplclientsecret.dll's secret is actually valid for THIS ClientId instead -
+    /// would mean the DB row points at the wrong app, not that the secret itself is bad.
+    /// </summary>
+    [Fact]
+    public async Task ProbeAlternateClientIdFromUatTestFileAsync()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        const string alternateClientId = "449821d0-9ff9-4f87-a535-bda5cb484287";
+
+        await using var regTrackConnection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var config = (await regTrackConnection.QueryAsync<(string VaultBaseUrl, string BYOK_KeyName, string ClientId)>(
+            "SELECT VaultBaseUrl, BYOK_KeyName, ClientId FROM tbl_SecretKeyCredentialsCustomerwise WHERE CustomerID = 0;")).FirstOrDefault();
+
+        output.WriteLine($"VaultBaseUrl: {config.VaultBaseUrl}");
+        output.WriteLine($"DB ClientId (currently used): {config.ClientId}");
+        output.WriteLine($"Alternate ClientId (from UatTestDataManualTests.cs): {alternateClientId}");
+
+        var clientSecret = new Trplclientsecret.BU().GetClientSecret();
+
+        var kvClient = new Microsoft.Azure.KeyVault.KeyVaultClient(async (authority, resource, _) =>
+        {
+            var authContext = new Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext(authority);
+            var clientCred = new Microsoft.IdentityModel.Clients.ActiveDirectory.ClientCredential(alternateClientId, clientSecret);
+#pragma warning disable CS0618
+            var result = await authContext.AcquireTokenAsync(resource, clientCred);
+#pragma warning restore CS0618
+            return result.AccessToken;
+        });
+
+        try
+        {
+            var keyBundle = await kvClient.GetKeyAsync(config.VaultBaseUrl, config.BYOK_KeyName);
+            output.WriteLine($"ALTERNATE CLIENTID WORKS. Key: {keyBundle.KeyIdentifier.Identifier}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"ALTERNATE CLIENTID FAILED: {ex.GetType().FullName}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - same alternate-ClientId test as above, but against the CANDIDATE
+    /// "(2)" dll instead of the tracked one, loaded via reflection since it's untracked/not
+    /// project-referenced. Confirms whether the candidate's secret ALSO authenticates against the
+    /// real correct ClientId (449821d0-...), same as the tracked dll just did.
+    /// </summary>
+    [Fact]
+    public async Task ProbeCandidateDllWithAlternateClientIdAsync()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        const string alternateClientId = "449821d0-9ff9-4f87-a535-bda5cb484287";
+        var candidatePath = @"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\libs\Trplclientsecret (2).dll";
+        var asm = System.Reflection.Assembly.LoadFrom(candidatePath);
+        var buType = asm.GetType("Trplclientsecret.BU")!;
+        var buInstance = Activator.CreateInstance(buType)!;
+        var getSecretMethod = buType.GetMethod("GetClientSecret")!;
+
+        await using var regTrackConnection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var config = (await regTrackConnection.QueryAsync<(string VaultBaseUrl, string BYOK_KeyName)>(
+            "SELECT VaultBaseUrl, BYOK_KeyName FROM tbl_SecretKeyCredentialsCustomerwise WHERE CustomerID = 0;")).FirstOrDefault();
+
+        output.WriteLine($"VaultBaseUrl: {config.VaultBaseUrl}");
+        output.WriteLine($"Testing candidate '(2)' dll against ClientId: {alternateClientId}");
+
+        var kvClient = new Microsoft.Azure.KeyVault.KeyVaultClient(async (authority, resource, _) =>
+        {
+            var authContext = new Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext(authority);
+            var secretValue = (string)getSecretMethod.Invoke(buInstance, null)!;
+            var clientCred = new Microsoft.IdentityModel.Clients.ActiveDirectory.ClientCredential(alternateClientId, secretValue);
+#pragma warning disable CS0618
+            var result = await authContext.AcquireTokenAsync(resource, clientCred);
+#pragma warning restore CS0618
+            return result.AccessToken;
+        });
+
+        try
+        {
+            var keyBundle = await kvClient.GetKeyAsync(config.VaultBaseUrl, config.BYOK_KeyName);
+            output.WriteLine($"CANDIDATE DLL + ALTERNATE CLIENTID WORKS. Key: {keyBundle.KeyIdentifier.Identifier}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"CANDIDATE DLL + ALTERNATE CLIENTID: {ex.GetType().FullName}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
     /// THROWAWAY diagnostic - user asked to double-check this isn't a mistake on my end rather
     /// than a genuinely bad secret. Tests the SAME clientId+secret (candidate dll) against a
     /// DIFFERENT Azure resource (Storage, via the real trplchatgpt9378 account's own AAD tenant -
@@ -803,6 +902,65 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
 
             var rowCount = await connection.QuerySingleAsync<int>("SELECT COUNT(*) FROM dbo.InsightsAgentReasoningLog;");
             output.WriteLine($"Real row count: {rowCount}");
+
+            // [ADDED 2026-09-15] User wants to see the ACTUAL text, not just counts/truncated
+            // previews - full ReasoningSummary for the most recent rows, no truncation.
+            var recent = await connection.QueryAsync<(long Id, string RunId, string Stage, string ReasoningSummary, DateTime RecordedAtUtc)>(
+                "SELECT TOP 10 Id, RunId, Stage, ReasoningSummary, RecordedAtUtc FROM dbo.InsightsAgentReasoningLog ORDER BY Id DESC;");
+            output.WriteLine("");
+            output.WriteLine("Most recent rows, full text:");
+            foreach (var row in recent)
+            {
+                output.WriteLine($"--- Id={row.Id} RunId={row.RunId} Stage={row.Stage} RecordedAtUtc={row.RecordedAtUtc:O} ---");
+                output.WriteLine(row.ReasoningSummary);
+                output.WriteLine("");
+            }
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - checks for a real, LIVE recurrence of the 2026-09-14 stale-backlog
+    /// bug (see TerminateStaleBacklogInstances below): stuck Running instances eating every
+    /// LlmConcurrencyGate slot, starving new work with zero errors logged. User reported live
+    /// stalling tonight - this queries dt.Instances directly for how many are Running right now
+    /// and how long each has gone since its last real checkpoint.
+    /// </summary>
+    [Fact]
+    public async Task CheckForStuckRunningInstances()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var hubConnectionString = configuration["ConnectionStrings:DurableTaskHub"]!;
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(hubConnectionString);
+
+        var running = await connection.QueryAsync<(string InstanceID, string? Name, DateTime CreatedTime, DateTime LastUpdatedTime, string RuntimeStatus)>(
+            """
+            SELECT InstanceID, Name, CreatedTime, LastUpdatedTime, RuntimeStatus
+            FROM dt.Instances
+            WHERE RuntimeStatus IN ('Running', 'Pending')
+            ORDER BY LastUpdatedTime ASC;
+            """);
+
+        var list = running.ToList();
+        output.WriteLine($"Total Running/Pending instances right now: {list.Count}");
+        output.WriteLine("");
+        foreach (var inst in list)
+        {
+            var idleMinutes = (DateTime.UtcNow - inst.LastUpdatedTime).TotalMinutes;
+            var ageMinutes = (DateTime.UtcNow - inst.CreatedTime).TotalMinutes;
+            output.WriteLine($"{inst.InstanceID} | status={inst.RuntimeStatus} | age={ageMinutes:F1}min | idle since last checkpoint={idleMinutes:F1}min");
+        }
+
+        output.WriteLine("");
+        output.WriteLine("Most recent 10 instances, any status:");
+        var recent = await connection.QueryAsync<(string InstanceID, DateTime CreatedTime, DateTime LastUpdatedTime, string RuntimeStatus)>(
+            "SELECT TOP 10 InstanceID, CreatedTime, LastUpdatedTime, RuntimeStatus FROM dt.Instances ORDER BY LastUpdatedTime DESC;");
+        foreach (var inst in recent)
+        {
+            var durationMinutes = (inst.LastUpdatedTime - inst.CreatedTime).TotalMinutes;
+            output.WriteLine($"{inst.InstanceID} | status={inst.RuntimeStatus} | created={inst.CreatedTime:O} | lastUpdated={inst.LastUpdatedTime:O} | duration={durationMinutes:F1}min");
         }
     }
 
@@ -1029,7 +1187,7 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         var provider = services.BuildServiceProvider();
         var client = provider.GetRequiredService<TaskHubClient>();
 
-        const string instanceId = "bb33892afad047309914404664a8517a";
+        const string instanceId = "32a596af9ae64ada9d7cb0303ab91390";
 
         var state = await client.GetOrchestrationStateAsync(instanceId);
         output.WriteLine($"Status: {state?.OrchestrationStatus}");
@@ -1046,22 +1204,61 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         var hubConnectionString = configuration["ConnectionStrings:DurableTaskHub"]!;
         await using var connection = new Microsoft.Data.SqlClient.SqlConnection(hubConnectionString);
 
+        var historyColumns = await connection.QueryAsync<string>(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dt' AND TABLE_NAME = 'History' ORDER BY ORDINAL_POSITION;");
+        output.WriteLine("dt.History columns: " + string.Join(", ", historyColumns));
+
+        var timeline = await connection.QueryAsync(
+            "SELECT SequenceNumber, EventType, Name, TaskID, Timestamp FROM dt.History WHERE InstanceID = @InstanceID ORDER BY SequenceNumber;",
+            new { InstanceID = instanceId });
+        DateTime? prevTime = null;
+        foreach (var row in timeline)
+        {
+            DateTime? t = row.Timestamp;
+            var gap = (t is not null && prevTime is not null) ? (t.Value - prevTime.Value).TotalSeconds : (double?)null;
+            var flag = gap is > 5 ? "  <== GAP" : "";
+            output.WriteLine($"  [{row.SequenceNumber}] {row.EventType} {row.Name} TaskID={row.TaskID} Timestamp={t:O} gap={gap:F1}s{flag}");
+            if (t is not null) prevTime = t;
+        }
+
         var withTaskId = await connection.QueryAsync(
             "SELECT EventType, Name, TaskID, DataPayloadID FROM dt.History WHERE InstanceID = @InstanceID ORDER BY SequenceNumber;",
             new { InstanceID = instanceId });
         foreach (var row in withTaskId)
             output.WriteLine($"  {row.EventType} | {row.Name} | TaskID={row.TaskID} | DataPayloadID={row.DataPayloadID}");
 
-        var failurePayloads = await connection.QueryAsync(
-            @"SELECT h.EventType, h.Name, p.Text
-              FROM dt.History h
-              JOIN dt.Payloads p ON p.InstanceID = h.InstanceID AND p.TaskID = h.TaskID
-              WHERE h.InstanceID = @InstanceID
-                AND h.EventType IN ('TaskFailed','SubOrchestrationInstanceFailed','ExecutionFailed','ExecutionTerminated')
-              ORDER BY h.SequenceNumber;",
-            new { InstanceID = instanceId });
-        foreach (var row in failurePayloads)
-            output.WriteLine($"  FAILURE [{row.EventType}] {row.Name}: {row.Text}");
+        // [ADDED 2026-09-15] User wants the REAL VisionQA rejection reason for the last few
+        // render attempts on this instance - pull the real stored payload text for every
+        // VisionQaActivity TaskCompleted AND the TaskFailed render attempt, by DataPayloadID
+        // directly (the earlier TaskID-join attempt failed - dt.Payloads has no TaskID column).
+        var payloadIds = withTaskId
+            .Where(r => (string)r.EventType == "TaskCompleted" || (string)r.EventType == "TaskFailed")
+            .Select(r => (Guid?)r.DataPayloadID)
+            .Where(id => id is not null)
+            .ToList();
+
+        if (payloadIds.Count > 0)
+        {
+            var payloadColumns = await connection.QueryAsync<string>(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dt' AND TABLE_NAME = 'Payloads' ORDER BY ORDINAL_POSITION;");
+            output.WriteLine("dt.Payloads columns: " + string.Join(", ", payloadColumns));
+
+            var payloads = await connection.QueryAsync<(Guid PayloadID, string Text)>(
+                "SELECT PayloadID, Text FROM dt.Payloads WHERE PayloadID IN @Ids;",
+                new { Ids = payloadIds });
+            var byId = payloads.ToDictionary(p => p.PayloadID, p => p.Text);
+
+            output.WriteLine("");
+            output.WriteLine("Real payload text for TaskCompleted/TaskFailed events:");
+            foreach (var row in withTaskId)
+            {
+                if ((string)row.EventType is not ("TaskCompleted" or "TaskFailed")) continue;
+                if (row.DataPayloadID is not Guid id || !byId.TryGetValue(id, out var text)) continue;
+                output.WriteLine($"--- {row.EventType} TaskID={row.TaskID} ---");
+                output.WriteLine(text ?? "<null>");
+                output.WriteLine("");
+            }
+        }
     }
 
     /// <summary>
@@ -1139,6 +1336,82 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             output.WriteLine($"  [{row.Stage}] {row.ReasoningSummary[..Math.Min(120, row.ReasoningSummary.Length)]}...");
 
         Assert.NotEmpty(rows);
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - Rahul Mane (real infra contact) says there are 3 different secrets
+    /// for this app registration, one per environment, and asked which environment we're actually
+    /// hitting the issue on. Trplclientsecret.dll's own BU.GetEnv() should answer this directly -
+    /// not a secret value, a plain environment label - instead of guessing.
+    /// </summary>
+    [Fact]
+    public void CheckWhichEnvironmentTheTrackedDllIsFor()
+    {
+        var env = new Trplclientsecret.BU().GetEnv();
+        output.WriteLine($"Trplclientsecret.dll (libs/Trplclientsecret.dll, tracked) GetEnv() = '{env}'");
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+        output.WriteLine($"ConnectionStrings:RegTrack points at: {new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configuration["ConnectionStrings:RegTrack"]).DataSource}, DB={new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configuration["ConnectionStrings:RegTrack"]).InitialCatalog}");
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] Real single freehand-dimension run - Departments, Agrocel (1082/14128,
+    /// clean, no collision risk with anyone else's tenant tonight). Freehand composition
+    /// (ComposeFreehandDimensionActivity, real LLM call on sol) ahead of narrate/render, unlike
+    /// Users/Entity's deterministic composition - confirms the real end-to-end path for one of
+    /// v1's 5 freehand dimensions.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_Departments_Agrocel_Freehand()
+    {
+        const int tenantId = 1082;
+        const int userId = 14128;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsAgentReasoning(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        string instanceId;
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var input = new InsightsReportOrchestrationInput(
+                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day__freehand-departments-test", userId, LlmCallPriority.Interactive, ["Departments"]);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            instanceId = instance.InstanceId;
+            var state = await PollUntilTerminalAsync(client, instanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"{instanceId}: {state.OrchestrationStatus}, final status {state.Status}");
+            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
     }
 
     /// <summary>
