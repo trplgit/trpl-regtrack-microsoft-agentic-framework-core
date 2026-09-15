@@ -64,7 +64,7 @@ jobs:
           az storage blob download \
             --account-name "$AZURE_STORAGE_ACCOUNT" \
             --account-key "$AZURE_STORAGE_KEY" \
-            --container-name reginsights \
+            --container-name trpl-regtrack-microsoft-agentic-framework-core \
             --name ${ENVIRONMENT}/Trplclientsecret.dll \
             --file libs/Trplclientsecret.dll \
             --overwrite
@@ -74,7 +74,7 @@ jobs:
           az storage blob download \
             --account-name "$AZURE_STORAGE_ACCOUNT" \
             --account-key "$AZURE_STORAGE_KEY" \
-            --container-name reginsights \
+            --container-name trpl-regtrack-microsoft-agentic-framework-core \
             --name ${ENVIRONMENT}/appsettings.json \
             --file appsettings.json \
             --overwrite
