@@ -9,7 +9,7 @@ namespace Insights.Presentation;
 /// templates/digest_fallback.txt and templates/digest.html (Email:TemplatePath).
 /// Templates are files, never string literals - same rule as prompts (docs/CONFIGURATION.md).
 /// </summary>
-public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
+public sealed partial class FreeDigestEmailRenderer(string templateDirectory, string cdnBaseUrl = "")
 {
     /// <summary>
     /// The placeholder written into a Sunday-generated artifact wherever the real, per-recipient
@@ -92,6 +92,7 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory)
             ["UpgradeUrl"] = upgradeUrl,
             ["UnsubscribeUrl"] = unsubscribeUrl,
             ["PortalUrl"] = portalUrl ?? string.Empty,
+            ["CdnBaseUrl"] = cdnBaseUrl,
         };
         return Substitute(template, tokens);
     }
