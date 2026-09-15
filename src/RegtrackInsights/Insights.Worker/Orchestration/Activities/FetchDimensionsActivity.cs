@@ -131,7 +131,19 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
         await TryFetchAsync("Nature", () => dimensionRepository.GetNatureAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Departments", () => dimensionRepository.GetDepartmentsAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Act", () => dimensionRepository.GetActAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Users", () => dimensionRepository.GetUsersAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        // [ADDED 2026-09-15] Patches PerformerUserCount/ReviewerUserCount onto ControlTotals right
+        // after the repository call returns - see UsersHeadcountCalculator's own doc comment. Pure
+        // C# aggregation over the already-fetched, already-reconciled Rows; no new SQL, no change
+        // to sql/12_dimension_users.sql.
+        await TryFetchAsync("Users", async () =>
+        {
+            var result = await dimensionRepository.GetUsersAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None);
+            var (performerUserCount, reviewerUserCount) = UsersHeadcountCalculator.Compute(result.Rows);
+            return new DimensionResult<UsersControlTotals, UsersRow>(
+                result.Dimension,
+                result.ControlTotals with { PerformerUserCount = performerUserCount, ReviewerUserCount = reviewerUserCount },
+                result.Rows, result.Detectors, result.Assertions, result.Findings, result.DataQuality);
+        });
         await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));

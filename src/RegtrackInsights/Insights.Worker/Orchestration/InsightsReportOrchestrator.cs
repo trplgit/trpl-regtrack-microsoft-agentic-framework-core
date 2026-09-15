@@ -741,12 +741,6 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 var forwardStyled = await context.ScheduleTask<InjectForwardLookCssOutput>(
                     typeof(InjectForwardLookCssActivity).Name, "1.0", new InjectForwardLookCssInput(forwarded.Html));
 
-                var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(forwardStyled.Html));
-                var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
-                // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
-                // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.
-                var reNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(sanitized.Html));
-
                 // Structural invariant gate (CLAUDE.md Sec.11), not cosmetic QA - throws
                 // OrchestrationRefusedException on the actual persisted HTML if the score-component
                 // count or a blocked-tab badge is wrong (FixedHolisticStructureGate's own doc comment
@@ -769,6 +763,23 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 // depending on anything DTFx does or does not preserve across replay.
                 try
                 {
+                    // [MOVED INSIDE THE TRY, 2026-09-15] Normalize/Sanitize/re-Normalize used to run
+                    // BEFORE this try block, so a NOT_NORMALIZABLE refusal (ReportEmitNormalizer
+                    // rejecting the render agent's raw output - e.g. a truncated document, confirmed
+                    // live on dimension_selection:Users/Minda: the model's own generation stopping
+                    // mid-document with a real content-refusal string instead of finishing the HTML)
+                    // propagated immediately and failed the WHOLE run on the very first bad
+                    // generation - zero retries, unlike every gate below it which already gets up to
+                    // maxRenderAttempts tries. Same "a fresh render attempt can plausibly fix this"
+                    // reasoning as the structure/vision gates already documented on this loop - a
+                    // truncated/malformed render is exactly the kind of per-call sampling miss a
+                    // retry exists for, not a defect in the fixed input.
+                    var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(forwardStyled.Html));
+                    var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
+                    // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
+                    // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.
+                    var reNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(sanitized.Html));
+
                     structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
                         typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html, input.ReportType));
 

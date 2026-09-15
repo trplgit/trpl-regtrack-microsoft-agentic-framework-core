@@ -76,6 +76,10 @@ late — `NULL`, never `0`, if the user has no qualifying completed event),
 `AssignedInstancesDistinct`, `UnassignedInstances`, `OverdueInstances`, `TenantOverduePct`,
 `UsersReported`, `SumOfPerUserInstances`, `TenantMedianOnTimePct`,
 `TenantMedianPerformerLoad`, `InstancesWithSoleReviewer`,
+`PerformerUserCount` **[ADDED 2026-09-15]** (real distinct headcount of users with at least one
+Performer-role assignment - pre-computed in C#, never count `dimension_rows.Users` rows yourself,
+you cannot do this reliably over 300+ rows),
+`ReviewerUserCount` **[ADDED 2026-09-15]** (same, Reviewer-role),
 `TenantMedianDaysEarlyLate` **[ADDED 2026-09-13]** (tenant-wide version of the same median -
 not currently rendered anywhere in this template, kept available for narrative/assertion use),
 `TimingOutliersExcluded` **[ADDED 2026-09-13]** (count of completed events tenant-wide excluded
@@ -144,7 +148,7 @@ they add a real, checkable signal.
           <div class="di-meta">
             <span class="di-chip">Estate: {real SumOfPerUserInstances} live obligations</span>
             <span class="di-chip">Users reported: {real UsersReported}</span>
-            <span class="di-chip mono">Reviewer cover {real performerUserCount}:{real reviewerUserCount, as a ratio - real division, never rounded to a suspiciously clean number}</span>
+            <span class="di-chip mono">Reviewer cover {real PerformerUserCount}:{real ReviewerUserCount} — cite BOTH integers verbatim from dimension_control_totals.Users, never a computed/reduced ratio</span>
           </div>
         </div>
       </div>

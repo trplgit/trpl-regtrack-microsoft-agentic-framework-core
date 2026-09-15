@@ -32,6 +32,11 @@ builder.Services.AddInsightsData(builder.Configuration);
 // AddInsightsOrchestration (registers the two activities that consume it).
 builder.Services.AddInsightsTenantTokenBudget(builder.Configuration);
 
+// Permanent home for each LLM agent's own reasoning summary (sql/32) - deliberately separate from
+// dt.Payloads, which is slated for a future purge. Must come AFTER AddInsightsData, BEFORE
+// AddInsightsOrchestration (registers the three activities that consume it).
+builder.Services.AddInsightsAgentReasoning(builder.Configuration);
+
 // The free weekly digest (Phase 1c): LLM client, prompt loader, writer, renderer, email sender,
 // pipeline, IFreeDigestService, and the weekly scheduler. Must come AFTER AddInsightsData.
 //

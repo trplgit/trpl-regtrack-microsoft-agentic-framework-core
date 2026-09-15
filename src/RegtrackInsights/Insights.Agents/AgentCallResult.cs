@@ -14,4 +14,12 @@ namespace Insights.Agents;
 /// usage through the normal call chain instead (agent -> activity -> orchestrator) has no shared
 /// state to race on, so it stays correct under concurrency by construction.
 /// </summary>
-public sealed record AgentCallResult<T>(T Value, long TotalTokens);
+/// <param name="ReasoningSummary">
+/// The vendor's own summary of its reasoning for this one call (see
+/// <see cref="ReasoningSummaryExtractor"/>), null when none was requested or none came back.
+/// Deliberately NOT threaded onto the *Output records DTFx activities return - those get
+/// persisted verbatim into dt.Payloads, and this text is meant to outlive that table's future
+/// purge, not add to what gets purged. Callers persist it directly via IAgentReasoningRecorder
+/// instead.
+/// </param>
+public sealed record AgentCallResult<T>(T Value, long TotalTokens, string? ReasoningSummary = null);

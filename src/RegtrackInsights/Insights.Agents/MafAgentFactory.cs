@@ -105,12 +105,39 @@ public static class MafAgentFactory
                 // confirmed via reflection, not guessed (2026-08-20).
                 Instructions = instructions,
                 ResponseFormat = responseFormat,
-                RawRepresentationFactory = reasoningEffort is null
-                    ? null
-                    : _ => new CreateResponseOptions
-                    {
-                        ReasoningOptions = new ResponseReasoningOptions { ReasoningEffortLevel = reasoningEffort.Value },
-                    },
+                // [MERGED 2026-09-15] Two features landed on this same option independently:
+                // reasoningEffort (reginsights-staging, 2026-09-14) makes the effort level
+                // per-caller-configurable (FreehandDimensions:ReasoningEffort) instead of
+                // hardcoded, so every OTHER caller keeps the model's own default when it passes
+                // null. ReasoningSummaryVerbosity (agent-reasoning-capture, this branch) requests
+                // the vendor's own summary of its reasoning for EVERY call this factory makes,
+                // regardless of effort level - it is the ONLY supported way to get any of the
+                // model's reasoning back (OpenAI's terms forbid extracting raw chain-of-thought by
+                // any other means). "Auto" lets each model pick its own summary style rather than
+                // forcing "concise", which the gpt-5 series rejects per Microsoft's own docs. See
+                // ReasoningSummaryExtractor for how this is read back out of the response. Effort
+                // level and summary verbosity are independent knobs - setting one is never a
+                // reason to skip the other.
+                //
+                // [TRIED 2026-09-15, REVERTED SAME DAY] A requestReasoningSummary flag briefly let
+                // one caller (render_html) skip this - ruled out as the cause of the real
+                // mid-generation content-refusal seen live on Users/Minda (5 live runs: failures
+                // happened with the summary both on and off, no real correlation). See
+                // NormalizeActivity's own doc comment on the ongoing investigation into the real
+                // trigger (the per-user leaderboard section, real employee names).
+                RawRepresentationFactory = _ => new CreateResponseOptions
+                {
+                    ReasoningOptions = reasoningEffort is null
+                        ? new ResponseReasoningOptions
+                        {
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                        }
+                        : new ResponseReasoningOptions
+                        {
+                            ReasoningEffortLevel = reasoningEffort.Value,
+                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto,
+                        },
+                },
             },
         };
 

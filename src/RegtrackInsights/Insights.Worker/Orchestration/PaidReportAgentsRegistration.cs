@@ -171,6 +171,11 @@ public static class PaidReportAgentsRegistration
             // ArgumentNullException deep inside the SDK, not a compile error. Confirmed via an
             // isolated repro against the pinned OpenAI 2.11.0 package. The explicit cast forces the
             // nullable target type instead.
+            // [TRIED 2026-09-15, REVERTED SAME DAY] requestReasoningSummary: false was a real
+            // diagnostic - ruled out, not the cause. 5 live Users/Minda runs total (2 summary ON,
+            // 3 summary OFF... reading was mixed both ways): failures happened regardless of this
+            // flag, always in the per-user leaderboard section, always right after a real named
+            // employee's row. See NormalizeActivity's own doc comment on the ongoing investigation.
             IReportHtmlAgent Build(string name, string description, string promptFile, string? modelOverride = null) =>
                 new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
                     modelOverride is null ? endpoint : freehandEndpoint, modelOverride ?? model, modelOverride is null ? apiKey : freehandApiKey, name, description,
