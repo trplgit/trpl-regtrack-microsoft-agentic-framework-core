@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using Insights.Api;
 using Insights.Domain;
@@ -16,7 +17,7 @@ public sealed class GenerateReportEndpointTests
         new(tenantId, "Acme Holdings", EntitlementTier.Paid, ScopeClass.TenantWide);
 
     private static GenerateReportRequest Request(int tenantId = Tenant) =>
-        new(tenantId, "compliance_health", new InsightsScopeRequest("tenant", null), "FY2025-26");
+        new(tenantId, new InsightsScopeRequest("tenant", null), "FY2025-26", "compliance_health");
 
     /// <summary>Every test below reaches step 3 (or later), so every test needs a cooldown fake -
     /// minimal API resolves every [FromServices] parameter for the matched handler up front,
@@ -202,7 +203,7 @@ public sealed class GenerateReportEndpointTests
         // "Entity" deliberately excluded here - see ReportTypeRouterTests and
         // Generate_EntityRequested_RoutesToFixedHolistic below for that redirect.
         var request = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: ["Nature", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -230,7 +231,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: ["Entity"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -265,6 +266,109 @@ public sealed class GenerateReportEndpointTests
     }
 
     /// <summary>
+    /// [ADDED 2026-09-15] The frontend does not send ReportType at all - it only ever sends
+    /// RequestedDimensions. A non-empty list with no ReportType must still fan out as
+    /// dimension_selection, exactly as if the caller had named it explicitly.
+    /// </summary>
+    [Fact]
+    public async Task Generate_OmittedReportType_WithDimensions_InfersDimensionSelection()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-inferred");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26",
+            RequestedDimensions: ["Location", "Act"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(2, enqueuer.Calls.Count);
+        Assert.All(enqueuer.Calls, call => Assert.Equal("dimension_selection", call.ReportType));
+        Assert.Contains(enqueuer.Calls, call => call.RequestedDimensions is ["Location"]);
+        Assert.Contains(enqueuer.Calls, call => call.RequestedDimensions is ["Act"]);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] Same omission, but with no RequestedDimensions either - the only signal
+    /// the frontend sends is silence, which must mean the full fixed_holistic report, not a
+    /// refusal and not an empty dimension_selection fan-out.
+    /// </summary>
+    [Fact]
+    public async Task Generate_OmittedReportType_WithNoDimensions_InfersFixedHolistic()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-inferred-fixed");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26");
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var call = Assert.Single(enqueuer.Calls);
+        Assert.Equal(FixedHolisticComposition.ReportType, call.ReportType);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] The typed tests above post a C# object where ReportType serializes as
+    /// `"reportType": null` - proves the server accepts an explicit null. This test sends the
+    /// raw JSON body the frontend will actually send: the key OMITTED entirely, not present as
+    /// null. Both must work; only this one proves it for a truly absent key.
+    /// </summary>
+    [Fact]
+    public async Task Generate_RawJsonWithReportTypeKeyEntirelyAbsent_InfersFixedHolistic()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-rawjson");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var rawJson = $$"""{"tenantId": {{Tenant}}, "scope": {"type": "tenant"}, "period": "FY2025-26"}""";
+        using var content = new StringContent(rawJson, Encoding.UTF8, "application/json");
+
+        var response = await client.PostAsync("/api/insights/reports", content);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var call = Assert.Single(enqueuer.Calls);
+        Assert.Equal(FixedHolisticComposition.ReportType, call.ReportType);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] An explicit ReportType still wins over inference - a caller (or a
+    /// future report type) that wants to override what RequestedDimensions alone would imply
+    /// must still be able to.
+    /// </summary>
+    [Fact]
+    public async Task Generate_ExplicitReportType_OverridesInference()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-explicit");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        // RequestedDimensions is non-empty (would infer dimension_selection) but ReportType is
+        // explicitly fixed_holistic - the explicit value must win, matching Entity's own
+        // redirect precedent of "resolved" always beating "requested".
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26",
+            FixedHolisticComposition.ReportType, RequestedDimensions: ["Location"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var call = Assert.Single(enqueuer.Calls);
+        Assert.Equal(FixedHolisticComposition.ReportType, call.ReportType);
+    }
+
+    /// <summary>
     /// [ADDED 2026-09-09, TEMP WORKAROUND - see ReportDimensionKey] Reproduces, and proves fixed,
     /// the exact complaint: generating Nature must not block Entity for the same tenant/period.
     /// Confirms the effective period (not the caller's literal Period) is what reaches both the
@@ -283,10 +387,10 @@ public sealed class GenerateReportEndpointTests
         // Generate_EntityRequested_RoutesToFixedHolistic) - "Act" exercises the same
         // different-dimensions-different-periods behaviour without tangling with that redirect.
         var natureRequest = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: ["Nature"]);
         var actRequest = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: ["Act"]);
 
         await client.PostAsJsonAsync("/api/insights/reports", natureRequest);
@@ -382,7 +486,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: ["Location", "Nature", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -421,7 +525,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: []);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -445,7 +549,7 @@ public sealed class GenerateReportEndpointTests
         var enqueuer = new FakeRunEnqueuer("insights-1490-fixed");
 
         var request = new GenerateReportRequest(
-            Tenant, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26");
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", FixedHolisticComposition.ReportType);
 
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
@@ -481,7 +585,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, "dimension_selection", new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
             RequestedDimensions: ["Location", "Nature", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);

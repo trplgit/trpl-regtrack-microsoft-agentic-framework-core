@@ -1,3 +1,4 @@
+using Dapper;
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
@@ -341,6 +342,231 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             output.WriteLine($"Summary: {results.Length - failed.Count}/{results.Length} completed.");
             foreach (var (dimension, tenantId, outcome) in failed)
                 output.WriteLine($"  FAILED: {dimension}, tenant {tenantId} -> {outcome}");
+
+            Assert.Empty(failed);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY, read-only diagnostic - real token spend recorded in dbo.InsightsTenantTokenUsage
+    /// (SqlTenantTokenBudgetRepository's own table, written once per real run by
+    /// RecordTenantTokenUsageActivity). Added in response to a direct user question about spend -
+    /// this is the actual, ground-truth token count for every real run this session made, not an
+    /// estimate. Deliberately reports RAW TOKENS ONLY, no dollar conversion - CLAUDE.md non-
+    /// negotiable #2 (fail closed, never guess) applies here too: real per-deployment pricing for
+    /// sol/gpt-5.2 isn't known to this code, so fabricating a dollar figure would be exactly the
+    /// kind of unverifiable claim the whole pipeline exists to refuse.
+    /// </summary>
+    [Fact]
+    public async Task ReportRealTokenSpend()
+    {
+        var connectionString = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build()["ConnectionStrings:RegTrack"]!;
+
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+
+        var byTenant = await connection.QueryAsync<(int CustomerID, long Runs, long TotalTokens, DateTime FirstRecordedUtc, DateTime LastRecordedUtc)>("""
+            SELECT CustomerID, COUNT(*) AS Runs, SUM(TotalTokens) AS TotalTokens,
+                   MIN(RecordedAtUtc) AS FirstRecordedUtc, MAX(RecordedAtUtc) AS LastRecordedUtc
+            FROM dbo.InsightsTenantTokenUsage
+            GROUP BY CustomerID
+            ORDER BY SUM(TotalTokens) DESC;
+            """);
+
+        long grandTotal = 0;
+        long totalRuns = 0;
+        output.WriteLine("Tenant | Runs | TotalTokens | First | Last");
+        foreach (var row in byTenant)
+        {
+            output.WriteLine($"{row.CustomerID} | {row.Runs} | {row.TotalTokens:N0} | {row.FirstRecordedUtc:o} | {row.LastRecordedUtc:o}");
+            grandTotal += row.TotalTokens;
+            totalRuns += row.Runs;
+        }
+        output.WriteLine($"GRAND TOTAL: {totalRuns} runs, {grandTotal:N0} tokens, across {byTenant.Count()} tenants.");
+    }
+
+    /// <summary>
+    /// THROWAWAY, read-only diagnostic - checks whether sql/31_agent_reasoning_log.sql (from the
+    /// still-unmerged agent-reasoning-capture branch, parked pending user/Vinay deploy) has
+    /// actually been deployed to the real vitComplianceSystem database. Also flags a REAL
+    /// filename collision found while checking this: reginsights-staging now has its OWN,
+    /// DIFFERENT sql/31 (Tanvi's sql/31_freetier_insight_json.sql, merged 2026-09-15) - if
+    /// agent-reasoning-capture is ever merged as-is, its sql/31_agent_reasoning_log.sql will
+    /// collide on the filename (and both scripts would need to be renumbered/reconciled).
+    /// </summary>
+    [Fact]
+    public async Task CheckAgentReasoningLogTableDeployed()
+    {
+        var connectionString = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build()["ConnectionStrings:RegTrack"]!;
+
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+        var exists = await connection.QuerySingleAsync<int>(
+            "SELECT CASE WHEN OBJECT_ID('dbo.InsightsAgentReasoningLog', 'U') IS NULL THEN 0 ELSE 1 END;");
+
+        output.WriteLine(exists == 1
+            ? "DEPLOYED: dbo.InsightsAgentReasoningLog exists in vitComplianceSystem."
+            : "NOT DEPLOYED: dbo.InsightsAgentReasoningLog does not exist - sql/31_agent_reasoning_log.sql (agent-reasoning-capture branch) has not been run against this database.");
+    }
+
+    /// <summary>
+    /// THROWAWAY, one-off cleanup - terminates specific stale orchestration instances by id.
+    /// [ADDED 2026-09-14] The shared task hub (vitInsightsTaskHub) accumulated ~21 Running
+    /// instances left over from earlier manual runs this session that were stopped via TaskStop
+    /// mid-flight rather than reaching a terminal state (DurableTask.Core.TaskHubClient has no
+    /// "list all instances" API - these ids were read directly off a stuck run's own console log,
+    /// where they kept appearing as "Checkpointing orchestration... Running" for 20 real minutes
+    /// while a brand-new Minda Entity request never got a single LlmConcurrencyGate slot). User
+    /// confirmed (2026-09-14): terminate the backlog, then retry.
+    /// </summary>
+    [Fact]
+    public async Task TerminateStaleBacklogInstances()
+    {
+        string[] staleIds =
+        [
+            "0e8fe72a93bb4aec85d82b85d70b4950", "0ef2dda75da34f70bdc0eaad204cb693",
+            "1864fdbc89014a44b673ca367eaa6897", "1d0e648f1c16426b9e590af058932803",
+            "1ef682ee2e7c4bac9b4cd617fd0ac549", "25c4203f5c8a4845936989f42de55dfe",
+            "26fe292614554041b5b67c1736fa643d", "34e704646da64fc583d0669dab3a603d",
+            "38bdf108f63a4e87ba8af7144e611814", "3d3e2c451c7a44dfaabe1ce08e877509",
+            "6f927fe965314cee837737cd0f33e8c5", "89d562309a7b4f658f272635c724343f",
+            "96d31fd9169c431ca520328f65d86822", "9d4f948f2e5f4338b8a523b2a0e2571a",
+            "ab8fc6a5e1ff44a5bfd9e0b649fe6854", "ada59eddbb2141008bff6f47c912c68a",
+            "ba5ee6799c414eca958b220c06c5781c", "bcb70348e38e4d4e87d0956607a6afef",
+            "c31bdbf289ba4480b69d830cf1431b7b", "cd3d0c69b96a41619713b857a665fb20",
+            "dda2a595a2e845c5b42350c2f2adc8bb", "fc0ea03f129344b5bec8ae51fb4af8f7",
+        ];
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsOrchestration(configuration);
+        var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<TaskHubClient>();
+
+        foreach (var id in staleIds)
+        {
+            var state = await client.GetOrchestrationStateAsync(id);
+            if (state is null)
+            {
+                output.WriteLine($"{id}: not found (already gone)");
+                continue;
+            }
+            if (state.OrchestrationStatus is OrchestrationStatus.Completed or OrchestrationStatus.Failed or OrchestrationStatus.Terminated)
+            {
+                output.WriteLine($"{id}: already terminal ({state.OrchestrationStatus})");
+                continue;
+            }
+            await client.TerminateInstanceAsync(state.OrchestrationInstance, "Stale backlog cleanup 2026-09-14 - superseded by TaskStop mid-run, never reached terminal state.");
+            output.WriteLine($"{id}: terminated (was {state.OrchestrationStatus})");
+        }
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-14] All 7 v1 dimensions (CLAUDE.md "V1 release scope") for ONE real tenant -
+    /// Minda Corporation Group (1008, user 12116, same pair as every other Minda run this session).
+    /// Sequential, not concurrent: this is a single-tenant completeness check, not a load test (that
+    /// is RunAsync_FreehandDimensions_RealTenants_Concurrently_AllReachCompleteStatus's job), and
+    /// running sequentially gives each dimension the full 3-slot LlmConcurrencyGate to itself rather
+    /// than fighting the other 6 for it, plus lets the local-fallback filename unambiguously identify
+    /// which dimension produced which file WITHOUT parsing PersistOutput.LocalFilePath back out of
+    /// state.Output - Period is threaded through to PersistActivity unchanged
+    /// (InsightsReportOrchestrator.cs:835), so embedding the dimension name in Period here is enough
+    /// (same trick the 2026-09-13 session used, see the "solretry1__dim=act" style files already in
+    /// Reports:LocalFallbackDirectory).
+    ///
+    /// Entity is requested exactly like the other 6 - ReportTypeRouter's own Entity-ALONE redirect
+    /// (InsightsReportOrchestrator.cs, "Product rule 2026-09-11") turns it into a real "fixed_holistic"
+    /// run before anything else reads ReportType, so this test does not special-case it.
+    ///
+    /// [PRE-REQUISITE, 2026-09-14] Run TerminateStaleBacklogInstances first - the same shared task
+    /// hub DB had ~21 leftover Running instances from earlier manual runs (stopped mid-flight via
+    /// TaskStop) that starved a fresh run of the 3-slot LlmConcurrencyGate for 20+ real minutes with
+    /// zero errors, only "No events found. Waiting..." - not a code defect, a real backlog.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_AllV1Dimensions_Minda_StoresLocally()
+    {
+        // CLAUDE.md's "V1 release scope" table, in table order.
+        string[] dimensions = ["Entity", "Users", "Departments", "BacklogAging", "Act", "Licence", "Location"];
+        const int tenantId = 1008;
+        const int userId = 12116;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var results = new List<(string Dimension, string Outcome, string? LocalFilePath)>();
+
+            foreach (var dimension in dimensions)
+            {
+                var input = new InsightsReportOrchestrationInput(
+                    tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                    $"90day__dim={dimension}", userId, LlmCallPriority.Interactive, [dimension]);
+
+                var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+                output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} Enqueued {dimension} -> {instance.InstanceId}");
+
+                var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(20));
+                output.WriteLine($"{DateTime.UtcNow:HH:mm:ss} {dimension}: {state.OrchestrationStatus}, final status {state.Status}");
+
+                string? localFilePath = null;
+                if (state.OrchestrationStatus == OrchestrationStatus.Completed && !string.IsNullOrEmpty(state.Output))
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(state.Output);
+                    if (doc.RootElement.TryGetProperty("LocalFilePath", out var pathProp))
+                        localFilePath = pathProp.GetString();
+                    output.WriteLine($"  Stored: {localFilePath}");
+                }
+                else
+                {
+                    output.WriteLine($"  Output/failure detail ({dimension}): {state.Output}");
+                }
+
+                results.Add((dimension, state.OrchestrationStatus.ToString(), localFilePath));
+            }
+
+            var failed = results.Where(r => r.Outcome != nameof(OrchestrationStatus.Completed)).ToList();
+            output.WriteLine($"Summary: {results.Count - failed.Count}/{results.Count} completed.");
+            foreach (var r in results)
+                output.WriteLine($"  {r.Dimension}: {r.Outcome}{(r.LocalFilePath is null ? "" : " -> " + r.LocalFilePath)}");
 
             Assert.Empty(failed);
         }

@@ -66,6 +66,28 @@ public static class RunEndpoints
                 return InsightsResults.Error(InsightsErrorCode.ScopeDenied, "No entities are currently in your Insights scope.");
             }
 
+            // [ADDED 2026-09-15] The frontend does not send ReportType at all - infer it from
+            // RequestedDimensions alone, the only signal it DOES send. The two are already
+            // coupled by validation below (dimension_selection always needs a non-empty list;
+            // every other type always expects it null/absent), so this covers every valid case
+            // without the client ever naming a report type. An explicit ReportType from the
+            // caller still wins - this only fills the gap when it is omitted.
+            //
+            // Rebinding `request` (not a separate local) so every downstream read of
+            // request.ReportType - including the one inside GenerateOneReportAsync, which takes
+            // this whole record - sees the resolved value without threading a second parameter
+            // through. The `!` two lines down is safe because this is the only place ReportType
+            // can still be null past this point.
+            if (request.ReportType is null)
+            {
+                request = request with
+                {
+                    ReportType = request.RequestedDimensions is { Count: > 0 }
+                        ? DimensionSelectionComposition.ReportType
+                        : FixedHolisticComposition.ReportType,
+                };
+            }
+
             /*  [PRODUCT DECISION 2026-09-11] Picking several dimensions no longer produces ONE
                 combined multi-section document - it produces one INDEPENDENT report PER
                 dimension, each its own orchestration run, its own cooldown key, its own blob and
@@ -244,8 +266,10 @@ public static class RunEndpoints
         // instead - see ReportTypeRouter's own doc comment. Everything below uses the RESOLVED
         // reportType/requestedDimensions, never request.ReportType/dimension directly, so the
         // cooldown key, the run id, and the orchestration input all agree on what actually runs.
+        // `!` is safe: the POST handler above rebinds request.ReportType to a real value
+        // (explicit or inferred) before this is ever called - the only place it can be null.
         var (reportType, requestedDimensions) = ReportTypeRouter.Resolve(
-            request.ReportType, dimension is null ? null : [dimension]);
+            request.ReportType!, dimension is null ? null : [dimension]);
 
         // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - folds
         // RequestedDimensions into the period used for BOTH the cooldown check and the enqueue
@@ -499,10 +523,17 @@ public static class RunEndpoints
 /// names exactly which of the fourteen dimensions this run scopes to. This is the API-side half
 /// of the multi-dimension report feature - previously only reachable via
 /// InsightsRunOnceWorker's --Insights:Dimensions CLI flag.
+///
+/// <paramref name="ReportType"/> [ADDED 2026-09-15, now OPTIONAL] - the frontend does not send
+/// this field. When omitted, RunEndpoints' POST handler infers it from RequestedDimensions alone
+/// (non-empty -> dimension_selection, empty/null -> fixed_holistic) before anything else reads
+/// it - see that handler's own doc comment. Still accepted explicitly for a caller that wants to
+/// override the inference (or a future third report type that isn't shaped as "a dimension list
+/// or nothing"), which is why this stays a real field rather than being deleted outright.
 /// </summary>
 public sealed record GenerateReportRequest(
-    int TenantId, string ReportType, InsightsScopeRequest Scope, string Period,
-    IReadOnlyList<string>? RequestedDimensions = null);
+    int TenantId, InsightsScopeRequest Scope, string Period,
+    string? ReportType = null, IReadOnlyList<string>? RequestedDimensions = null);
 
 /// <summary>
 /// [ADDED 2026-09-11] One entry per independent report the fan-out (see

@@ -66,7 +66,7 @@ Auth required.
 | Param | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `tenantId` | query | int | yes | server-validated against the caller's eligible set |
-| `reportType` | query | string | yes | `fixed_holistic` \| `dimension_selection` |
+| `reportType` | query | string | **no** | `fixed_holistic` \| `dimension_selection` - an optional filter. Omit to get history across both report types; pass it to narrow to just one. **[CHANGED 2026-09-15]** matches endpoint 3's own reportType simplification - not yet implemented either way, so this is a contract decision, not a code change. |
 
 **200**
 ```jsonc
@@ -102,7 +102,6 @@ Auth required.
 ```jsonc
 {
   "tenantId": 1490,
-  "reportType": "fixed_holistic",
   "scope": { "type": "tenant" },
   "period": "FY2025-26",
   "requestedDimensions": null
@@ -112,10 +111,14 @@ Auth required.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `tenantId` | int | yes | server-validated |
-| `reportType` | string | yes | `fixed_holistic` \| `dimension_selection` |
 | `scope` | object | yes | `{ "type": "tenant" }` or `{ "type": "entity", "entityId": 92442 }` |
 | `period` | string | yes | e.g. `FY2025-26` |
-| `requestedDimensions` | string[] \| null | no | **only** for `dimension_selection` — the dimensions to generate (e.g. `["Location","Nature","Act"]`). At least one required for this report type. Omit/`null` for `fixed_holistic`. |
+| `requestedDimensions` | string[] \| null | no | the dimensions to generate (e.g. `["Location","Nature","Act"]`), or omit/`null` for the full report. This is the field that actually decides the shape - see below. |
+| `reportType` | string | **no — do not send this** | `fixed_holistic` \| `dimension_selection`. **[CHANGED 2026-09-15]** The server infers this from `requestedDimensions` alone: non-empty list -> `dimension_selection` (fans out one report per entry), empty/omitted -> `fixed_holistic` (one full report). Only send this explicitly if you need to override the inference - normal client code never should. |
+
+> **In plain terms:** don't send `reportType`. Send `requestedDimensions: null` (or omit it) for
+> the full 6-tab report, or `requestedDimensions: ["Location","Act",...]` for specific ones -
+> that's the whole decision.
 
 > **[PRODUCT DECISION 2026-09-11] Picking N dimensions produces N INDEPENDENT reports, not
 > one combined document.** Each requested dimension becomes its own orchestration run, its own
