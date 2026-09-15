@@ -32,7 +32,9 @@ public sealed record AiReportWeeklyReport(
 public sealed record AiReportWeeklyFocus(
     [property: JsonPropertyName("metric")] string Metric,
     [property: JsonPropertyName("value")] int Value,
-    [property: JsonPropertyName("denominator")] int? Denominator);
+    [property: JsonPropertyName("denominator")] int? Denominator,
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("display_text")] string DisplayText);
 
 /// <summary>The 200 OK body. `result.status` is "Created" on first POST for a key, "Updated" on every re-POST.</summary>
 public sealed record AiReportWeeklyUpsertResult(
