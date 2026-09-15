@@ -67,9 +67,13 @@ public sealed class InsightsRunOnceWorker(
             // share a --Insights:Period value.
             period = ReportDimensionKey.ForCooldownAndRunId(period, requestedDimensions);
 
+            // Presentation:RunVisionQa [ADDED 2026-09-15] - same flag DurableTaskRunEnqueuer reads
+            // for the real API path (WorkerRegistration.cs), read directly here since this CLI
+            // trigger builds its own input rather than going through that enqueuer.
+            var runVisionQa = configuration.GetValue("Presentation:RunVisionQa", true);
             var input = new InsightsReportOrchestrationInput(
                 tenantId, reportType, new InsightsScopeRequest("tenant", null), period, userId,
-                RequestedDimensions: requestedDimensions);
+                RequestedDimensions: requestedDimensions, RunVisionQa: runVisionQa);
 
             logger.LogInformation("Starting InsightsReportOrchestrator for tenant {TenantId}, user {UserId}.", tenantId, userId);
             /*  The instance id is DERIVED from (tenant, scope, type, period), not left to DTFx.
