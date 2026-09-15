@@ -1,0 +1,28 @@
+name: Deployment Dispatcher
+permissions:
+  contents: read
+  id-token: write
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-demo:
+    if: github.ref_name == 'demo'
+    uses: ./.github/workflows/deploy.demo.yml
+    with:
+      environment: demo
+    secrets: inherit
+
+  deploy-staging:
+    if: github.ref_name == 'staging'
+    uses: ./.github/workflows/deploy.staging.yml
+    with:
+      environment: staging
+    secrets: inherit
+
+  deploy-production:
+    if: github.ref_name == 'main'
+    uses: ./.github/workflows/deploy.production.yml
+    with:
+      environment: production
+    secrets: inherit
