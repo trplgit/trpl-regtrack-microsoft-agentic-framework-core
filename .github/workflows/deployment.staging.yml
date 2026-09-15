@@ -1,0 +1,269 @@
+name: Deploy RegInsights Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - demo
+          - production
+
+  workflow_call:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT_NAME }}
+  AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
+  ENVIRONMENT: ${{ inputs.environment }}
+
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  IMAGE_NAME: regtrack-insights-worker
+
+  AKS_RESOURCE_GROUP: TRPL-DEMOGROUP
+  AKS_CLUSTER_NAME: TRPL-Demo-Cluster
+
+  K8S_NAMESPACE: ${{ inputs.environment }}
+  DEPLOYMENT_NAME: trpl-regtrack-insights-worker
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Azure CLI
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az version
+
+      # ---------------------------------------------------------
+      # Download environment configuration from Blob
+      # ---------------------------------------------------------
+
+      - name: Download appsettings.json from Blob
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p .
+
+          az storage blob download \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "reginsights" \
+            --name "${ENVIRONMENT}/appsettings.json" \
+            --file "appsettings.json" \
+            --overwrite
+
+          test -f appsettings.json
+
+          echo "Downloaded ${ENVIRONMENT}/appsettings.json"
+
+      # ---------------------------------------------------------
+      # Download Trplclientsecret.dll from Blob
+      # ---------------------------------------------------------
+
+      - name: Download Trplclientsecret.dll from Blob
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p libs
+
+          az storage blob download \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --account-key "$AZURE_STORAGE_KEY" \
+            --container-name "reginsights" \
+            --name "${ENVIRONMENT}/Trplclientsecret.dll" \
+            --file "libs/Trplclientsecret.dll" \
+            --overwrite
+
+          test -f libs/Trplclientsecret.dll
+
+          echo "Downloaded ${ENVIRONMENT}/Trplclientsecret.dll"
+
+      # ---------------------------------------------------------
+      # Azure Container Registry
+      # ---------------------------------------------------------
+
+      - name: Login to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # ---------------------------------------------------------
+      # Build and push image
+      # ---------------------------------------------------------
+
+      - name: Build and push Docker image
+        shell: bash
+        run: |
+          set -e
+
+          IMAGE="${ACR_NAME}.azurecr.io/${ENVIRONMENT}/${IMAGE_NAME}:latest"
+
+          echo "Building image: $IMAGE"
+
+          docker build \
+            -t "$IMAGE" \
+            .
+
+          docker push "$IMAGE"
+
+          echo "Image pushed: $IMAGE"
+
+      # ---------------------------------------------------------
+      # Azure login
+      # ---------------------------------------------------------
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ---------------------------------------------------------
+      # Get AKS credentials
+      # ---------------------------------------------------------
+
+      - name: Get AKS credentials
+        shell: bash
+        run: |
+          az aks get-credentials \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --overwrite-existing
+
+      # ---------------------------------------------------------
+      # Create namespace
+      # ---------------------------------------------------------
+
+      - name: Ensure namespace exists
+        shell: bash
+        run: |
+          kubectl create namespace "$K8S_NAMESPACE" \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+      # ---------------------------------------------------------
+      # Create ACR pull secret
+      # ---------------------------------------------------------
+
+      - name: Create ACR pull secret
+        shell: bash
+        run: |
+          kubectl create secret docker-registry acr-pull-secret \
+            --namespace "$K8S_NAMESPACE" \
+            --docker-server="${ACR_NAME}.azurecr.io" \
+            --docker-username="${{ secrets.ACR_USERNAME }}" \
+            --docker-password="${{ secrets.ACR_PASSWORD }}" \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+      # ---------------------------------------------------------
+      # Deploy worker
+      # ---------------------------------------------------------
+
+      - name: Deploy RegInsights Worker
+        shell: bash
+        run: |
+          set -e
+
+          IMAGE="${ACR_NAME}.azurecr.io/${ENVIRONMENT}/${IMAGE_NAME}:latest"
+
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${DEPLOYMENT_NAME}
+            namespace: ${K8S_NAMESPACE}
+            labels:
+              app: ${DEPLOYMENT_NAME}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: ${DEPLOYMENT_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${DEPLOYMENT_NAME}
+              spec:
+                automountServiceAccountToken: false
+
+                imagePullSecrets:
+                  - name: acr-pull-secret
+
+                containers:
+                  - name: regtrack-insights-worker
+                    image: ${IMAGE}
+                    imagePullPolicy: Always
+
+                    env:
+                      - name: DOTNET_ENVIRONMENT
+                        value: "${ENVIRONMENT}"
+
+                      - name: Insights__ClientOnly
+                        value: "false"
+
+                    resources:
+                      requests:
+                        cpu: "500m"
+                        memory: "1Gi"
+                      limits:
+                        cpu: "2"
+                        memory: "4Gi"
+
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      runAsNonRoot: true
+                      capabilities:
+                        drop:
+                          - ALL
+          EOF
+
+      # ---------------------------------------------------------
+      # Restart and wait
+      # ---------------------------------------------------------
+
+      - name: Restart deployment
+        shell: bash
+        run: |
+          kubectl rollout restart deployment/${DEPLOYMENT_NAME} \
+            -n "$K8S_NAMESPACE"
+
+      - name: Wait for rollout
+        shell: bash
+        run: |
+          kubectl rollout status \
+            deployment/${DEPLOYMENT_NAME} \
+            -n "$K8S_NAMESPACE" \
+            --timeout=5m
+
+      - name: Check deployment
+        shell: bash
+        run: |
+          kubectl get deployment \
+            ${DEPLOYMENT_NAME} \
+            -n "$K8S_NAMESPACE"
+
+          kubectl get pods \
+            -n "$K8S_NAMESPACE" \
+            -l app=${DEPLOYMENT_NAME}
