@@ -146,6 +146,13 @@ public static class WorkerRegistration
         services.AddTransient<SendDigestFromArtifactActivity>();
         services.AddTransient<MarkDigestArtifactDispatchedActivity>();
 
+        // ADR-0002 (2026-09-11) - the per-user insight JSON lane, Sunday-only, sibling to the
+        // GENERATE phase above. ComposeInsightJsonActivity has no special construction needs, so
+        // it registers here like every other activity; PostInsightJsonActivity is registered by
+        // AddInsightsFreeDigest instead (it needs the named insights-insight-api HttpClient),
+        // which runs before this method - see Program.cs's registration order.
+        services.AddTransient<ComposeInsightJsonActivity>();
+
         services.AddSingleton(sp =>
         {
             var service = sp.GetRequiredService<SqlOrchestrationService>();
@@ -167,6 +174,8 @@ public static class WorkerRegistration
                 FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)));
             worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
                 FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)));
+            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
+                FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)));
 
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
@@ -185,7 +194,8 @@ public static class WorkerRegistration
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
                 ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),
                 ActivityCreator<FetchDigestArtifactActivity>(sp), ActivityCreator<SendDigestFromArtifactActivity>(sp),
-                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp));
+                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp),
+                ActivityCreator<ComposeInsightJsonActivity>(sp), ActivityCreator<PostInsightJsonActivity>(sp));
 
             return worker;
         });

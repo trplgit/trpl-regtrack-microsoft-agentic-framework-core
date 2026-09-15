@@ -25,7 +25,9 @@ public sealed class FreeDigestEmailRendererTests
             new DateTime(2026, 8, 23), "https://example.com/upgrade", "https://example.com/unsubscribe");
 
         Assert.Contains("<strong>66 obligations</strong>", html);
-        Assert.DoesNotContain("**", html);
+        // Not a blanket "no ** anywhere in the page" - the shell's own doc comment legitimately
+        // quotes "**bold**" when describing FormatBody. Only the BODY's own markdown must be gone.
+        Assert.DoesNotContain("**66 obligations**", html);
     }
 
     [Fact]
@@ -49,8 +51,10 @@ public sealed class FreeDigestEmailRendererTests
             "<img src=x onerror=alert(1)>", "ABC Training",
             new DateTime(2026, 8, 23), "https://example.com/upgrade", "https://example.com/unsubscribe");
 
-        Assert.DoesNotContain("<img", html);
-        Assert.Contains("&lt;img", html);
+        // Not a blanket "no <img anywhere in the page" - the shell itself has real logo/icon <img>
+        // tags. The property under test is that the BODY's own malicious tag never lands unescaped.
+        Assert.DoesNotContain("<img src=x onerror=alert(1)>", html);
+        Assert.Contains("&lt;img src=x onerror=alert(1)&gt;", html);
     }
 
     [Fact]

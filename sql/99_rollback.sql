@@ -71,6 +71,9 @@ GO
 /*   Free-tier send log + suppression procedures (sql/15, 16)  */
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestReleaseClaim',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestReleaseClaim;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestRecordOutcome', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestRecordOutcome;
+IF OBJECT_ID('dbo.usp_Insights_InsightJsonClaimPost',    'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonClaimPost;
+IF OBJECT_ID('dbo.usp_Insights_InsightJsonRecordOutcome','P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonRecordOutcome;
+IF OBJECT_ID('dbo.usp_Insights_InsightJsonReleaseClaim', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonReleaseClaim;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestClaimSend',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestClaimSend;
 IF OBJECT_ID('dbo.usp_Insights_DigestSuppressionList',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppressionList;
 IF OBJECT_ID('dbo.usp_Insights_DigestUnsuppress',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestUnsuppress;
@@ -109,6 +112,10 @@ IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.In
     Delete the corresponding "insights-digests" blob container contents
     separately - this script only ever touches SQL, never blob storage.    */
 IF OBJECT_ID('dbo.InsightsFreeDigestArtifact', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestArtifact;
+/*  sql/31 - NOTE: dropping this table discards the insight JSON's weekly-once
+    guarantee. Re-running the lane after a rollback can re-POST a recipient's
+    insight for a week already posted.                                     */
+IF OBJECT_ID('dbo.InsightsFreeDigestJsonLog', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestJsonLog;
 
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;
