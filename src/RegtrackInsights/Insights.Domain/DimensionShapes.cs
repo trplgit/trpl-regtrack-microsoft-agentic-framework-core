@@ -321,6 +321,18 @@ public sealed record UsersControlTotals
     /// due date and completion date. Cite verbatim in the Completion timing tab's caveat note.
     /// </summary>
     public int TimingOutliersExcluded { get; init; }
+    /// <summary>
+    /// [ADDED 2026-09-15] Distinct headcount of users with at least one Performer/Reviewer
+    /// assignment - <see cref="UsersHeadcountCalculator"/> computes these deterministically in C#
+    /// over the already-fetched <see cref="UsersRow"/> array (not a new SQL column - sql/12 was
+    /// deliberately left untouched). Added because the render prompt already asked for a
+    /// "Reviewer cover {performerUserCount}:{reviewerUserCount}" chip that no field actually
+    /// backed - confirmed live the model was substituting a different, unrelated number instead
+    /// of counting 300+ rows by hand, which an LLM cannot do reliably anyway.
+    /// </summary>
+    public int PerformerUserCount { get; init; }
+    /// <summary>[ADDED 2026-09-15] See <see cref="PerformerUserCount"/>.</summary>
+    public int ReviewerUserCount { get; init; }
 }
 
 /// <summary>

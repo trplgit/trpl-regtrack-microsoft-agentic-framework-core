@@ -1,3 +1,4 @@
+using Dapper;
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
@@ -387,6 +388,180 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         {
             output.WriteLine("Worker is live and dequeuing. Staying up for 30 minutes or until stopped.");
             await Task.Delay(TimeSpan.FromMinutes(30));
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// THROWAWAY diagnostic - prints the stored Output for a specific, already-terminated
+    /// instance id. State survives in the SQL-backed task hub regardless of process lifetime.
+    /// </summary>
+    [Fact]
+    public async Task PrintFailureDetailForInstance()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsOrchestration(configuration);
+        var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<TaskHubClient>();
+
+        var state = await client.GetOrchestrationStateAsync("9969e74dff764adab2bb248a5f5ab24e");
+        output.WriteLine($"Status: {state?.OrchestrationStatus}");
+        output.WriteLine($"Output: {state?.Output}");
+
+        await using var regTrackConnection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var reasoningRows = await regTrackConnection.QueryAsync<(string Stage, string ReasoningSummary)>(
+            "SELECT Stage, ReasoningSummary FROM dbo.InsightsAgentReasoningLog WHERE RunId = @RunId ORDER BY Id;",
+            new { RunId = "9969e74dff764adab2bb248a5f5ab24e" });
+        output.WriteLine($"Reasoning rows for Agrocel run: {reasoningRows.Count()}");
+        foreach (var row in reasoningRows)
+            output.WriteLine($"  [{row.Stage}] {row.ReasoningSummary[..Math.Min(100, row.ReasoningSummary.Length)]}...");
+
+        var hubConnectionString = configuration["ConnectionStrings:DurableTaskHub"]!;
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(hubConnectionString);
+
+        var payloadColumns = await connection.QueryAsync<string>(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dt' AND TABLE_NAME = 'Payloads' ORDER BY ORDINAL_POSITION;");
+        output.WriteLine("dt.Payloads columns: " + string.Join(", ", payloadColumns));
+
+        var withTaskId = await connection.QueryAsync(
+            "SELECT EventType, Name, TaskID, DataPayloadID FROM dt.History WHERE InstanceID = @InstanceID ORDER BY SequenceNumber;",
+            new { InstanceID = "8083bc14af104a2c9d7dfe6babc7a07a" });
+        foreach (var row in withTaskId)
+            output.WriteLine($"  {row.EventType} | {row.Name} | TaskID={row.TaskID} | DataPayloadID={row.DataPayloadID}");
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] Real end-to-end test of the just-merged reasoning-capture feature:
+    /// one real dimension_selection:Users run for Minda (1008/12116, fast - fixed template, no
+    /// freehand composition call), then a direct read of dbo.InsightsAgentReasoningLog to prove
+    /// real rows actually land for this runId - not just that the orchestration completes.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_Users_Minda_RecordsRealReasoningSummaries()
+    {
+        const int tenantId = 1008;
+        const int userId = 12116;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        // Must come BEFORE AddInsightsOrchestration - see Program.cs's own ordering comment.
+        // Missing this the first time this test ran left IAgentReasoningRecorder unregistered,
+        // so RenderHtmlActivity silently fell back to the no-op IAgentReasoningRecorder.Null -
+        // the orchestration completed fine and this assertion failed on an empty table, which
+        // looked like a feature bug but was actually an incomplete test harness.
+        services.AddInsightsAgentReasoning(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        string instanceId;
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var input = new InsightsReportOrchestrationInput(
+                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day__reasoning-capture-test", userId, LlmCallPriority.Interactive, ["Users"]);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            instanceId = instance.InstanceId;
+            var state = await PollUntilTerminalAsync(client, instanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"{instanceId}: {state.OrchestrationStatus}, final status {state.Status}");
+            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+
+        await using var connection = new Microsoft.Data.SqlClient.SqlConnection(configuration["ConnectionStrings:RegTrack"]);
+        var rows = (await connection.QueryAsync<(string Stage, string ReasoningSummary)>(
+            "SELECT Stage, ReasoningSummary FROM dbo.InsightsAgentReasoningLog WHERE RunId = @RunId ORDER BY Id;",
+            new { RunId = instanceId })).ToList();
+
+        output.WriteLine($"Reasoning rows for {instanceId}: {rows.Count}");
+        foreach (var row in rows)
+            output.WriteLine($"  [{row.Stage}] {row.ReasoningSummary[..Math.Min(120, row.ReasoningSummary.Length)]}...");
+
+        Assert.NotEmpty(rows);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-15] Real cross-tenant check for the render-refusal investigation
+    /// (NormalizeActivity's own doc comment) - same dimension_selection:Users run, but Agrocel
+    /// (1082/14128) instead of Minda (1008/12116). Answers: does the per-user-leaderboard refusal
+    /// reproduce on a DIFFERENT tenant's real employee data, or is it specific to Minda's own
+    /// content? No reasoning-table assertion here - this run is purely about completion/failure.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_Users_Agrocel_ChecksIfLeaderboardRefusalReproducesCrossTenant()
+    {
+        const int tenantId = 1082;
+        const int userId = 14128;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsAgentReasoning(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            var input = new InsightsReportOrchestrationInput(
+                tenantId, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day__leaderboard-crosstenant-test", userId, LlmCallPriority.Interactive, ["Users"]);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"{instance.InstanceId}: {state.OrchestrationStatus}, final status {state.Status}");
+            if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                output.WriteLine($"Output/failure detail: {state.Output}");
         }
         finally
         {

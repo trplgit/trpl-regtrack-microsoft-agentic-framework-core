@@ -118,6 +118,13 @@ public static class MafAgentFactory
                 // ReasoningSummaryExtractor for how this is read back out of the response. Effort
                 // level and summary verbosity are independent knobs - setting one is never a
                 // reason to skip the other.
+                //
+                // [TRIED 2026-09-15, REVERTED SAME DAY] A requestReasoningSummary flag briefly let
+                // one caller (render_html) skip this - ruled out as the cause of the real
+                // mid-generation content-refusal seen live on Users/Minda (5 live runs: failures
+                // happened with the summary both on and off, no real correlation). See
+                // NormalizeActivity's own doc comment on the ongoing investigation into the real
+                // trigger (the per-user leaderboard section, real employee names).
                 RawRepresentationFactory = _ => new CreateResponseOptions
                 {
                     ReasoningOptions = reasoningEffort is null
