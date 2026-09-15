@@ -1,5 +1,7 @@
+#pragma warning disable OPENAI001 // ResponseReasoningEffortLevel - experimental, same suppression MafAgentFactory.cs already uses.
 using Dapper;
 using DurableTask.Core;
+using Insights.Agents;
 using Insights.Data;
 using Insights.Domain;
 using Insights.Worker;
@@ -392,6 +394,63 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
+    /// THROWAWAY diagnostic - ONE direct, isolated agent call (no DTFx, no SQL, no orchestrator -
+    /// just MafAgentFactory + a trivial prompt against the real sol endpoint) to see EXACTLY what
+    /// content types a real response carries. Real orchestration runs always come back with
+    /// ReasoningSummaryExtractor.Extract finding nothing (dbo.InsightsAgentReasoningLog stays at
+    /// 0 rows even on clean completions) - this answers whether the API genuinely never returns a
+    /// summary for this model/effort combination, or whether MEAI's OpenAI adapter in the pinned
+    /// SDK version just never translates it into TextReasoningContent.
+    /// </summary>
+    [Fact]
+    public async Task DumpRealAgentResponseContentTypes()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
+            .Build();
+
+        var endpoint = configuration["Llm:Maf:Endpoint"]!;
+        var model = configuration["Llm:Maf:Model"]!;
+        var apiKey = configuration["Llm:Maf:ApiKey"]!;
+
+        async Task RunOneAsync(string label, OpenAI.Responses.ResponseReasoningEffortLevel? effort)
+        {
+            var agent = MafAgentFactory.CreateTextAgent(
+                endpoint, model, apiKey, "DiagnosticAgent", "Diagnostic only",
+                "You are a helpful assistant. Answer in exactly one short sentence.",
+                reasoningEffort: effort);
+
+            var response = await agent.RunAsync("Why is the sky blue?");
+
+            output.WriteLine($"=== {label} (effort={effort}) ===");
+            foreach (var message in response.Messages)
+            {
+                foreach (var content in message.Contents)
+                {
+                    if (content is Microsoft.Extensions.AI.TextReasoningContent reasoningContent)
+                        output.WriteLine($"  ReasoningText (len={reasoningContent.Text.Length}): {reasoningContent.Text[..Math.Min(300, reasoningContent.Text.Length)]}");
+                }
+            }
+        }
+
+        await RunOneAsync("no effort (current narrate/render behavior)", null);
+        await RunOneAsync("effort=High (original branch's pre-merge behavior)", OpenAI.Responses.ResponseReasoningEffortLevel.High);
+
+        // [FINDING, 2026-09-15] Both come back with ReasoningText len=0 - effort level does not
+        // change this. Rules out tonight's merge (which made effort optional) as the cause; the
+        // original branch's own unconditional ReasoningEffortLevel.High would have hit the exact
+        // same empty summary. A raw-SDK probe (bypassing MEAI, testing explicit Concise/Detailed
+        // verbosity instead of Auto) was attempted here and abandoned - real API surface for
+        // OpenAIResponseClient.CreateResponseAsync in the pinned OpenAI 2.11.0 package was not
+        // worth further guessing mid-session. RawRepresentation on the MEAI-translated content
+        // was already a real OpenAI.Responses.ReasoningResponseItem, which is strong evidence the
+        // emptiness is upstream of MEAI's translation (API/model level), not a translation bug -
+        // next real step is checking with whoever manages the "sol" Azure OpenAI deployment
+        // whether it actually supports populated reasoning summaries at all, or trying explicit
+        // Concise/Detailed verbosity (untested) instead of Auto via MafAgentFactory directly.
+    }
+
+    /// <summary>
     /// THROWAWAY, read-only diagnostic - checks whether sql/31_agent_reasoning_log.sql (from the
     /// still-unmerged agent-reasoning-capture branch, parked pending user/Vinay deploy) has
     /// actually been deployed to the real vitComplianceSystem database. Also flags a REAL
@@ -414,6 +473,27 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         output.WriteLine(exists == 1
             ? "DEPLOYED: dbo.InsightsAgentReasoningLog exists in vitComplianceSystem."
             : "NOT DEPLOYED: dbo.InsightsAgentReasoningLog does not exist - sql/31_agent_reasoning_log.sql (agent-reasoning-capture branch) has not been run against this database.");
+
+        // [ADDED 2026-09-15] Real schema check - Vinay's own last-sql-sp-handoffbyvinay rollback
+        // references a DIFFERENT sql/31b creating a table with this SAME name. Need to know whose
+        // version actually won in production before trusting our own RunId/Stage/ReasoningSummary/
+        // RecordedAtUtc INSERT (SqlAgentReasoningRecorder.cs) against it.
+        if (exists == 1)
+        {
+            var columns = await connection.QueryAsync<(string ColumnName, string DataType, int? MaxLength, string IsNullable)>(
+                """
+                SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'InsightsAgentReasoningLog'
+                ORDER BY ORDINAL_POSITION;
+                """);
+            output.WriteLine("Real deployed schema:");
+            foreach (var col in columns)
+                output.WriteLine($"  {col.ColumnName} {col.DataType}({col.MaxLength}) NULL={col.IsNullable}");
+
+            var rowCount = await connection.QuerySingleAsync<int>("SELECT COUNT(*) FROM dbo.InsightsAgentReasoningLog;");
+            output.WriteLine($"Real row count: {rowCount}");
+        }
     }
 
     /// <summary>
