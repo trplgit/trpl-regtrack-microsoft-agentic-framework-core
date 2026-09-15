@@ -1,7 +1,7 @@
 namespace Insights.Data;
 
 /// <summary>
-/// Backed by sql/31_agent_reasoning_log.sql - a permanent home for each agent's own summary of
+/// Backed by sql/32_agent_reasoning_log.sql - a permanent home for each agent's own summary of
 /// its reasoning, deliberately separate from dt.Payloads (the Durable Task hub's storage), which
 /// is slated for a future purge job. Null implementation for callers with nothing configured yet
 /// and for tests that don't care about this side channel.

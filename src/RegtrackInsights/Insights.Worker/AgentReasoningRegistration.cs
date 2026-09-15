@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Insights.Worker;
 
 /// <summary>
-/// Registers IAgentReasoningRecorder (sql/31_agent_reasoning_log.sql). The three activities that
+/// Registers IAgentReasoningRecorder (sql/32_agent_reasoning_log.sql). The three activities that
 /// consume it (NarrateActivity, ReflectOnNarrativeActivity, RenderHtmlActivity) are registered by
 /// AddInsightsOrchestrationWorker like every other activity - call this BEFORE that.
 ///

@@ -32,7 +32,7 @@ builder.Services.AddInsightsData(builder.Configuration);
 // AddInsightsOrchestration (registers the two activities that consume it).
 builder.Services.AddInsightsTenantTokenBudget(builder.Configuration);
 
-// Permanent home for each LLM agent's own reasoning summary (sql/31) - deliberately separate from
+// Permanent home for each LLM agent's own reasoning summary (sql/32) - deliberately separate from
 // dt.Payloads, which is slated for a future purge. Must come AFTER AddInsightsData, BEFORE
 // AddInsightsOrchestration (registers the three activities that consume it).
 builder.Services.AddInsightsAgentReasoning(builder.Configuration);
