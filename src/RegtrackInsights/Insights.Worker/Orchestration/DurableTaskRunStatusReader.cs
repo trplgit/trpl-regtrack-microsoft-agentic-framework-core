@@ -58,7 +58,35 @@ public sealed class DurableTaskRunStatusReader(
             Stage: stage,
             StagesComplete: stagesComplete,
             StagesTotal: StagesTotal,
-            Message: status == "failed" ? FailureMessage : null);
+            Message: status == "failed" ? FailureMessage : null,
+            ReportId: status == "complete" ? ParseReportId(state.Output, runId) : null);
+    }
+
+    /// <summary>
+    /// PersistActivity's own output (PersistOutput.ReportId) becomes the orchestration's terminal
+    /// Output - state.Output was already being fetched above (and logged on failure) but never
+    /// read on success. Null rather than throwing on anything unreadable: a client that already
+    /// has a "complete" status should never have the response fail underneath it because this one
+    /// extra field could not be parsed - see this class's own doc comment on ParseCustomStatus for
+    /// the same reasoning applied there.
+    /// </summary>
+    private string? ParseReportId(string? output, string runId)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            return document.RootElement.TryGetProperty("ReportId", out var reportIdElement)
+                ? reportIdElement.GetString()
+                : null;
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Run {RunId} completed but its Output could not be parsed for ReportId.", runId);
+            return null;
+        }
     }
 
     /// <summary>
