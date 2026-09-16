@@ -83,7 +83,13 @@ public static class WorkerRegistration
         services.AddSingleton<Insights.Data.IRunStatusReader, DurableTaskRunStatusReader>();
 
         // Enqueues a run for API_CONTRACTS.md 3, same reasoning as IRunStatusReader above.
-        services.AddSingleton<Insights.Data.IInsightsRunEnqueuer, DurableTaskRunEnqueuer>();
+        // Presentation:RunVisionQa [ADDED 2026-09-15] - optional, defaults true (real production
+        // behavior unchanged when unset). Captured once here, at registration time, not read live
+        // inside the orchestrator - see InsightsReportOrchestrationInput's own doc comment on why
+        // (the orchestrator body must stay deterministic across DTFx replay).
+        var runVisionQa = configuration.GetValue("Presentation:RunVisionQa", true);
+        services.AddSingleton<Insights.Data.IInsightsRunEnqueuer>(sp =>
+            new DurableTaskRunEnqueuer(sp.GetRequiredService<TaskHubClient>(), runVisionQa));
 
         return services;
     }

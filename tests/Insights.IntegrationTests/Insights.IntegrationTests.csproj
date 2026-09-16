@@ -24,7 +24,11 @@
 
   <!-- Trplclientsecret.dll is a raw file Reference, not a PackageReference, in RegtrackInsights.csproj -
        those do not flow transitively through a ProjectReference, so a manual test that needs it here
-       (proving item 14's decrypt path) needs its own reference to the same vendored file. -->
+       (proving item 14's decrypt path) needs its own reference to the same vendored file.
+       MUST stay named exactly Trplclientsecret.dll - see RegtrackInsights.csproj's own comment on
+       this same file: renaming it breaks runtime assembly loading (the .NET runtime probes for a
+       file matching the assembly's internal name, not the HintPath filename). Confirmed UAT-only
+       secret, not production - documented here, not in the filename. -->
   <ItemGroup>
     <Reference Include="Trplclientsecret">
       <HintPath>../../libs/Trplclientsecret.dll</HintPath>

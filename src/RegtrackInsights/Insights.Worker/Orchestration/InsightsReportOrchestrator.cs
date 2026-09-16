@@ -804,19 +804,27 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     // documents. Deliberately AFTER the structure gate (cheaper, deterministic
                     // checks run first) and still inside the try, so a real visual defect reuses
                     // the exact same catch-and-retry mechanism.
-                    var visionResult = await context.ScheduleTask<VisionQaOutput>(
-                        typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
-                    ChargeAndCheck(visionResult.TotalTokens);
-
-                    if (visionResult.HasVisualDefect)
+                    //
+                    // [ADDED 2026-09-15] input.RunVisionQa - see InsightsReportOrchestrationInput's
+                    // own doc comment. When false, this whole gate is skipped - PlaywrightQaActivity
+                    // below is advisory-only already, so with this off NOTHING checks the rendered
+                    // HTML for a real visual defect before it ships. Explicit opt-out, not a default.
+                    if (input.RunVisionQa)
                     {
-                        // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
-                        // see this loop's own doc comment on why that matters for replay safety.
-                        previousVisualIssue = visionResult.Issue;
-                        throw new OrchestrationRefusedException(
-                            "VISUAL_DEFECT_DETECTED",
-                            "We couldn't generate this report to our accuracy standard. Our team has been notified.",
-                            internalDiagnostics: [visionResult.Issue ?? "Vision QA flagged a defect with no issue text."]);
+                        var visionResult = await context.ScheduleTask<VisionQaOutput>(
+                            typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
+                        ChargeAndCheck(visionResult.TotalTokens);
+
+                        if (visionResult.HasVisualDefect)
+                        {
+                            // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
+                            // see this loop's own doc comment on why that matters for replay safety.
+                            previousVisualIssue = visionResult.Issue;
+                            throw new OrchestrationRefusedException(
+                                "VISUAL_DEFECT_DETECTED",
+                                "We couldn't generate this report to our accuracy standard. Our team has been notified.",
+                                internalDiagnostics: [visionResult.Issue ?? "Vision QA flagged a defect with no issue text."]);
+                        }
                     }
 
                     break;

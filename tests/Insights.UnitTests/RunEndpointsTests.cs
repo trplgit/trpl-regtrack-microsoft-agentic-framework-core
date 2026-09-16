@@ -122,6 +122,27 @@ public sealed class RunEndpointsTests
     }
 
     /// <summary>
+    /// [ADDED 2026-09-16] Closes the real gap found live: without reportId on the wire, a client
+    /// watching "complete" had no id to call API_CONTRACTS.md §5's content endpoint with.
+    /// </summary>
+    [Fact]
+    public async Task Stream_CompleteRunIncludesReportId()
+    {
+        var runId = RunIdFor(Tenant);
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var runs = new FakeRunStatusReader(
+            new InsightsRunStatus(runId, "complete", "complete", 7, 7, null, ReportId: "b3f6c1a2-0000-4000-8000-000000000001"));
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, runs);
+
+        var body = await (await client.GetAsync($"/api/insights/runs/{runId}/stream")).Content.ReadAsStringAsync();
+        var frame = Assert.Single(body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries));
+
+        using var json = JsonDocument.Parse(frame.Substring("data: ".Length));
+        Assert.Equal("b3f6c1a2-0000-4000-8000-000000000001", json.RootElement.GetProperty("reportId").GetString());
+    }
+
+    /// <summary>
     /// A failed run carries a user-safe message and nothing else. The gate real diagnostics -
     /// "reconciliation variance of 3 on branch X" - are exactly what 11.3 keeps off the wire.
     /// </summary>
@@ -135,11 +156,20 @@ public sealed class RunEndpointsTests
 
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, runs);
 
-        var body = await (await client.GetAsync($"/api/insights/runs/{runId}/stream")).Content.ReadAsStringAsync();
+        var response = await client.GetAsync($"/api/insights/runs/{runId}/stream");
+        var body = await response.Content.ReadAsStringAsync();
 
         Assert.Contains("failed", body);
         Assert.DoesNotContain("reconciliation", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("variance", body, StringComparison.OrdinalIgnoreCase);
+
+        // [ADDED 2026-09-16] reportId must never carry a value on a failed run -
+        // InsightsRunStatus.ReportId is only ever populated when Status is "complete" (see its own
+        // doc comment); this pins that on the wire, not just in the type. The property itself is
+        // still present (JsonSerializer includes nulls by default here), just null-valued.
+        var frame = Assert.Single(body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries));
+        using var json = JsonDocument.Parse(frame.Substring("data: ".Length));
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("reportId").ValueKind);
     }
 
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)

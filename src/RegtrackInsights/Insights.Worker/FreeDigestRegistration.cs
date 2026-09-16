@@ -52,7 +52,9 @@ public static class FreeDigestRegistration
         services.AddSingleton(settings);
         services.AddSingleton<FreeDigestMetrics>();
         services.AddSingleton<IPromptLoader>(_ => new FilePromptLoader(promptDirectory));
-        services.AddSingleton(_ => new FreeDigestEmailRenderer(templateDirectory));
+        services.AddSingleton(sp => new FreeDigestEmailRenderer(
+            templateDirectory,
+            sp.GetRequiredService<FreeDigestSettings>().CdnBaseUrl));
 
         services.AddSingleton(sp =>
             chatClientFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(LlmClientName)));
@@ -136,6 +138,7 @@ public static class FreeDigestRegistration
         InsightJsonTokenCap = configuration.GetValue("Budget:InsightJsonTokenCap", 3000),
         FromAddress = Require(configuration, "Email:FromAddress"),
         FromName = configuration["Email:FromName"] ?? "RegTrack Insights",
+        CdnBaseUrl = Require(configuration, "Email:CdnBaseUrl").TrimEnd('/'),
         UpgradeUrl = Require(configuration, "Email:UpgradeUrl"),
         PortalUrl = configuration["Email:PortalUrl"],
         UnsubscribeBaseUrl = Require(configuration, "Email:UnsubscribeBaseUrl"),

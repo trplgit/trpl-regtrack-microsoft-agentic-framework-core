@@ -398,12 +398,19 @@ public static class RunEndpoints
         // failure messages. InsightsRunStatus itself is UNCHANGED (still carries Stage/
         // StagesComplete/StagesTotal) - only what this one endpoint puts on the wire changed, so
         // nothing else that reads InsightsRunStatus needed touching.
+        //
+        // [ADDED 2026-09-16] reportId closes a real gap: without it, "complete" told the client
+        // nothing it could act on - API_CONTRACTS.md §5's content endpoint needs this id and
+        // nothing else built exposed it. Only ever non-null when status is "complete" (see
+        // InsightsRunStatus.ReportId's own doc comment) - never leaks on "failed", same as message
+        // never carries internal diagnostics there.
         var payload = JsonSerializer.Serialize(new
         {
             runId = status.RunId,
             status = status.Status,
             // Present only on failure, and user-safe by construction - see InsightsRunStatus.
             message = status.Message,
+            reportId = status.ReportId,
         });
 
         var frame = eventName is null

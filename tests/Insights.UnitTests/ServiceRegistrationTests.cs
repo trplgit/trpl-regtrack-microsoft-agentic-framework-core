@@ -41,6 +41,10 @@ public sealed class ServiceRegistrationTests
             ["Email:UnsubscribeBaseUrl"] = "https://example.com/unsubscribe",
             ["Email:UnsubscribeSigningKey"] = "test-signing-key",
             ["Email:ElasticEmail:ApiKey"] = "placeholder",
+            // [MERGE FIX, 2026-09-15] Tanvi's "added base url for cdn links" commit (823865e)
+            // made AddInsightsFreeDigest require this too - placeholder, never dialled, same
+            // reasoning as every other value here.
+            ["Email:CdnBaseUrl"] = "https://example.com/cdn",
             ["Llm:Provider"] = "azure_openai",
             ["Llm:AzureOpenAi:Endpoint"] = "https://example.openai.azure.com/",
             ["Llm:AzureOpenAi:Deployment"] = "gpt-4o-mini",
