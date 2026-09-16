@@ -3,6 +3,7 @@ kind: Deployment
 
 metadata:
   name: trpl-regtrack-insights-worker
+  namespace: staging
   labels:
     app: trpl-regtrack-insights-worker
 
@@ -26,7 +27,9 @@ spec:
 
       containers:
         - name: trpl-regtrack-insights-worker
+
           image: conatinerimages.azurecr.io/staging/trpl-regtrack-insights-worker:latest
+
           imagePullPolicy: Always
 
           ports:
@@ -37,16 +40,21 @@ spec:
             - name: DOTNET_ENVIRONMENT
               value: "staging"
 
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+
           resources:
             requests:
               cpu: "500m"
               memory: "1Gi"
+
             limits:
-              cpu: "1"
-              memory: "2Gi"
+              cpu: "2"
+              memory: "4Gi"
 
           securityContext:
             allowPrivilegeEscalation: false
+
             capabilities:
               drop:
                 - ALL
