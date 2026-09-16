@@ -26,10 +26,12 @@ spec:
 
       containers:
         - name: trpl-regtrack-insights-worker
-
           image: conatinerimages.azurecr.io/staging/trpl-regtrack-insights-worker:latest
-
           imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              protocol: TCP
 
           env:
             - name: DOTNET_ENVIRONMENT
@@ -39,7 +41,6 @@ spec:
             requests:
               cpu: "500m"
               memory: "1Gi"
-
             limits:
               cpu: "2"
               memory: "4Gi"
