@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 
 metadata:
-  name: trpl-regtrack-insights-api
+  name: trpl-regtrack-insights-worker
   namespace: staging
 
   annotations:
@@ -20,6 +20,6 @@ spec:
 
             backend:
               service:
-                name: trpl-regtrack-insights-api
+                name: trpl-regtrack-insights-worker
                 port:
                   number: 80
