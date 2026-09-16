@@ -46,6 +46,6 @@ spec:
 
             backend:
               service:
-                name: trpl-regtrack-insights-api
+                name: trpl-regtrack-insights-worker
                 port:
                   number: 80
