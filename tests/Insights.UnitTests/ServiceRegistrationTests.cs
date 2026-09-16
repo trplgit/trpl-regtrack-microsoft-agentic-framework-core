@@ -159,5 +159,50 @@ public sealed class ServiceRegistrationTests
         var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(configuration).Dispose());
         Assert.Contains(key, ex.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// [ADDED 2026-09-16, ADR-0004] AddInsightsReportContentService was never called from any
+    /// Program.cs before the combined worker/HTTP host - RunEndpoints and ReportContentEndpoints
+    /// need it, and it registers three SCOPED services (IReportContentService, ICooldownRepository,
+    /// IReportRequestRepository) that all depend on a scoped InsightsReportsDbContext. The risk
+    /// this catches: any of those three accidentally registered (or consumed) as a singleton would
+    /// be a captive dependency - one DbContext/connection held open for the process lifetime
+    /// instead of one per request, exactly the trap this file's own class doc comment describes.
+    /// ValidateScopes is what would catch that; ValidateOnBuild is what forces the check to run at
+    /// all rather than only on first real use.
+    ///
+    /// Deliberately does NOT also add AddInsightsAuthentication to this same container:
+    /// JwtInsightsCaller's constructor throws UnauthorizedAccessException with no HttpContext.User
+    /// present, which is its whole fail-closed point (see JwtInsightsCallerTests) - not a
+    /// registration defect ValidateOnBuild should be flagging. The auth registration path already
+    /// has its own direct, stronger coverage in JwtAuthenticationEndToEndTests.
+    /// </summary>
+    [Fact]
+    public void ReportContentServiceRegistrationsResolveWithoutACaptiveDependency()
+    {
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Azure:TempBlobContainer"] = "insights-reports-temp",
+            ["Reports:SasLifetimeMinutes"] = "10",
+            ["Reports:CooldownDays"] = "30",
+        });
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsReportContentService(configuration);
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        using var scope = provider.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        Assert.NotNull(sp.GetRequiredService<Insights.Data.IReportContentService>());
+        Assert.NotNull(sp.GetRequiredService<Insights.Data.ICooldownRepository>());
+        Assert.NotNull(sp.GetRequiredService<Insights.Data.IReportRequestRepository>());
+    }
 }
 

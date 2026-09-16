@@ -17,8 +17,17 @@
     below are ever promoted to real projects, move them OUT to src\Insights.X\ as
     siblings of this folder - do not leave a csproj nested underneath this one.
 
-    PRIVATE: no public endpoints, no ingress. The Insights API endpoints live in the
-    existing RegTrack API, where auth already lives (CLAUDE.md 6).
+    [CHANGED 2026-09-16] Was: "PRIVATE: no public endpoints, no ingress. The Insights API
+    endpoints live in the existing RegTrack API, where auth already lives (CLAUDE.md 6)."
+
+    Product decision, same date: the worker and the Insights HTTP API are now ONE deployed
+    process/pod, not two - see ADR-0004. This project now also serves HTTP (WebApplication, not
+    plain Host - see Program.cs) on top of its existing Durable Task dequeue loop. Insights.Api/
+    below is a real, compiled, mapped part of this assembly, gated by JwtAuthRegistration's
+    fallback "authenticated by default" policy - it is not the RegTrack API's source drop anymore.
+    CLAUDE.md Sec.6 / docs/API_CONTRACTS.md / docs/SOLUTION_STRUCTURE.md describe the SUPERSEDED
+    two-host design and should be treated as stale until a docs pass catches up (flagged, not yet
+    done as of this change).
   -->
 
   <PropertyGroup>
@@ -27,9 +36,21 @@
     <UserSecretsId>regtrack-insights-worker</UserSecretsId>
   </PropertyGroup>
 
+  <!--
+    Brings in WebApplication/Kestrel/MVC minimal-API types without switching the SDK to
+    Microsoft.NET.Sdk.Web - deliberately, because the Web SDK would silently change this project's
+    default Content/None globs, and several of them are load-bearing (prompts\**, templates\**,
+    the linked-in sql\** tree, and the vendored dompurify/fonts Content blocks below). This is the
+    same pattern tests\Insights.UnitTests already uses for the same reason.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Dapper" />
     <PackageReference Include="Microsoft.Data.SqlClient" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
@@ -134,19 +155,14 @@
   </ItemGroup>
 
   <!--
-    Insights.Api is SOURCE FOR THE REGTRACK API, not part of this worker.
-
-    CLAUDE.md 6: this worker is private and queue-driven, with no public endpoints and no
-    ingress - Insights endpoints belong in the RegTrack API where auth already lives. So these
-    files are excluded from the build and re-added as None purely to stay visible in Solution
-    Explorer, the same treatment sql** gets.
-
-    CONSEQUENCE: not compile-checked here. If IFreeDigestRepository, UnsubscribeToken or the
-    Contracts DTOs change, nothing breaks until someone copies it across.
+    [CHANGED 2026-09-16, ADR-0004] Insights.Api used to be excluded here (Compile Remove) because
+    it was source staged for a SEPARATE RegTrack API process to take. That design is superseded:
+    this project now compiles and maps these endpoints itself (see Program.cs). Removing the
+    exclusion without also removing it is what would have caused CS0436 duplicate-type errors, so
+    this change landed together with removing the matching <Compile Include> blocks in
+    tests\Insights.UnitTests, tests\Insights.IntegrationTests and tools\Insights.ApiDevHost - all
+    three now get these types via their existing ProjectReference to this project instead of
+    recompiling the same source a second time.
   -->
-  <ItemGroup>
-    <Compile Remove="Insights.Api\**\*.cs" />
-    <None Include="Insights.Api\**\*" />
-  </ItemGroup>
 
 </Project>

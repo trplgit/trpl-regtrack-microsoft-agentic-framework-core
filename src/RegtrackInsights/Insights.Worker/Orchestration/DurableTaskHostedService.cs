@@ -8,10 +8,22 @@ namespace Insights.Worker.Orchestration;
 /// it with the generic host and stops it gracefully on shutdown. Owns the worker's lifetime only;
 /// TaskHubClient (used to enqueue runs, Task 16) is registered separately since it has no
 /// start/stop lifecycle of its own.
+///
+/// [ADDED] Flips DurableTaskWorkerReadiness so /health/ready can answer "is this pod dequeuing"
+/// without polling anything itself - true only once worker.StartAsync() has actually returned,
+/// false again the moment StopAsync begins so a draining pod correctly reports not-ready.
 /// </summary>
-public sealed class DurableTaskHostedService(TaskHubWorker worker) : IHostedService
+public sealed class DurableTaskHostedService(TaskHubWorker worker, DurableTaskWorkerReadiness readiness) : IHostedService
 {
-    public async Task StartAsync(CancellationToken cancellationToken) => await worker.StartAsync();
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await worker.StartAsync();
+        readiness.IsReady = true;
+    }
 
-    public async Task StopAsync(CancellationToken cancellationToken) => await worker.StopAsync(isForced: false);
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        readiness.IsReady = false;
+        await worker.StopAsync(isForced: false);
+    }
 }

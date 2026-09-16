@@ -1,16 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <!--
-    LOCAL DEVELOPER HARNESS. Never deployed, never referenced by the worker.
+    LOCAL DEVELOPER HARNESS. Never deployed.
 
-    It exists because the Insights worker is private by design - no public endpoints, no ingress
-    (CLAUDE.md 6) - and the endpoints in Insights.Api/ are SOURCE FOR THE REGTRACK API, which is
-    where auth already lives. That is the right architecture, but it leaves no way to click
-    through the endpoints while developing them. This project is that way.
+    [CHANGED 2026-09-16, ADR-0004] The Insights worker and the Insights HTTP API are now ONE
+    combined deployed host (RegtrackInsights.csproj), with real JWT validation
+    (Insights.Worker.Auth.JwtAuthRegistration) - superseding the two-host design this comment
+    originally described. This harness's REASON to keep existing has narrowed: it is still useful
+    for hitting these endpoints with Swagger and the X-Insights-UserId header stub instead of a
+    real minted token, which is faster for pure routing/SQL/serialisation iteration. It is
+    otherwise no longer the only way to click through these endpoints - the real combined host
+    does that now, with real auth.
 
-    WHAT IT DOES NOT PROVE: the caller is a stub reading a header. Real token validation only
-    exists in the RegTrack API, so the IDOR guard is genuinely exercised only once these endpoints
-    land there. This harness covers routing, SQL, serialisation and the eligibility LOGIC.
+    WHAT IT STILL DOES NOT PROVE: HeaderInsightsCaller is a stub reading a header, not
+    authentication - see its own doc comment. The IDOR guard's SHAPE (does the eligibility check
+    run, in the right order) is exercised here; that a token was genuinely validated is only
+    proven by the real combined host's JwtInsightsCaller path.
 
     Sibling of src/ and tests/, never nested inside another project directory - see the note in
     RegtrackInsights.csproj about the SDK's default globs and MSB3030.
@@ -32,9 +37,11 @@
     <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
   </ItemGroup>
 
-  <!-- Insights.Api is excluded from the worker build; compiled here so it can actually be hosted. -->
-  <ItemGroup>
-    <Compile Include="../../src/RegtrackInsights/Insights.Api/**/*.cs" LinkBase="Insights.Api" />
-  </ItemGroup>
+  <!--
+    [CHANGED 2026-09-16, ADR-0004] Insights.Api is now compiled by RegtrackInsights.csproj itself
+    (see that project's own comment) - the <Compile Include> that used to be here would now
+    produce CS0436 duplicate-type errors against the types this project already gets through the
+    ProjectReference above.
+  -->
 
 </Project>
