@@ -7,33 +7,7 @@ metadata:
 
   annotations:
     kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/rewrite-target: /
-
     nginx.ingress.kubernetes.io/proxy-body-size: "75m"
-
-    # -------------------------
-    # Idle timeout / keep-alive
-    # -------------------------
-    #nginx.ingress.kubernetes.io/proxy-connect-timeout: "1800"
-    #nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
-    #nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
-    #nginx.ingress.kubernetes.io/send-timeout: "1800"
-
-    # -------------------------
-    # Keep reusable connections
-    # -------------------------
-    #nginx.ingress.kubernetes.io/upstream-keepalive-connections: "64"
-
-    # -------------------------
-    # Dynamic compression
-    # -------------------------
-    #nginx.ingress.kubernetes.io/enable-gzip: "true"
-
-    # -------------------------
-    # API buffering
-    # -------------------------
-    #nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    #nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
 
 spec:
   rules:
@@ -46,6 +20,6 @@ spec:
 
             backend:
               service:
-                name: trpl-regtrack-insights-worker
+                name: trpl-regtrack-insights-api
                 port:
                   number: 80
