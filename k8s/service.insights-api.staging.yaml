@@ -2,16 +2,17 @@ apiVersion: v1
 kind: Service
 
 metadata:
-  name: trpl-regtrack-insights-worker
+  name: trpl-regtrack-insights-api
   namespace: staging
+
   labels:
-    app: trpl-regtrack-insights-worker
+    app: trpl-regtrack-insights-api
 
 spec:
   type: ClusterIP
 
   selector:
-    app: trpl-regtrack-insights-worker
+    app: trpl-regtrack-insights-api
 
   ports:
     - protocol: TCP
