@@ -1,4 +1,3 @@
-
 name: Deploy RegInsights Worker
 
 permissions:
@@ -28,11 +27,9 @@ jobs:
 
     steps:
 
-      # Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Install Azure CLI
       - name: Install Azure CLI
         run: |
           sudo apt-get update
@@ -52,7 +49,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y azure-cli
 
-      # Download appsettings.json and Trplclientsecret.dll from Azure Blob
       - name: Download secure files from Azure Blob
         run: |
           set -e
@@ -81,7 +77,6 @@ jobs:
 
           echo "Secure files downloaded successfully."
 
-      # Log in to Azure Container Registry
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
         with:
@@ -89,7 +84,6 @@ jobs:
           username: ${{ vars.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      # Build and push Docker image
       - name: Build and Push Docker Image
         id: set-image
         run: |
@@ -115,17 +109,14 @@ jobs:
 
     steps:
 
-      # Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Azure Login
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Set AKS context
       - name: Set AKS context
         run: |
           az aks get-credentials \
@@ -133,14 +124,12 @@ jobs:
             --name TRPL-Demo-Cluster \
             --overwrite-existing
 
-      # Create namespace if not exists
       - name: Create namespace
         run: |
           kubectl create namespace ${{ inputs.environment }} \
             --dry-run=client \
             -o yaml | kubectl apply -f -
 
-      # Create image pull secret
       - name: Create image pull secret
         run: |
           kubectl create secret docker-registry acr-pull-secret \
@@ -151,28 +140,42 @@ jobs:
             --dry-run=client \
             -o yaml | kubectl apply -f -
 
-      # Apply Kubernetes manifest
-      - name: Apply manifests
+      # Deploy Worker
+      - name: Apply Deployment
         run: |
           kubectl apply \
             -f k8s/deployment.staging.yaml \
             -n ${{ inputs.environment }}
 
-      # Update image
-      - name: Update deployment image
+      # Update Worker Image
+      - name: Update Deployment Image
         run: |
           kubectl set image deployment/trpl-regtrack-insights-worker \
             trpl-regtrack-insights-worker=${{ needs.build-and-push.outputs.IMAGE }} \
             -n ${{ inputs.environment }}
 
-      # Force rollout restart
-      - name: Force rollout restart
+      # Deploy Service
+      - name: Apply Service
+        run: |
+          kubectl apply \
+            -f k8s/service.staging.yaml \
+            -n ${{ inputs.environment }}
+
+      # Deploy Ingress
+      - name: Apply Ingress
+        run: |
+          kubectl apply \
+            -f k8s/ingress.staging.yaml \
+            -n ${{ inputs.environment }}
+
+      # Restart Worker
+      - name: Force Rollout Restart
         run: |
           kubectl rollout restart deployment/trpl-regtrack-insights-worker \
             -n ${{ inputs.environment }}
 
-      # Wait for rollout
-      - name: Wait for rollout
+      # Wait for Worker
+      - name: Wait for Rollout
         run: |
           kubectl rollout status \
             deployment/trpl-regtrack-insights-worker \
@@ -181,3 +184,17 @@ jobs:
           kubectl get pods \
             -n ${{ inputs.environment }}
 
+      # Verify Deployment
+      - name: Verify Deployment
+        run: |
+          echo "===== PODS ====="
+          kubectl get pods -n ${{ inputs.environment }}
+
+          echo "===== SERVICE ====="
+          kubectl get svc -n ${{ inputs.environment }}
+
+          echo "===== ENDPOINTS ====="
+          kubectl get endpoints -n ${{ inputs.environment }}
+
+          echo "===== INGRESS ====="
+          kubectl get ingress -n ${{ inputs.environment }}
