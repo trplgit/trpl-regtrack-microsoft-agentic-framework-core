@@ -1,5 +1,6 @@
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Insights.UnitTests;
@@ -23,7 +24,7 @@ public class NormalizeActivityTests
     [Fact]
     public async Task RunAsync_ValidSelfContainedHtml_ReturnsIt()
     {
-        var activity = new NormalizeActivity();
+        var activity = new NormalizeActivity(null, NullLogger<NormalizeActivity>.Instance);
 
         var result = await activity.RunAsync(new NormalizeInput(ValidDocument));
 
@@ -33,7 +34,7 @@ public class NormalizeActivityTests
     [Fact]
     public async Task RunAsync_ExternalScriptSrc_ThrowsNotNormalizable()
     {
-        var activity = new NormalizeActivity();
+        var activity = new NormalizeActivity(null, NullLogger<NormalizeActivity>.Instance);
         var html = ValidDocument.Replace(
             "<script>", "<script src=\"https://cdn.example.com/chart.js\"></script><script>");
 

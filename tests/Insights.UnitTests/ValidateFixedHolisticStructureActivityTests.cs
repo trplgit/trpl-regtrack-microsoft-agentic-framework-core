@@ -1,6 +1,7 @@
 using Insights.Domain;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Insights.UnitTests;
@@ -26,7 +27,7 @@ public class ValidateFixedHolisticStructureActivityTests
     [Fact]
     public async Task RunAsync_StructurallyValidHtml_ReturnsIt()
     {
-        var activity = new ValidateFixedHolisticStructureActivity();
+        var activity = new ValidateFixedHolisticStructureActivity(NullLogger<ValidateFixedHolisticStructureActivity>.Instance);
 
         var result = await activity.RunAsync(new ValidateFixedHolisticStructureInput(CleanHtml, FixedHolisticComposition.ReportType));
 
@@ -36,7 +37,7 @@ public class ValidateFixedHolisticStructureActivityTests
     [Fact]
     public async Task RunAsync_FakeBadgeOnBlockedPane_ThrowsFixedHolisticStructureInvalid()
     {
-        var activity = new ValidateFixedHolisticStructureActivity();
+        var activity = new ValidateFixedHolisticStructureActivity(NullLogger<ValidateFixedHolisticStructureActivity>.Instance);
 
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() =>
             activity.RunAsync(new ValidateFixedHolisticStructureInput(FakeBadgeOnBlockedPane, FixedHolisticComposition.ReportType)));
@@ -54,7 +55,7 @@ public class ValidateFixedHolisticStructureActivityTests
     [Fact]
     public async Task RunAsync_NonFixedHolisticReportType_SkipsEvaluationEntirely_EvenWithAMisleadingDiComponentsWrapper()
     {
-        var activity = new ValidateFixedHolisticStructureActivity();
+        var activity = new ValidateFixedHolisticStructureActivity(NullLogger<ValidateFixedHolisticStructureActivity>.Instance);
 
         var result = await activity.RunAsync(new ValidateFixedHolisticStructureInput(
             DimensionSelectionDocumentReusingDiComponentsForANonScoreStrip, DimensionSelectionComposition.ReportType));

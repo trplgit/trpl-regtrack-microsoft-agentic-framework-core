@@ -2,6 +2,7 @@ using System.Text.Json;
 using DurableTask.Core;
 using Insights.Domain;
 using Insights.Presentation;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -27,7 +28,8 @@ public sealed record ValidateUserDimensionStructureOutput(string Html);
 /// evaluated against it, same reasoning ValidateFixedHolisticStructureActivity's own doc
 /// comment gives for its ReportType guard.
 /// </summary>
-public sealed class ValidateUserDimensionStructureActivity : AsyncTaskActivity<ValidateUserDimensionStructureInput, ValidateUserDimensionStructureOutput>
+public sealed class ValidateUserDimensionStructureActivity(ILogger<ValidateUserDimensionStructureActivity> logger)
+    : AsyncTaskActivity<ValidateUserDimensionStructureInput, ValidateUserDimensionStructureOutput>
 {
     protected override Task<ValidateUserDimensionStructureOutput> ExecuteAsync(TaskContext context, ValidateUserDimensionStructureInput input) => RunAsync(input);
 
@@ -39,10 +41,13 @@ public sealed class ValidateUserDimensionStructureActivity : AsyncTaskActivity<V
         var hasQualifyingTimingRow = HasQualifyingTimingRow(input.UsersRowsJson);
         var result = UserDimensionStructureGate.Evaluate(input.Html, hasQualifyingTimingRow);
         if (!result.Approved)
+        {
+            logger.LogWarning("Users-dimension render refused structure gate: {Violations}", string.Join(" | ", result.Violations));
             throw new OrchestrationRefusedException(
                 "USER_DIMENSION_STRUCTURE_INVALID",
                 "We couldn't generate this report to our accuracy standard. Our team has been notified.",
                 result.Violations);
+        }
 
         return Task.FromResult(new ValidateUserDimensionStructureOutput(input.Html));
     }

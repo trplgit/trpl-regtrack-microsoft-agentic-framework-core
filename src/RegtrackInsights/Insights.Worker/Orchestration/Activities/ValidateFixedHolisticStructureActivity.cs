@@ -1,6 +1,7 @@
 using DurableTask.Core;
 using Insights.Domain;
 using Insights.Presentation;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -37,7 +38,8 @@ public sealed record ValidateFixedHolisticStructureOutput(string Html);
 /// gives for its second call) so it checks the actual HTML that will be persisted, not a
 /// pre-sanitization draft DOMPurify might still alter.
 /// </summary>
-public sealed class ValidateFixedHolisticStructureActivity : AsyncTaskActivity<ValidateFixedHolisticStructureInput, ValidateFixedHolisticStructureOutput>
+public sealed class ValidateFixedHolisticStructureActivity(ILogger<ValidateFixedHolisticStructureActivity> logger)
+    : AsyncTaskActivity<ValidateFixedHolisticStructureInput, ValidateFixedHolisticStructureOutput>
 {
     protected override Task<ValidateFixedHolisticStructureOutput> ExecuteAsync(TaskContext context, ValidateFixedHolisticStructureInput input) => RunAsync(input);
 
@@ -48,10 +50,13 @@ public sealed class ValidateFixedHolisticStructureActivity : AsyncTaskActivity<V
 
         var result = FixedHolisticStructureGate.Evaluate(input.Html);
         if (!result.Approved)
+        {
+            logger.LogWarning("Fixed-holistic render refused structure gate: {Violations}", string.Join(" | ", result.Violations));
             throw new OrchestrationRefusedException(
                 "FIXED_HOLISTIC_STRUCTURE_INVALID",
                 "We couldn't generate this report to our accuracy standard. Our team has been notified.",
                 result.Violations);
+        }
 
         return Task.FromResult(new ValidateFixedHolisticStructureOutput(input.Html));
     }

@@ -1,6 +1,7 @@
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -26,7 +27,7 @@ public sealed record GatherScopeOutput(IReadOnlyList<ScopePair> ScopePairs, stri
 /// </summary>
 public sealed class GatherScopeActivity(
     IEntitlementRepository entitlementRepository, IScopeRepository scopeRepository, IEntityRepository entityRepository,
-    ITenantDirectoryRepository tenantDirectoryRepository)
+    ITenantDirectoryRepository tenantDirectoryRepository, ILogger<GatherScopeActivity> logger)
     : AsyncTaskActivity<GatherScopeInput, GatherScopeOutput>
 {
     protected override Task<GatherScopeOutput> ExecuteAsync(TaskContext context, GatherScopeInput input) => RunAsync(input);
@@ -35,11 +36,17 @@ public sealed class GatherScopeActivity(
     {
         var gate = await entitlementRepository.EvaluateGateAsync(input.CustomerId, EntitlementTier.Paid, CancellationToken.None);
         if (!gate.ShouldProceed)
+        {
+            logger.LogWarning("Tenant {CustomerId} refused at entitlement gate: {Reason}", input.CustomerId, gate.Reason);
             throw new OrchestrationRefusedException("NOT_ENTITLED", gate.Reason);
+        }
 
         var pairs = await scopeRepository.GetScopePairsAsync(input.UserId, input.CustomerId, CancellationToken.None);
         if (pairs.Count == 0)
+        {
+            logger.LogWarning("User {UserId}/tenant {CustomerId} refused - empty Insights scope.", input.UserId, input.CustomerId);
             throw new OrchestrationRefusedException("SCOPE_DENIED", "No entities are currently in your Insights scope.");
+        }
 
         var shape = await entityRepository.GetTenantShapeAsync(input.CustomerId, cancellationToken: CancellationToken.None);
         var tenantShape = shape.Shape switch

@@ -37,6 +37,9 @@ public sealed class CheckTenantTokenBudgetActivity(
 
         if (monthToDate >= settings.MonthlyCeiling)
         {
+            logger.LogError(
+                "Tenant {CustomerId} refused - monthly token budget exceeded ({MonthToDate}/{Ceiling}).",
+                input.CustomerId, monthToDate, settings.MonthlyCeiling);
             throw new OrchestrationRefusedException(
                 "MONTHLY_BUDGET_EXCEEDED",
                 "We couldn't generate this report to our accuracy standard. Our team has been notified.",

@@ -1,6 +1,7 @@
 using Insights.Data;
 using Insights.Domain;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace Insights.UnitTests;
@@ -17,6 +18,23 @@ public sealed class FetchDimensionsActivityTests
 {
     private const int UserId = 38;
     private const int TenantId = 29;
+
+    // [ADDED 2026-09-17] Pins the fix for the real gap found live tonight: a dimension's actual
+    // exception (e.g. sql/05 Location's "String or binary data would be truncated") was previously
+    // discarded here with zero trace beyond an unexported OTel counter - see this activity's own
+    // catch-block comment.
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<FetchDimensionsActivity>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception), exception));
+    }
 
     private static Mock<IDimensionRepository> BuildHealthyRepository()
     {
@@ -59,7 +77,7 @@ public sealed class FetchDimensionsActivityTests
     public async Task RunAsync_AllFifteenSucceed_ReturnsEmptyFailedDimensions()
     {
         var repo = BuildHealthyRepository();
-        var activity = new FetchDimensionsActivity(repo.Object);
+        var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
 
@@ -79,7 +97,8 @@ public sealed class FetchDimensionsActivityTests
         repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>())).ThrowsAsync(exception);
 
         var recorder = new Mock<IDimensionFailureRecorder>();
-        var activity = new FetchDimensionsActivity(repo.Object, recorder.Object);
+        var logger = new CapturingLogger();
+        var activity = new FetchDimensionsActivity(repo.Object, logger, recorder.Object);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
 
@@ -87,6 +106,7 @@ public sealed class FetchDimensionsActivityTests
         Assert.DoesNotContain("Risk", result.DimensionResults.Keys);
         Assert.Equal(["Risk"], result.FailedDimensions);
         recorder.Verify(r => r.RecordBlockFailure("Risk"), Times.Once);
+        Assert.Single(logger.Entries, e => e.Message.Contains("Risk") && e.Exception == exception);
     }
 
     /// <summary>Confirms the failed dimension's own assertions/findings never leak into the aggregated lists either - not just its dictionary entry.</summary>
@@ -104,7 +124,7 @@ public sealed class FetchDimensionsActivityTests
         repo.Setup(r => r.GetEntityAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Entity", TenantId, new Exception("inner")));
 
-        var activity = new FetchDimensionsActivity(repo.Object);
+        var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
 
@@ -119,7 +139,7 @@ public sealed class FetchDimensionsActivityTests
         var repo = BuildHealthyRepository();
         repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionScopeDeniedException("Risk", UserId, TenantId, new Exception("inner")));
-        var activity = new FetchDimensionsActivity(repo.Object);
+        var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
         await Assert.ThrowsAsync<DimensionScopeDeniedException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
     }
@@ -130,7 +150,7 @@ public sealed class FetchDimensionsActivityTests
         var repo = BuildHealthyRepository();
         repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionDictionaryGapException("Risk", new Exception("inner")));
-        var activity = new FetchDimensionsActivity(repo.Object);
+        var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
         await Assert.ThrowsAsync<DimensionDictionaryGapException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
     }
@@ -171,7 +191,7 @@ public sealed class FetchDimensionsActivityTests
         repo.Setup(r => r.GetForwardRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("ForwardRisk", TenantId, new Exception("inner")));
 
-        var activity = new FetchDimensionsActivity(repo.Object);
+        var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
     }

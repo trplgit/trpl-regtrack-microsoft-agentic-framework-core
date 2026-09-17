@@ -1,6 +1,7 @@
 using DurableTask.Core;
 using Insights.Agents;
 using Insights.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -12,7 +13,7 @@ public sealed record PublishGateOutput(bool Approved);
 /// Non-negotiable - a refusal here throws rather than returning a false Approved for the
 /// orchestrator to inspect, matching how GatherScopeActivity refuses on empty scope.
 /// </summary>
-public sealed class PublishGateActivity(PublishGate publishGate) : AsyncTaskActivity<PublishGateInput, PublishGateOutput>
+public sealed class PublishGateActivity(PublishGate publishGate, ILogger<PublishGateActivity> logger) : AsyncTaskActivity<PublishGateInput, PublishGateOutput>
 {
     protected override Task<PublishGateOutput> ExecuteAsync(TaskContext context, PublishGateInput input) => RunAsync(input);
 
@@ -20,7 +21,12 @@ public sealed class PublishGateActivity(PublishGate publishGate) : AsyncTaskActi
     {
         var result = await publishGate.EvaluateAsync(input.UserId, input.CustomerId, input.Narrative, input.Assertions, CancellationToken.None);
         if (!result.Approved)
+        {
+            logger.LogWarning(
+                "Tenant {CustomerId} refused at publish gate: {Diagnostics}",
+                input.CustomerId, string.Join(" | ", result.InternalDiagnostics));
             throw new OrchestrationRefusedException("GATE_REFUSED", result.UserFacingRefusal!, result.InternalDiagnostics);
+        }
 
         return new PublishGateOutput(true);
     }

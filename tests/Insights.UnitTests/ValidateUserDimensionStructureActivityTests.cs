@@ -2,6 +2,7 @@ using System.Text.Json;
 using Insights.Domain;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Insights.UnitTests;
 
@@ -70,7 +71,7 @@ public sealed class ValidateUserDimensionStructureActivityTests
         var qualifyingRow = new UsersRow { UserID = 12116, MedianDaysEarlyLate = 12.0m, TimingSampleSize = 486 };
         var rowsJson = BuildUsersRowsJson(qualifyingRow);
 
-        var activity = new ValidateUserDimensionStructureActivity();
+        var activity = new ValidateUserDimensionStructureActivity(NullLogger<ValidateUserDimensionStructureActivity>.Instance);
         var input = new ValidateUserDimensionStructureInput(
             WellFormedHtmlWithoutTimingLine, DimensionSelectionComposition.ReportType, ["Users"], rowsJson);
 
@@ -84,7 +85,7 @@ public sealed class ValidateUserDimensionStructureActivityTests
         var thinRow = new UsersRow { UserID = 22424, MedianDaysEarlyLate = null, TimingSampleSize = 3 };
         var rowsJson = BuildUsersRowsJson(thinRow);
 
-        var activity = new ValidateUserDimensionStructureActivity();
+        var activity = new ValidateUserDimensionStructureActivity(NullLogger<ValidateUserDimensionStructureActivity>.Instance);
         var input = new ValidateUserDimensionStructureInput(
             WellFormedHtmlWithoutTimingLine, DimensionSelectionComposition.ReportType, ["Users"], rowsJson);
 

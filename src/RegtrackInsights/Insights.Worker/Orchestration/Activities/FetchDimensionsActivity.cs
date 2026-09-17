@@ -2,6 +2,7 @@ using System.Text.Json;
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -74,7 +75,8 @@ public sealed record FetchDimensionsOutput(
 /// DimensionDictionaryGapException are NOT caught here - both propagate and fail the whole run,
 /// per their own doc comments.
 /// </summary>
-public sealed class FetchDimensionsActivity(IDimensionRepository dimensionRepository, IDimensionFailureRecorder? failureRecorder = null)
+public sealed class FetchDimensionsActivity(
+    IDimensionRepository dimensionRepository, ILogger<FetchDimensionsActivity> logger, IDimensionFailureRecorder? failureRecorder = null)
     : AsyncTaskActivity<FetchDimensionsInput, FetchDimensionsOutput>
 {
     private readonly IDimensionFailureRecorder failureRecorder = failureRecorder ?? IDimensionFailureRecorder.Null;
@@ -115,11 +117,12 @@ public sealed class FetchDimensionsActivity(IDimensionRepository dimensionReposi
             }
             catch (Exception ex) when (ex is DimensionReconciliationException or DimensionContractViolationException)
             {
-                // [KNOWN GAP] A dimension degrading to a placeholder here is only observable via the
-                // insights.dimension.block_failures_total OTel counter (failureRecorder below) -
-                // nothing in this environment currently exports/reads that counter, so this failure
-                // is otherwise silent. Real fix is proper structured logging (this activity has no
-                // ILogger today) or wiring up the OTel exporter - not done here.
+                // [FIX - 2026-09-17] Previously silent beyond the insights.dimension.block_failures_total
+                // OTel counter (failureRecorder below, still unexported in this environment) - the real
+                // exception (e.g. the sql/05 Location truncation found live tonight) never reached
+                // anywhere queryable. Now logged here, with the tenant/dimension, before the exception
+                // itself is discarded.
+                logger.LogError(ex, "Dimension {Dimension} failed for tenant {CustomerId} - degrading to placeholder.", name, input.CustomerId);
                 failedDimensions.Add(name);
                 failureRecorder.RecordBlockFailure(name);
             }

@@ -131,7 +131,8 @@ public static class WorkerRegistration
         // [ADDED 2026-09-15, THROWAWAY DIAGNOSTIC] Same Reports:LocalFallbackDirectory as
         // PersistActivity below, reused only to decide where NormalizeActivity dumps a rejected
         // document - see that class's own doc comment. Revert alongside it.
-        services.AddTransient(_ => new NormalizeActivity(configuration["Reports:LocalFallbackDirectory"]));
+        services.AddTransient(sp => new NormalizeActivity(
+            configuration["Reports:LocalFallbackDirectory"], sp.GetRequiredService<ILogger<NormalizeActivity>>()));
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
         services.AddTransient<ValidateUserDimensionStructureActivity>();

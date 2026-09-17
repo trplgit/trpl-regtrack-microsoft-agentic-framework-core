@@ -51,7 +51,8 @@ public sealed class CheckTenantTokenBudgetActivityTests
     {
         var repository = new Mock<ITenantTokenBudgetRepository>();
         repository.Setup(r => r.GetTokensSinceAsync(TenantId, StartOfMonth, It.IsAny<CancellationToken>())).ReturnsAsync(1_000_000);
-        var activity = new CheckTenantTokenBudgetActivity(repository.Object, Settings(ceiling: 1_000_000), new CapturingLogger());
+        var logger = new CapturingLogger();
+        var activity = new CheckTenantTokenBudgetActivity(repository.Object, Settings(ceiling: 1_000_000), logger);
 
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(
             () => activity.RunAsync(new CheckTenantTokenBudgetInput(TenantId, AsOf)));
@@ -59,6 +60,10 @@ public sealed class CheckTenantTokenBudgetActivityTests
         Assert.Equal("MONTHLY_BUDGET_EXCEEDED", ex.ReasonCode);
         Assert.DoesNotContain("1000000", ex.Message); // never leak internals to the user-facing message (Sec.11.3)
         Assert.Contains(ex.InternalDiagnostics, d => d.Contains("1000000"));
+        // [ADDED 2026-09-17] The real reason must survive somewhere queryable, not just inside the
+        // exception object - InternalDiagnostics never reaches any log sink downstream (confirmed
+        // live: Location/Entity failures tonight were unrecoverable past this exact gap).
+        Assert.Single(logger.Messages, m => m.Contains("Error") && m.Contains("29") && m.Contains("1000000"));
     }
 
     [Fact]
