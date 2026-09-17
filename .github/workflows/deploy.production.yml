@@ -1,4 +1,3 @@
-
 name: Deploy RegInsights Worker
 
 permissions:
@@ -9,13 +8,17 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "Environment to deploy (staging or production)"
+        description: "Environment to deploy (demo or production)"
         required: true
         type: string
 
 jobs:
+
+  # ============================================================
+  # BUILD AND PUSH
+  # ============================================================
   build-and-push:
-    name: Build and Push Docker Image
+    name: Build and Push RegInsights Image
     runs-on: ubuntu-latest
 
     env:
@@ -28,15 +31,27 @@ jobs:
 
     steps:
 
-      # Checkout code
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # --------------------------------------------------------
       # Install Azure CLI
+      # --------------------------------------------------------
       - name: Install Azure CLI
         run: |
+          set -e
+
           sudo apt-get update
-          sudo apt-get install -y ca-certificates curl apt-transport-https lsb-release gnupg
+
+          sudo apt-get install -y \
+            ca-certificates \
+            curl \
+            apt-transport-https \
+            lsb-release \
+            gnupg
 
           sudo mkdir -p /etc/apt/keyrings
 
@@ -52,7 +67,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y azure-cli
 
-      # Download appsettings.json and Trplclientsecret.dll from Azure Blob
+      # --------------------------------------------------------
+      # Download secure files
+      # --------------------------------------------------------
       - name: Download secure files from Azure Blob
         run: |
           set -e
@@ -65,7 +82,7 @@ jobs:
             --account-name "$AZURE_STORAGE_ACCOUNT" \
             --account-key "$AZURE_STORAGE_KEY" \
             --container-name trpl-regtrack-microsoft-agentic-framework-core \
-            --name ${ENVIRONMENT}/Trplclientsecret.dll \
+            --name "${ENVIRONMENT}/Trplclientsecret.dll" \
             --file libs/Trplclientsecret.dll \
             --overwrite
 
@@ -75,13 +92,15 @@ jobs:
             --account-name "$AZURE_STORAGE_ACCOUNT" \
             --account-key "$AZURE_STORAGE_KEY" \
             --container-name trpl-regtrack-microsoft-agentic-framework-core \
-            --name ${ENVIRONMENT}/appsettings.json \
+            --name "${ENVIRONMENT}/appsettings.json" \
             --file appsettings.json \
             --overwrite
 
           echo "Secure files downloaded successfully."
 
-      # Log in to Azure Container Registry
+      # --------------------------------------------------------
+      # Login to ACR
+      # --------------------------------------------------------
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
         with:
@@ -89,58 +108,85 @@ jobs:
           username: ${{ vars.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
-      # Build and push Docker image
+      # --------------------------------------------------------
+      # Build and Push Worker Image
+      # --------------------------------------------------------
       - name: Build and Push Docker Image
         id: set-image
         run: |
+          set -e
+
           IMAGE=${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.environment }}/trpl-regtrack-insights-worker:latest
 
-          echo "Building image: $IMAGE"
+          echo "=========================================="
+          echo "Building RegInsights Image"
+          echo "Image: $IMAGE"
+          echo "=========================================="
 
           docker build --no-cache \
             -f Dockerfile \
-            -t $IMAGE \
+            -t "$IMAGE" \
             .
 
-          docker push $IMAGE
+          echo "Pushing image..."
+
+          docker push "$IMAGE"
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+          echo "=========================================="
+          echo "Image pushed successfully"
+          echo "=========================================="
+
+  # ============================================================
+  # DEPLOY TO AKS
+  # ============================================================
   deploy-to-aks:
-    name: Deploy to AKS
+    name: Deploy RegInsights to AKS
     runs-on: ubuntu-latest
+
     needs: build-and-push
 
     environment: ${{ inputs.environment }}
 
     steps:
 
-      # Checkout code
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # --------------------------------------------------------
       # Azure Login
+      # --------------------------------------------------------
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Set AKS context
+      # --------------------------------------------------------
+      # Get AKS credentials
+      # --------------------------------------------------------
       - name: Set AKS context
         run: |
           az aks get-credentials \
-            --resource-group TRPL-DEMOGROUP \
-            --name TRPL-Demo-Cluster \
+            --resource-group TRPL-Prod-AKS \
+            --name TRPL-Prod-Cluster \
             --overwrite-existing
 
-      # Create namespace if not exists
+      # --------------------------------------------------------
+      # Create namespace
+      # --------------------------------------------------------
       - name: Create namespace
         run: |
           kubectl create namespace ${{ inputs.environment }} \
             --dry-run=client \
             -o yaml | kubectl apply -f -
 
-      # Create image pull secret
+      # --------------------------------------------------------
+      # Create ACR pull secret
+      # --------------------------------------------------------
       - name: Create image pull secret
         run: |
           kubectl create secret docker-registry acr-pull-secret \
@@ -151,32 +197,126 @@ jobs:
             --dry-run=client \
             -o yaml | kubectl apply -f -
 
-      # Apply Kubernetes manifest
-      - name: Apply manifests
+      # ========================================================
+      # DEPLOYMENT
+      # ========================================================
+
+      # --------------------------------------------------------
+      # Validate Deployment YAML
+      # --------------------------------------------------------
+      - name: Validate Deployment YAML
+        run: |
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/deployment.production.yaml \
+            -n ${{ inputs.environment }}
+
+      # --------------------------------------------------------
+      # Apply Deployment
+      # --------------------------------------------------------
+      - name: Apply Deployment
         run: |
           kubectl apply \
             -f k8s/deployment.production.yaml \
             -n ${{ inputs.environment }}
 
-      # Update image
-      - name: Update deployment image
+      # --------------------------------------------------------
+      # Update Image
+      # --------------------------------------------------------
+      - name: Update Deployment Image
         run: |
-          kubectl set image deployment/trpl-regtrack-insights-worker \
+          kubectl set image \
+            deployment/trpl-regtrack-insights-worker \
             trpl-regtrack-insights-worker=${{ needs.build-and-push.outputs.IMAGE }} \
             -n ${{ inputs.environment }}
 
-      # Force rollout restart
-      - name: Force rollout restart
+      # --------------------------------------------------------
+      # Apply Service
+      # --------------------------------------------------------
+      - name: Apply Service
         run: |
-          kubectl rollout restart deployment/trpl-regtrack-insights-worker \
+          kubectl apply \
+            -f k8s/service.production.yaml \
             -n ${{ inputs.environment }}
 
-      # Wait for rollout
-      - name: Wait for rollout
+      # --------------------------------------------------------
+      # Apply Ingress
+      # --------------------------------------------------------
+      - name: Apply Ingress
+        run: |
+          kubectl apply \
+            -f k8s/ingress.production.yaml \
+            -n ${{ inputs.environment }}
+
+      # --------------------------------------------------------
+      # Restart Deployment
+      # --------------------------------------------------------
+      - name: Restart Deployment
+        run: |
+          kubectl rollout restart \
+            deployment/trpl-regtrack-insights-worker \
+            -n ${{ inputs.environment }}
+
+      # --------------------------------------------------------
+      # Wait for Rollout
+      # --------------------------------------------------------
+      - name: Wait for Rollout
         run: |
           kubectl rollout status \
             deployment/trpl-regtrack-insights-worker \
             -n ${{ inputs.environment }} \
-            --timeout=10m || \
+            --timeout=10m
+
+      # ========================================================
+      # VERIFICATION
+      # ========================================================
+
+      - name: Verify Deployment
+        run: |
+
+          echo "=========================================="
+          echo "PODS"
+          echo "=========================================="
+
           kubectl get pods \
+            -n ${{ inputs.environment }} \
+            -o wide
+
+          echo "=========================================="
+          echo "SERVICES"
+          echo "=========================================="
+
+          kubectl get svc \
             -n ${{ inputs.environment }}
+
+          echo "=========================================="
+          echo "ENDPOINTS"
+          echo "=========================================="
+
+          kubectl get endpoints \
+            trpl-regtrack-insights-worker \
+            -n ${{ inputs.environment }}
+
+          echo "=========================================="
+          echo "INGRESS"
+          echo "=========================================="
+
+          kubectl get ingress \
+            -n ${{ inputs.environment }}
+
+          echo "=========================================="
+          echo "DEPLOYMENT"
+          echo "=========================================="
+
+          kubectl get deployment \
+            trpl-regtrack-insights-worker \
+            -n ${{ inputs.environment }}
+
+          echo "=========================================="
+          echo "ROLLOUT STATUS"
+          echo "=========================================="
+
+          kubectl rollout status \
+            deployment/trpl-regtrack-insights-worker \
+            -n ${{ inputs.environment }} \
+            --timeout=2m
