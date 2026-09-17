@@ -17,6 +17,19 @@ RUN dotnet publish src/RegtrackInsights/RegtrackInsights.csproj \
 
 
 # ============================================================
+# PLAYWRIGHT
+# ============================================================
+
+# Install Playwright CLI in SDK image
+RUN dotnet tool install --global Microsoft.Playwright.CLI
+
+ENV PATH="$PATH:/root/.dotnet/tools"
+
+# Install Chromium
+RUN playwright install chromium
+
+
+# ============================================================
 # RUNTIME
 # RegInsights targets .NET 8
 # ============================================================
@@ -58,15 +71,9 @@ RUN apt-get update && \
         fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# ============================================================
-# Install Playwright CLI and Chromium
-# ============================================================
+# Copy Playwright browsers from build image
+COPY --from=build /root/.cache/ms-playwright /root/.cache/ms-playwright
 
-RUN dotnet tool install --global Microsoft.Playwright.CLI
-
-ENV PATH="$PATH:/root/.dotnet/tools"
-
-RUN playwright install chromium
 
 # ============================================================
 # START APPLICATION
