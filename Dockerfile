@@ -30,7 +30,10 @@ COPY --from=build /app/publish .
 # Copy environment-specific appsettings downloaded by GitHub Actions
 COPY appsettings.json /app/appsettings.json
 
+# ============================================================
 # Playwright / Chromium runtime dependencies
+# ============================================================
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -54,5 +57,19 @@ RUN apt-get update && \
         libglib2.0-0 \
         fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# ============================================================
+# Install Playwright CLI and Chromium
+# ============================================================
+
+RUN dotnet tool install --global Microsoft.Playwright.CLI
+
+ENV PATH="$PATH:/root/.dotnet/tools"
+
+RUN playwright install chromium
+
+# ============================================================
+# START APPLICATION
+# ============================================================
 
 ENTRYPOINT ["dotnet", "RegtrackInsights.dll"]
