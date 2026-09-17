@@ -8,7 +8,7 @@ metadata:
     app: trpl-regtrack-insights-worker
 
 spec:
-  replicas: 1
+  replicas: 4
 
   selector:
     matchLabels:
@@ -42,6 +42,18 @@ spec:
 
             - name: ASPNETCORE_URLS
               value: "http://+:8080"
+
+            # [ADDED 2026-09-17] Going from 1 replica to 4 without cutting this would take the
+            # per-pod LLM concurrency gate (Agents:MaxConcurrentLlmCalls) from 3 total to 12 total -
+            # real measured capacity was already saturated AT 3 on a single pod (0/10 freehand
+            # reports completed in 30min at that setting, confirmed live). No shared/distributed
+            # rate limiter exists yet (each pod's LlmConcurrencyGate is in-process only), so the only
+            # way to keep aggregate concurrency sane across 4 pods today is a lower per-pod cap.
+            # 1 x 4 replicas = 4 concurrent, close to the old single-pod ceiling. Env var overrides
+            # appsettings.json (real deployed config comes from the CI/CD blob download, not this
+            # repo - see deploy.staging.yml), so this is the only way to actually land the change.
+            - name: Agents__MaxConcurrentLlmCalls
+              value: "1"
 
           resources:
             requests:
