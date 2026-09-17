@@ -513,7 +513,13 @@ SELECT
     CREATE TABLE #assert (
         AssertionId  VARCHAR(20),
         Metric       VARCHAR(60),
-        ScopeLabel   NVARCHAR(200),
+        /*  [FIX - found live, 2026-09-17] Was NVARCHAR(200) - narrower than #rows.BranchName
+            (NVARCHAR(300)), which is inserted here directly at A-WORST, A-PEERSTATE, A-SPOF
+            (individual mode) and A-OWN (individual mode) below. A real branch name over 200
+            characters raises "String or binary data would be truncated" - confirmed live against
+            tenant 29 (177 branches), which was the first tenant with a branch name long enough to
+            hit it. Widened to match the real source column, not guessed.                       */
+        ScopeLabel   NVARCHAR(300),
         Value        DECIMAL(18,2),
         Rank_        INT NULL,
         OfN          INT NULL,
