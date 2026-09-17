@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: trpl-regtrack-insights-worker
+  namespace: production
+  labels:
+    app: trpl-regtrack-insights-worker
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: trpl-regtrack-insights-worker
+
+  template:
+    metadata:
+      labels:
+        app: trpl-regtrack-insights-worker
+
+    spec:
+      automountServiceAccountToken: false
+
+      imagePullSecrets:
+        - name: acr-pull-secret
+
+      containers:
+        - name: trpl-regtrack-insights-worker
+
+          image: conatinerimages.azurecr.io/production/trpl-regtrack-insights-worker:latest
+
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+
+          env:
+            - name: DOTNET_ENVIRONMENT
+              value: "production"
+
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+
+            capabilities:
+              drop:
+                - ALL
