@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+
+metadata:
+  name: trpl-regtrack-insights-worker
+  namespace: demo
+
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "75m"
+    # [ADDED 2026-09-16] nginx's default proxy-read-timeout is 60s - confirmed live killing the
+    # SSE run-status stream mid-run (GET /api/insights/runs/{runId}/stream) with curl exit 18
+    # (CURLE_PARTIAL_FILE) at exactly 60.2s while status was still "running", never a terminal
+    # state. The endpoint only emits a frame on status CHANGE (no heartbeat in between) and a real
+    # report run regularly goes longer than 60s between changes, so the ingress was cutting every
+    # long-running stream off well before either the client or RunEndpoints.cs's own 15-minute
+    # MaxStreamDuration intended. Set to match that same 900s ceiling exactly, so the ingress is
+    # never stricter than the app already chose to be.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+
+spec:
+  rules:
+    - host: demoreginsights.internal.teamleaseregtech.com
+
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+
+            backend:
+              service:
+                name: trpl-regtrack-insights-worker
+                port:
+                  number: 80
