@@ -486,6 +486,16 @@ $RECYCLE.BIN/
 
 # Local-only: kept on disk, never tracked.
 appsettings.json
+appsettings.Development.json
+appsettings.Production.json
 appsettings.*.json
+appsettings.uat.json
 Dockerfile
 .dockerignore
+
+# Postman collection/environment files - carry a real JWT/health-check secret placeholder
+# convention (see the collection's own description) and a real bearerToken variable that gets
+# populated locally when testing. Kept on disk, never tracked, same reasoning as appsettings above.
+docs/postman/RegTrack-Insights.postman_collection.json
+docs/postman/RegTrack-Insights.postman_environment.json
+docs/postman/RegTrack-Insights-UAT.postman_environment.json
