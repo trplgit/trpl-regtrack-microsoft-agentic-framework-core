@@ -2,6 +2,7 @@ using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -48,7 +49,7 @@ public sealed record PersistOutput(string ReportId, string? LocalFilePath = null
 /// </summary>
 public sealed class PersistActivity(
     IReportEncryptor encryptor, IReportBlobWriter blobWriter, IServiceScopeFactory serviceScopeFactory,
-    string? localFallbackDirectory = null)
+    ILogger<PersistActivity> logger, string? localFallbackDirectory = null)
     : AsyncTaskActivity<PersistInput, PersistOutput>
 {
     protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) => RunAsync(input);
@@ -71,32 +72,50 @@ public sealed class PersistActivity(
             return new PersistOutput(reportId.ToString(), LocalFilePath: localPath);
         }
 
-        var envelope = await encryptor.EncryptAsync(input.Html);
-        var location = await blobWriter.WriteAsync(
-            envelope, new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(generatedAtUtc), reportId));
-
-        var report = new GeneratedReport
+        try
         {
-            Id = reportId,
-            CustomerId = input.TenantId,
-            ScopeDescriptor = input.ScopeDescriptor,
-            ReportType = input.ReportType,
-            Period = input.Period,
-            GeneratedAtUtc = generatedAtUtc,
-            GeneratedByUserId = input.UserId,
-            BlobContainer = location.Container,
-            BlobPath = location.Path,
-            Status = "complete",
-            EncryptedAesKey = envelope.EncryptedAesKey,
-            KeyVaultObjectName = envelope.KeyVaultObjectName,
-            KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
-        };
+            var envelope = await encryptor.EncryptAsync(input.Html);
+            var location = await blobWriter.WriteAsync(
+                envelope, new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(generatedAtUtc), reportId));
 
-        using var scope = serviceScopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
-        db.GeneratedReports.Add(report);
-        await db.SaveChangesAsync();
+            var report = new GeneratedReport
+            {
+                Id = reportId,
+                CustomerId = input.TenantId,
+                ScopeDescriptor = input.ScopeDescriptor,
+                ReportType = input.ReportType,
+                Period = input.Period,
+                GeneratedAtUtc = generatedAtUtc,
+                GeneratedByUserId = input.UserId,
+                BlobContainer = location.Container,
+                BlobPath = location.Path,
+                Status = "complete",
+                EncryptedAesKey = envelope.EncryptedAesKey,
+                KeyVaultObjectName = envelope.KeyVaultObjectName,
+                KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
+            };
 
-        return new PersistOutput(report.Id.ToString());
+            using var scope = serviceScopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
+            db.GeneratedReports.Add(report);
+            await db.SaveChangesAsync();
+
+            return new PersistOutput(report.Id.ToString());
+        }
+        catch (Exception ex)
+        {
+            // [ADDED 2026-09-18] Found live: DTFx's TaskFailed history event only ever persists
+            // ex.Message, never ex.InnerException - "An error occurred while saving the entity
+            // changes. See the inner exception for details." is EF's own DbUpdateException.Message,
+            // and the actual inner exception (the real SQL error - deadlock, timeout, whatever it
+            // turns out to be) was completely unrecoverable after the fact. Logging the FULL
+            // exception (ILogger's Exception overload captures ex.ToString(), inner exceptions
+            // included) here, before this still propagates and fails the activity exactly as
+            // before, is the only way this is diagnosable without bypassing the app next time.
+            logger.LogError(ex,
+                "PersistActivity failed for tenant {CustomerId}, reportType {ReportType}, period {Period}, reportId {ReportId}.",
+                input.TenantId, input.ReportType, input.Period, reportId);
+            throw;
+        }
     }
 }

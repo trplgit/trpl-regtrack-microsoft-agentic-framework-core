@@ -3,6 +3,7 @@ using Insights.Domain;
 using Insights.Worker.Orchestration.Activities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -50,7 +51,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance);
 
         var result = await activity.RunAsync(new PersistInput(
             "<html></html>", TenantId: 29, ReportType: "compliance_health", Period: "FY2025-26",
@@ -98,7 +99,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance);
 
         await activity.RunAsync(new PersistInput(
             "<html>real tenant data</html>", 29, "compliance_health", "FY2025-26", "tenant", 38));
@@ -124,7 +125,8 @@ public class PersistActivityTests
             var encryptor = new Mock<IReportEncryptor>();
             var blobWriter = new Mock<IReportBlobWriter>();
             await using var db = NewInMemoryDb();
-            var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), localFallbackDirectory: tempDir);
+            var activity = new PersistActivity(
+                encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, localFallbackDirectory: tempDir);
 
             var result = await activity.RunAsync(new PersistInput(
                 "<html>real tenant data</html>", 1008, "fixed_holistic", "90day", "tenant", 12116));
@@ -141,5 +143,48 @@ public class PersistActivityTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<PersistActivity>
+    {
+        public List<Exception?> LoggedExceptions { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) =>
+            LoggedExceptions.Add(exception);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-18] Found live: with 4 worker replicas genuinely parallel, 3 of 4 concurrent
+    /// PersistActivity calls failed at SaveChangesAsync with only "An error occurred while saving
+    /// the entity changes" recoverable afterward - DTFx's TaskFailed history event never keeps
+    /// ex.InnerException. This pins that the real exception (the one that matters, with its inner
+    /// exception intact) is now logged BEFORE it propagates, regardless of which step throws.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SaveChangesFails_LogsTheRealExceptionBeforeRethrowing()
+    {
+        var envelope = Envelope();
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
+
+        var blobWriter = new Mock<IReportBlobWriter>();
+        var dbFailure = new InvalidOperationException("simulated transient SQL failure");
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(dbFailure);
+
+        await using var db = NewInMemoryDb();
+        var logger = new CapturingLogger();
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), logger);
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => activity.RunAsync(new PersistInput(
+            "<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38)));
+
+        Assert.Same(dbFailure, thrown);
+        Assert.Contains(logger.LoggedExceptions, ex => ex == dbFailure);
     }
 }
