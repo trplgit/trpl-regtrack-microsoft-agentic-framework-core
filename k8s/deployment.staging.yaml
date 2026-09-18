@@ -64,9 +64,57 @@ spec:
               cpu: "2"
               memory: "4Gi"
 
+          # [ADDED 2026-09-18] No probes existed at all until now - Kubernetes had zero signal to
+          # avoid routing traffic to a not-yet-ready pod (DurableTaskWorkerReadiness may still be
+          # false right after start - RegisterSqlOrchestrationService blocks synchronously on
+          # CreateIfNotExistsAsync against a real remote SQL Server) or to know a hung pod needs
+          # restarting. /health/live is "self only, always healthy, touches nothing" by design
+          # (HealthCheckRegistration.cs) - safe for liveness, will never flap on a transient DB
+          # blip. /health/ready checks the real DTFx dequeue-loop readiness - exactly what a
+          # readinessProbe needs. Neither sends X-Health-Token: HealthCheckTokenMiddleware fails
+          # OPEN when HealthCheckAuth:Token is unset (its own doc comment: an unauthenticated
+          # health endpoint is a leak, a CrashLoopBackOff is an outage, and outages lose) - if this
+          # environment's deployed config ever sets that token, these probes need a header added
+          # via a Secret reference or they will start failing shut instead of open.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            # Deliberately lenient (5 consecutive failures = 75s) - a liveness restart kills
+            # whatever activity this pod is mid-executing. PersistActivity and
+            # RecordTenantTokenUsageActivity are now idempotent on redelivery (2026-09-18), so a
+            # restart is SAFE, but still real wasted work - no reason to trigger one eagerly for a
+            # transient blip that readiness/its own retries would otherwise absorb.
+            failureThreshold: 5
+
+          # Gives an in-flight activity a real chance to finish naturally on a rolling update or
+          # scale-down instead of being SIGKILLed mid-write - directly shrinks the redelivery
+          # window PersistActivity's idempotency fix (2026-09-18) exists to make safe, rather than
+          # relying on that fix alone. 130s (SqlOrchestrationServiceSettings.WorkItemLockTimeout's
+          # real default is 2 minutes, confirmed via the installed package) plus headroom for the
+          # preStop sleep itself.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
           securityContext:
             allowPrivilegeEscalation: false
 
             capabilities:
               drop:
                 - ALL
+
+      terminationGracePeriodSeconds: 130

@@ -1,6 +1,7 @@
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -56,11 +57,14 @@ public sealed class PersistActivity(
 
     internal async Task<PersistOutput> RunAsync(PersistInput input)
     {
-        // The report id and its generation time are fixed HERE, before the blob write, because the
-        // blob PATH is built from them (<tenantId>/<reportType>/<yyyy>/<mm>/<reportId>.html.enc).
-        // EF's NEWID() / SYSUTCDATETIME() column defaults yield to a client-set value, so the SQL
-        // row carries the exact same id and timestamp the blob path encodes.
-        var reportId = Guid.NewGuid();
+        // [CHANGED 2026-09-18] Was Guid.NewGuid() - fine exactly once, a real duplicate-row/
+        // duplicate-blob generator on DTFx's at-least-once activity redelivery (a pod dying
+        // mid-PersistActivity after its lock expires gets this SAME activity re-run on a different
+        // pod - a real, live risk with 4 replicas that never had a chance to fire at 1). Deriving
+        // from the same (tenant, scope, reportType, period) key InsightsRunId.For already hashes
+        // for the orchestration instance id itself means a redelivered attempt targets the SAME
+        // row/blob path, not a new one - see InsightsRunId.ReportId's own doc comment.
+        var reportId = InsightsRunId.ReportId(input.TenantId, input.ScopeDescriptor, input.ReportType, input.Period);
         var generatedAtUtc = DateTime.UtcNow;
 
         if (!string.IsNullOrWhiteSpace(localFallbackDirectory))
@@ -74,6 +78,23 @@ public sealed class PersistActivity(
 
         try
         {
+            using var scope = serviceScopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
+
+            // [ADDED 2026-09-18] Fast path for a redelivered activity: a prior attempt (this pod
+            // or another) already finished this exact report. Return it WITHOUT re-encrypting or
+            // re-writing the blob - encryption mints a fresh AES key/IV per call, so overwriting an
+            // already-persisted blob here would silently break that row's own stored
+            // EncryptedAesKey (the row would still point at the old ciphertext's key, not the new
+            // one just written over it). Checking first avoids ever touching the blob a second time.
+            var existing = await db.GeneratedReports.FindAsync(reportId);
+            if (existing is not null)
+            {
+                logger.LogInformation(
+                    "PersistActivity: report {ReportId} already persisted - redelivered activity, returning the existing row untouched.", reportId);
+                return new PersistOutput(existing.Id.ToString());
+            }
+
             var envelope = await encryptor.EncryptAsync(input.Html);
             var location = await blobWriter.WriteAsync(
                 envelope, new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(generatedAtUtc), reportId));
@@ -95,10 +116,28 @@ public sealed class PersistActivity(
                 KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
             };
 
-            using var scope = serviceScopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
             db.GeneratedReports.Add(report);
-            await db.SaveChangesAsync();
+
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                // [ADDED 2026-09-18] Lost a real race: between the FindAsync check above and this
+                // INSERT, another pod's redelivered attempt may have won and its row is now there.
+                // That row is the truth - the blob we just wrote above is orphaned (harmless; same
+                // known gap as the not-yet-built temp-blob purge job, never a correctness issue
+                // since nothing will ever reference it - the DB row, which we do NOT own, points at
+                // THEIRS). `await` is not legal in a catch filter, so the check happens here instead
+                // and a genuinely different failure (no row exists) rethrows as before.
+                if (!await db.GeneratedReports.AnyAsync(r => r.Id == reportId))
+                    throw;
+
+                logger.LogWarning(
+                    "PersistActivity: lost a concurrent race for report {ReportId} to another pod's redelivered attempt - returning theirs.", reportId);
+                return new PersistOutput(reportId.ToString());
+            }
 
             return new PersistOutput(report.Id.ToString());
         }
