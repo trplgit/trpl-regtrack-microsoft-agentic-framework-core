@@ -1,6 +1,6 @@
 /*===========================================================================
   RegTrack Insights - ROLLBACK
-  Cleanly removes every object created by sql/01 - sql/27.
+  Cleanly removes every object created by sql/01 - sql/33.
 
   SAFETY: this script touches ONLY objects created by the Insights scripts.
           It does NOT reference, alter, or delete any existing RegTrack table
@@ -81,6 +81,23 @@ IF OBJECT_ID('dbo.usp_Insights_DigestSuppress',          'P') IS NOT NULL DROP P
 IF OBJECT_ID('dbo.usp_Insights_EligibleTenants',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_EligibleTenants;
 GO
 
+/*   Metric snapshot procedures (sql/33)  */
+IF OBJECT_ID('dbo.usp_Insights_SnapshotPurge',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotPurge;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotTrend',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotTrend;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotRecord', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotRecord;
+GO
+
+/*   sql/28 alters an EXISTING, live table (GeneratedReport, sql/18) rather than
+     creating one. Rollback therefore drops the constraint and the column, never
+     the table - GeneratedReport carries the paid pipeline's production history. */
+IF EXISTS (SELECT 1 FROM sys.check_constraints
+           WHERE parent_object_id = OBJECT_ID('dbo.GeneratedReport')
+             AND name = 'CK_GeneratedReport_DimensionKeyAgrees')
+    ALTER TABLE dbo.GeneratedReport DROP CONSTRAINT CK_GeneratedReport_DimensionKeyAgrees;
+IF COL_LENGTH('dbo.GeneratedReport', 'RequestedDimensions') IS NOT NULL
+    ALTER TABLE dbo.GeneratedReport DROP COLUMN RequestedDimensions;
+GO
+
 /*-- 2. Functions (dropped after the procs that call them) ------------------*/
 IF OBJECT_ID('dbo.tvfInsightsScopedInstances',   'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsScopedInstances;
 IF OBJECT_ID('dbo.tvfInsightsScopePairs',        'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsScopePairs;
@@ -117,6 +134,10 @@ IF OBJECT_ID('dbo.InsightsFreeDigestArtifact', 'U') IS NOT NULL DROP TABLE dbo.I
     guarantee. Re-running the lane after a rollback can re-POST a recipient's
     insight for a week already posted.                                     */
 IF OBJECT_ID('dbo.InsightsFreeDigestJsonLog', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestJsonLog;
+/*  sql/33 - NOTE: dropping this table destroys ALL trend history and it
+    cannot be backfilled - the source data holds only the present. Think
+    before running this in an environment that has been accumulating.     */
+IF OBJECT_ID('dbo.InsightsMetricSnapshot', 'U') IS NOT NULL DROP TABLE dbo.InsightsMetricSnapshot;
 
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;
