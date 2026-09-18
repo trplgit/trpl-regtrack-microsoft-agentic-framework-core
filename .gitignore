@@ -501,3 +501,5 @@ docs/postman/RegTrack-Insights.postman_environment.json
 docs/postman/RegTrack-Insights-UAT.postman_environment.json
 docs/postman/trpl-uat-reginsights-endpoints-collection.postman_collection.json
 docs/postman/trpl-uat-reginsights-endpoints-environment.postman_environment.json
+docs/postman/trpl-uat-reginsights-gaurav-collection.postman_collection.json
+docs/postman/trpl-uat-reginsights-gaurav-environment.postman_environment.json
