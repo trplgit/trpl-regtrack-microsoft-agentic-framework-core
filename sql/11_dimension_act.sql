@@ -102,6 +102,7 @@ BEGIN
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
         BranchesCovered       INT            NOT NULL,
         -- derived
         StartDate             DATETIME       NULL,
@@ -110,12 +111,13 @@ BEGIN
     );
 
     INSERT #rows (ActID, ActName, State, RegulatorID, CategoryId, Instances, Overdue,
-                  ImprisonmentInstances, BranchesCovered, StartDate)
+                  ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered, StartDate)
     SELECT
         a.ActID, a.ActName, a.State, a.RegulatorID, a.CategoryId,
         COUNT(i.ComplianceInstanceID),
         SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         COUNT(DISTINCT i.BranchID),
         a.StartDate
     FROM #act a
@@ -279,6 +281,18 @@ BEGIN
                     THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' Acts share this rate - not uniquely the highest. ')
                     ELSE N'' END), N'')
     FROM #rows WHERE Instances >= @rankFloor ORDER BY OverduePct DESC, Instances DESC;
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05: on a
+        live pilot the rate-ranked finding put a 69-obligation area with ZERO
+        imprisonment exposure at rank 1. Both assertions are emitted; the
+        composition layer chooses. Emitted only where exposure exists to rank. */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-ACT-EXP','imprisonment_overdue_count', ActName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by rate.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
 
     /*  The state-divergence assertion carries the SPREAD, not a rate, because
         the finding is that the same law is executed differently - the law is

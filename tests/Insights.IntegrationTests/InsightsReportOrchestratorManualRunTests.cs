@@ -966,6 +966,59 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     }
 
     /// <summary>
+    /// [ADDED 2026-09-21] ENQUEUE-ONLY - deliberately does NOT resolve or start any IHostedService,
+    /// so this process's own DurableTaskHostedService never runs. The only thing touching the real
+    /// SQL task hub here is TaskHubClient (enqueue + read-only status polling) - the REAL deployed
+    /// staging pod (just confirmed healthy: /health, /health/ready, /health/live all 200 with no
+    /// token, after Ravindra's blank-token blob fix landed) is what actually dequeues and processes
+    /// this. This is the real proof the user asked for: does the v2-mandatory freehand narrate
+    /// code (pushed to staging this session, commit e97a188) work in the ACTUAL deployed
+    /// environment, not just a local bypass. Act dimension, tenant 29/user 38 (CLAUDE.md reference
+    /// tenant - 89% of estate under a soft-deleted parent). RunVisionQa explicitly false, matching
+    /// this environment's own real Presentation:RunVisionQa=false config intent (bypassing the API
+    /// layer that would normally read that key means this C# default of true would otherwise
+    /// silently re-enable something this environment deliberately turned off, and re-hit the
+    /// unrelated known VisionQA gpt-5.2 deployment-404 found earlier this session).
+    /// </summary>
+    [Fact]
+    public async Task EnqueueOnly_ActDimension_Tenant29_LetRealStagingPodProcessIt()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
+                ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+                ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInsightsData(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsOrchestration(configuration);
+        var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<TaskHubClient>();
+
+        var input = new InsightsReportOrchestrationInput(
+            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+            "90day", 38, LlmCallPriority.Interactive, ["Act"], RunVisionQa: false);
+
+        var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+        output.WriteLine($"Enqueued (no local worker running - the real staging pod must pick this up): {instance.InstanceId}");
+
+        var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+        output.WriteLine($"Final: {state.OrchestrationStatus}, final status detail: {state.Status}");
+        if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+            output.WriteLine($"Output/failure detail: {state.Output}");
+        else
+            output.WriteLine($"Output: {state.Output}");
+
+        Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+    }
+
+    /// <summary>
     /// [ADDED 2026-09-14] All 7 v1 dimensions (CLAUDE.md "V1 release scope") for ONE real tenant -
     /// Minda Corporation Group (1008, user 12116, same pair as every other Minda run this session).
     /// Sequential, not concurrent: this is a single-tenant completeness check, not a load test (that
