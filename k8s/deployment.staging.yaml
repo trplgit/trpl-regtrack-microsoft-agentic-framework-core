@@ -71,11 +71,20 @@ spec:
           # restarting. /health/live is "self only, always healthy, touches nothing" by design
           # (HealthCheckRegistration.cs) - safe for liveness, will never flap on a transient DB
           # blip. /health/ready checks the real DTFx dequeue-loop readiness - exactly what a
-          # readinessProbe needs. Neither sends X-Health-Token: HealthCheckTokenMiddleware fails
-          # OPEN when HealthCheckAuth:Token is unset (its own doc comment: an unauthenticated
-          # health endpoint is a leak, a CrashLoopBackOff is an outage, and outages lose) - if this
-          # environment's deployed config ever sets that token, these probes need a header added
-          # via a Secret reference or they will start failing shut instead of open.
+          # readinessProbe needs.
+          #
+          # [BROKEN, 2026-09-19 - NOT FIXED HERE] Confirmed via real pod logs (Ravindra): both
+          # probes get 401'd in production. HealthCheckTokenMiddleware requires X-Health-Token
+          # whenever HealthCheckAuth:Token is set, and it IS set in this environment's real deployed
+          # config (the CI/CD blob's appsettings.json - never seen directly, not owned by this
+          # repo). Neither probe sends that header. Deliberately NOT fixed with a hardcoded value
+          # here - this repo's convention is secrets live in appsettings (gitignored, local-only)
+          # or a real Secret, never committed in a plain YAML. Needs a real k8s Secret plus either
+          # (a) an exec-based probe reading it from an env var (httpGet cannot read a header from a
+          # Secret - a real API limitation), which needs curl/wget confirmed present in the image,
+          # or (b) the actual HealthCheckAuth:Token value pulled from Tanvi/the blob and set via
+          # secretKeyRef for the app's own env var, still leaving the probe's own header problem
+          # open. Until one of those lands, these probes will keep failing pods out of readiness.
           readinessProbe:
             httpGet:
               path: /health/ready

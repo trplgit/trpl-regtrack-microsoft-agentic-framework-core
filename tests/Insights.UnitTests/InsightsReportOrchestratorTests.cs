@@ -171,11 +171,14 @@ public class InsightsReportOrchestratorTests
     }
 
     /// <summary>
-    /// [ADDED 2026-09-14] FreehandDimensions.Names (Act/BacklogAging/Departments/Licence) get a
-    /// real LLM composition call instead of DimensionSelectionComposition.Build's fixed single
-    /// block - stops right after Narrate (a per-run-budget refusal, same technique
-    /// RunTask_PerRunTokenBudgetExceeded_RefusesAndNeverNarrates uses) so the test does not need to
-    /// mock the entire render/inject/persist chain to prove which composition path ran.
+    /// [ADDED 2026-09-14, UPDATED 2026-09-21] FreehandDimensions.Names (Act/BacklogAging/
+    /// Departments/Licence/Location) get a real LLM composition call instead of
+    /// DimensionSelectionComposition.Build's fixed single block - stops right after Narrate (a
+    /// per-run-budget refusal, same technique RunTask_PerRunTokenBudgetExceeded_RefusesAndNever
+    /// Narrates uses) so the test does not need to mock the entire render/inject/persist chain to
+    /// prove which composition path ran. Narrate here means AnalyzeAndNarrateActivity (v2) -
+    /// v2 is now the ONLY narrate path for freehand dimensions, NarrateActivity (v1) no longer
+    /// runs for them at all (UseAnalystNarrative toggle removed 2026-09-21).
     /// </summary>
     [Fact]
     public async Task RunTask_DimensionSelectionWithFreehandDimension_UsesComposeFreehandDimensionActivity()
@@ -200,10 +203,10 @@ public class InsightsReportOrchestratorTests
             .Callback<string, string, RetryOptions, object[]>((_, _, _, args) => capturedComposeInput = (ComposeFreehandDimensionInput)args[0])
             .ReturnsAsync(new ComposeFreehandDimensionOutput(plan, 5000));
 
-        // Any Narrate result pushes the running total (5000 compose + this) over the 250k ceiling,
-        // so the run refuses right here - nothing past Narrate needs mocking.
-        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 300_000));
+        // Any AnalyzeAndNarrate result pushes the running total (5000 compose + this) over the
+        // 250k ceiling, so the run refuses right here - nothing past Narrate needs mocking.
+        context.Setup(c => c.ScheduleTask<AnalyzeAndNarrateOutput>(typeof(AnalyzeAndNarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new AnalyzeAndNarrateOutput(new NarrativeResult([]), 300_000));
 
         var orchestrator = new InsightsReportOrchestrator();
         var input = new InsightsReportOrchestrationInput(
@@ -214,8 +217,10 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleWithRetry<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()), Times.Once);
         Assert.NotNull(capturedComposeInput);
         Assert.Equal("Act", capturedComposeInput!.Dimension);
-        context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-            It.Is<object[]>(args => ((NarrateInput)args[0]).Plan == plan)), Times.Once);
+        context.Verify(c => c.ScheduleTask<AnalyzeAndNarrateOutput>(typeof(AnalyzeAndNarrateActivity).Name, "1.0",
+            It.Is<object[]>(args => ((AnalyzeAndNarrateInput)args[0]).Plan == plan)), Times.Once);
+        // v1 must never run for a freehand dimension now - not even as a fallback.
+        context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
     }
 
     /// <summary>

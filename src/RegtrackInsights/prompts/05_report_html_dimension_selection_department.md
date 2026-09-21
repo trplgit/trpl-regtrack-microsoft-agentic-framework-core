@@ -54,6 +54,34 @@ Use a CSS-only radio-driven tab mechanism if you build tabs (input elements nest
 element your `:has()` selectors target — not as preceding siblings, which silently breaks
 `:has()`).
 
+## Required: plain-English opening summary
+
+**[ADDED 2026-09-20]** Real feedback on an early render: the page led straight into charts and
+tables — numbers first, meaning never. A reader who does not already know this platform's
+vocabulary (`overdue rate`, `instance-level owner`, `imprisonment exposure`) has nothing to orient
+on before the data starts.
+
+The FIRST thing inside `<main>`, before the header eyebrow/title or any hero/chart/table, is a
+short plain-English summary:
+
+- 2–4 sentences. No jargon, no acronyms, no platform-specific terms (`overdue`, `ownerless`,
+  `instance-level`, etc.) without immediately explaining what they mean in plain words.
+- Near-zero raw numbers — a single anchoring figure is fine if it is the one fact the reader most
+  needs ("most department obligations aren't tracked back to a department"), but this is NOT where
+  the report cites `83.4%`, `3,115`, or any other precise value. Precision belongs in the
+  hero/sections below, which this summary sets up, not repeats.
+  - Answers, in order: what did we look at, what is the one thing most worth knowing, why does it
+    matter. Written the way you would explain the finding out loud to someone who has never opened
+    this report before, not the way you would write a section heading.
+  - Synthesize across every real narrative block you were given (`narrative.blocks[].prose`) — this
+    is the "so what" for the WHOLE report, not a restatement of any one section.
+
+Example shape (illustrative only — write your own from THIS tenant's real findings, never copy
+this text): "This report looks at where compliance work is tracked to a specific department. Most
+of it currently isn't — so the department comparisons below only describe a small, particular
+slice of the real workload, not the whole picture. Within that slice, one department carries
+meaningfully more overdue risk than the rest."
+
 ## Technical constraints (unrelated to visual freedom — security/platform requirements)
 
 1. Exactly one HTML document, `<meta charset="utf-8">` first inside `<head>`.
@@ -101,6 +129,9 @@ cited as "derived from the tenant total minus every tagged department's own over
 
 ## Self-check before returning
 
+- The plain-English opening summary is the FIRST thing in `<main>`, 2-4 sentences, near-zero raw
+  numbers, no unexplained jargon, synthesizes across every narrative block - not copy-pasted from
+  any one section's own prose.
 - Every real department row is represented somewhere on the page — none silently dropped.
 - Every number on the page exists in `assertions`, `dimension_rows`, or `dimension_control_totals`.
 - No "top-owner load %" and no cross-department "Concentration" section.

@@ -6,6 +6,7 @@ using Insights.Data;
 using Insights.Domain;
 using Insights.Persistence;
 using Insights.Worker;
+using Insights.Worker.HealthChecks;
 using Insights.Worker.Orchestration;
 using Microsoft.Azure.KeyVault;
 using Microsoft.Extensions.Configuration;
@@ -198,6 +199,105 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             output.WriteLine($"Tenant {tenantId} ({expectedCompanyLabel}): {state.OrchestrationStatus}, final status {state.Status}");
             if (state.OrchestrationStatus != OrchestrationStatus.Completed)
                 output.WriteLine($"Output/failure detail: {state.Output}");
+
+            Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
+        }
+        finally
+        {
+            foreach (var hosted in provider.GetServices<IHostedService>())
+                await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-20, UPDATED 2026-09-21] Real end-to-end run of the v2 narrative path
+    /// (AnalyzeAndNarrateActivity, prompts/v2/03_narrative_analyst.md) THROUGH THE ACTUAL
+    /// ORCHESTRATOR - not an activity-by-activity bypass like the removed lab. v2 is now the
+    /// UNCONDITIONAL narrate path for every freehand dimension (UseAnalystNarrative removed - there
+    /// is no more toggle, no more v1 fallback for these 5 dimensions specifically). Departments on
+    /// tenant 29/38 - the CLAUDE.md reference tenant, and the one freehand dimension with a clean
+    /// 4/4-tenant validation pass in the removed lab (Location has a real, separate, not-yet-root-
+    /// caused SQL truncation bug - so it is deliberately NOT used for this pipeline proof). v1
+    /// (NarrateActivity/ReflectOnNarrativeActivity) is unchanged and still the only path for every
+    /// OTHER ReportType/dimension combination (fixed_holistic, Users, multi-dimension selection).
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_DimensionSelectionDepartments_AnalystNarrative_RealTenant_ReachesCompleteStatus()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
+                ["ConnectionStrings:RegTrackReportsWrite"] = RequireEnv("ConnectionStrings__RegTrackReportsWrite"),
+                ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+                ["Llm:Maf:Endpoint"] = RequireEnv("MAF_ENDPOINT"),
+                ["Llm:Maf:Model"] = RequireEnv("MAF_MODEL"),
+                ["Llm:Maf:ApiKey"] = RequireEnv("MAF_API_KEY"),
+                // [ADDED 2026-09-20] PaidReportAgentsRegistration.AddInsightsPaidReportAgents
+                // requires this unconditionally (VisionQaActivity's agent registration, not gated
+                // by RunVisionQa) - missing from every AddInMemoryCollection-based manual test in
+                // this file already (the two above predate the [ADDED 2026-09-14] VisionQa
+                // requirement and would fail the same way if re-run today; not this test's job to
+                // fix). Real values, same resource as Llm:Maf per appsettings.uat.json.
+                ["Llm:VisionQa:Endpoint"] = RequireEnv("VISIONQA_ENDPOINT"),
+                ["Llm:VisionQa:Model"] = RequireEnv("VISIONQA_MODEL"),
+                ["Llm:VisionQa:ApiKey"] = RequireEnv("VISIONQA_API_KEY"),
+                ["Agents:PromptDirectory"] = "./prompts",
+                ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
+                ["Azure:BlobContainer"] = "insights-reports-temp",
+                // Same Key Vault "Forbidden" bypass every other real run in this file already uses
+                // (PersistActivity's own doc comment) - not something this test is here to re-verify.
+                ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
+                ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
+                ["Budget:AlertAtPercentOfCeiling"] = "80",
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddInsightsData(configuration);
+        services.AddInsightsTenantTokenBudget(configuration);
+        services.AddInsightsWorker();
+        services.AddInsightsPaidReportAgents(configuration);
+        services.AddInsightsOrchestration(configuration);
+        services.AddInsightsObservability(configuration);
+        // [ADDED 2026-09-20] DurableTaskHostedService now takes DurableTaskWorkerReadiness (the
+        // real /health/ready wiring added earlier this session) - only AddInsightsHealthChecks
+        // registers it. Every other AddInMemoryCollection-based manual test in this file predates
+        // that health-check work and would fail the same DI resolution error if re-run today; not
+        // this test's job to fix those, just to not hit the same gap here.
+        services.AddInsightsHealthChecks(configuration);
+        var provider = services.BuildServiceProvider();
+
+        foreach (var hosted in provider.GetServices<IHostedService>())
+            await hosted.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var client = provider.GetRequiredService<TaskHubClient>();
+            // [FOUND LIVE 2026-09-20] First attempt (instance 3c660dde...) got all the way through
+            // Compose/Narrate(v2)/PublishGate/Render/every injector/Normalize/Sanitize/both
+            // structure validators cleanly, then stalled at VisionQaActivity: real
+            // "HTTP 404 DeploymentNotFound" for Llm:VisionQa:Model ("gpt-5.2") on Llm:VisionQa:Endpoint
+            // - a real, pre-existing Azure deployment-name mismatch (same class PaidReportAgentsRegistration.cs's
+            // own [BUG FOUND LIVE] comment already documents for the sol deployment), unrelated to
+            // this work - VisionQA sits downstream of Narrate and would fail identically on v1.
+            // RunVisionQa=false (added 2026-09-15 for exactly this "fast local iteration" case)
+            // bypasses it so this run proves what it is actually here to prove: the v2 narrative
+            // wiring reaches Completed through the real orchestrator.
+            var input = new InsightsReportOrchestrationInput(
+                29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null),
+                "90day", 38, LlmCallPriority.Interactive, ["Departments"], RunVisionQa: false);
+
+            var instance = await client.CreateOrchestrationInstanceAsync(InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, null, input);
+            output.WriteLine($"Enqueued: {instance.InstanceId}");
+            var state = await PollUntilTerminalAsync(client, instance.InstanceId, TimeSpan.FromMinutes(15));
+
+            output.WriteLine($"Tenant 29, Departments (AnalystNarrative): {state.OrchestrationStatus}, final status {state.Status}");
+            if (state.OrchestrationStatus != OrchestrationStatus.Completed)
+                output.WriteLine($"Output/failure detail: {state.Output}");
+            else
+                output.WriteLine($"Output: {state.Output}");
 
             Assert.Equal(OrchestrationStatus.Completed, state.OrchestrationStatus);
         }
@@ -820,25 +920,21 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
     [Fact]
     public async Task TerminateStaleBacklogInstances()
     {
-        string[] staleIds =
-        [
-            "0e8fe72a93bb4aec85d82b85d70b4950", "0ef2dda75da34f70bdc0eaad204cb693",
-            "1864fdbc89014a44b673ca367eaa6897", "1d0e648f1c16426b9e590af058932803",
-            "1ef682ee2e7c4bac9b4cd617fd0ac549", "25c4203f5c8a4845936989f42de55dfe",
-            "26fe292614554041b5b67c1736fa643d", "34e704646da64fc583d0669dab3a603d",
-            "38bdf108f63a4e87ba8af7144e611814", "3d3e2c451c7a44dfaabe1ce08e877509",
-            "6f927fe965314cee837737cd0f33e8c5", "89d562309a7b4f658f272635c724343f",
-            "96d31fd9169c431ca520328f65d86822", "9d4f948f2e5f4338b8a523b2a0e2571a",
-            "ab8fc6a5e1ff44a5bfd9e0b649fe6854", "ada59eddbb2141008bff6f47c912c68a",
-            "ba5ee6799c414eca958b220c06c5781c", "bcb70348e38e4d4e87d0956607a6afef",
-            "c31bdbf289ba4480b69d830cf1431b7b", "cd3d0c69b96a41619713b857a665fb20",
-            "dda2a595a2e845c5b42350c2f2adc8bb", "fc0ea03f129344b5bec8ae51fb4af8f7",
-        ];
+        // [REPLACED 2026-09-20] Was a hardcoded 2026-09-14 id list against a now-gone local
+        // appsettings.json - that file no longer exists on disk (real UAT config now lives in
+        // appsettings.uat.json, gitignored, env-var-sourced like every other real run in this
+        // file). New id: the orphaned instance from the first (RunVisionQa defaulted true) attempt
+        // at proving AnalyzeAndNarrateActivity end to end - it can never reach Completed (deterministic
+        // VisionQA deployment-404, not transient - see that test method's own [FOUND LIVE] comment),
+        // and was measurably starving the RunVisionQa=false retry of shared worker capacity.
+        string[] staleIds = ["73fec36287ad48bb89bbcda6b85710d6"];
 
         var configuration = new ConfigurationBuilder()
-            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["ConnectionStrings:RegTrack"] = RequireEnv("ConnectionStrings__RegTrack"),
+                ["ConnectionStrings:DurableTaskHub"] = RequireEnv("ConnectionStrings__DurableTaskHub"),
+                ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
                 ["Agents:PromptDirectory"] = "./prompts",
                 ["Azure:BlobContainer"] = "insights-reports-temp",
             })

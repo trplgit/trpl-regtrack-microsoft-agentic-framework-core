@@ -1417,7 +1417,8 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
         }
         output.WriteLine("sql/20 applied (or already present) against real UAT.");
 
-        var repository = new Insights.Data.SqlTenantTokenBudgetRepository(ConnectionString);
+        var repository = new Insights.Data.SqlTenantTokenBudgetRepository(
+            ConnectionString, Microsoft.Extensions.Logging.Abstractions.NullLogger<Insights.Data.SqlTenantTokenBudgetRepository>.Instance);
         const int probeTenantId = -999001; // negative, structurally impossible to collide with a real CustomerID
         var probeRunId = $"probe-{Guid.NewGuid():N}";
         var startOfMonth = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);

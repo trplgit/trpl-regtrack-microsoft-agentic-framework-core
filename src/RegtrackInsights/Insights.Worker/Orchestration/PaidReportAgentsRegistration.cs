@@ -134,6 +134,19 @@ public static class PaidReportAgentsRegistration
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
             LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
+        // [ADDED 2026-09-20] v2 of Narrate+Reflect for the 5 freehand dimensions, behind
+        // InsightsReportOrchestrationInput.UseAnalystNarrative - see AnalyzeAndNarrateActivity's own
+        // doc comment and docs/superpowers/specs/2026-09-20-narrative-analyst-agent-design.md.
+        // Deliberately on the SAME sol deployment/reasoning-effort variables as the freehand
+        // composition agents above (freehandEndpoint/freehandModel/freehandApiKey/
+        // freehandReasoningEffort) - not the shared `model` every other agent in this file uses -
+        // per the user's explicit "use sol with high reasoning" instruction, and because root-cause
+        // tracing across multiple raw rows is the same class of harder reasoning task freehand
+        // composition already runs on that deployment.
+        services.AddSingleton<IAnalystNarrativeAgent>(sp => new MafAnalystNarrativeAgent(MafAgentFactory.CreateJsonAgent(
+            freehandEndpoint, freehandModel, freehandApiKey, "AnalystNarrativeAgent", "Traces root cause from typed assertions and raw dimension rows.",
+            LoadPromptSync(sp, "v2/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort)));
+
         // [ADDED 2026-09-14] Real vision-model gate inside the render-retry loop - see
         // VisionQaActivity's own doc comment for why this is a real gate, not advisory like
         // PlaywrightQaActivity. CreateJsonAgent, not CreateTextAgent - the output contract is

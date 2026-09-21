@@ -118,6 +118,7 @@ public static class WorkerRegistration
         services.AddTransient<ComposeFreehandDimensionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<AnalyzeAndNarrateActivity>();
         services.AddTransient<PublishGateActivity>();
         services.AddTransient<RenderHtmlActivity>();
         services.AddTransient<InjectFontActivity>();
@@ -203,6 +204,7 @@ public static class WorkerRegistration
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
                 ActivityCreator<ComputeScoreActivity>(sp), ActivityCreator<ComposeFreehandDimensionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
+                ActivityCreator<AnalyzeAndNarrateActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
                 ActivityCreator<InjectCoverageCssActivity>(sp), ActivityCreator<InjectCoverageScriptActivity>(sp),
