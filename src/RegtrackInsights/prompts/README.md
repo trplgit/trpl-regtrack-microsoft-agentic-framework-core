@@ -11,7 +11,7 @@ lying narrative"** is prevented. (Design spec §6.10.)
 | `03_narrative.md` | Narrative | after composition is settled |
 | `04_narrative_reflection.md` | Narrative critic | loop, bounded |
 | `05_report_html_fixed_holistic.md` | Report generation (Way 1, fixed 6-tab template) | after narrative passes |
-| `06_freetier_digest.md` | Free digest writer | free tier only |
+| `06_freetier_monthly_shared_rules_vN.md` + `06a`-`06e_freetier_monthly_*_vN.md` | Free digest email writer (overview, users, location, act, licence - the week's Sunday picks one) | free tier. **Write-once** - a change is a new `_vN` file selected by `FreeDigest:Monthly:PromptVersion:*` |
 
 ---
 

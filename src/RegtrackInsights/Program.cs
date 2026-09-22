@@ -136,6 +136,12 @@ builder.Services.AddHostedService<FreeDigestRunOnceWorker>();
 //   dotnet run -- --FreeDigest:DumpOnce=true --FreeDigest:CustomerId=29
 builder.Services.AddHostedService<FreeDigestArtifactDumpWorker>();
 
+// PREVIEW ONLY - renders the monthly free digest for one tenant to local .html + .debug.txt
+// files, in-process: no orchestration, no claim, no artifact, no email. Does nothing unless
+// FreeDigest:Preview:Enabled=true - see FreeMonthlyPreviewWorker's own doc comment:
+//   dotnet run -- --FreeDigest:Preview:Enabled=true --FreeDigest:CustomerId=1490 --Insights:ClientOnly=true --FreeDigest:Schedule:Enabled=false
+builder.Services.AddHostedService<FreeMonthlyPreviewWorker>();
+
 // One-shot runner for the paid orchestrator. Does nothing unless Insights:RunOnce=true:
 //   dotnet run -- --Insights:RunOnce=true --Insights:TenantId=29 --Insights:UserId=38
 builder.Services.AddHostedService<InsightsRunOnceWorker>();
@@ -171,6 +177,7 @@ foreach (var (key, description) in new[]
 {
     ("FreeDigest:RunOnce", "one-shot free digest run"),
     ("FreeDigest:DumpOnce", "one-shot digest artifact dump"),
+    ("FreeDigest:Preview:Enabled", "one-shot monthly digest preview"),
     ("Insights:RunOnce", "one-shot paid orchestrator run"),
 })
 {

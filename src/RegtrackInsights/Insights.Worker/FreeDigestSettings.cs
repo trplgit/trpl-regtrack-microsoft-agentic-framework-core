@@ -9,11 +9,9 @@ namespace Insights.Worker;
 /// </summary>
 public sealed class FreeDigestSettings
 {
-    /// <summary>Budget:FreeDigestTokenCap. Over budget = skip the LLM and send the template; the email still goes out.</summary>
-    public required int TokenCap { get; init; }
-
     /// <summary>
-    /// Budget:InsightJsonTokenCap - a SEPARATE cap from <see cref="TokenCap"/>, not a reuse of it.
+    /// Budget:InsightJsonTokenCap - the insight JSON lane's own cap. (The email's caps are
+    /// Budget:FreeMonthlyTokenCap:*, in FreeMonthlySettings.)
     ///
     /// [BUG FOUND LIVE, 2026-09-13] ComposeInsightJsonActivity originally shared TokenCap with the
     /// free-digest email lane. InsightNarrativeWriter.CompletionTokenBudget estimates the prompt's

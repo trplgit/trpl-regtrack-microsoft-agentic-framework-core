@@ -5,9 +5,9 @@ using Insights.Domain;
 namespace Insights.Presentation;
 
 /// <summary>
-/// Renders the free digest fallback body and the final HTML shell from
-/// templates/digest_fallback.txt and templates/digest.html (Email:TemplatePath).
-/// Templates are files, never string literals - same rule as prompts (docs/CONFIGURATION.md).
+/// Renders the free digest HTML shell from templates/digest.html (Email:TemplatePath) around a
+/// composed body. Templates are files, never string literals - same rule as prompts
+/// (docs/CONFIGURATION.md). The body itself (LLM or FreeMonthlyFallbackBody) is built upstream.
 /// </summary>
 public sealed partial class FreeDigestEmailRenderer(string templateDirectory, string cdnBaseUrl = "")
 {
@@ -27,9 +27,10 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory, st
     /// with an empty string, which would otherwise fail open).
     /// </summary>
     public async Task<string> RenderHtmlForArtifactAsync(
-        string body, string tenantName, DateTime weekEnding, string upgradeUrl, string? portalUrl = null, CancellationToken cancellationToken = default)
+        string body, string tenantName, MonthlyDigestEdition edition, string upgradeUrl, string? portalUrl = null,
+        CancellationToken cancellationToken = default)
     {
-        var html = await RenderHtmlAsync(body, tenantName, weekEnding, upgradeUrl, UnsubscribeSentinel, portalUrl, cancellationToken);
+        var html = await RenderHtmlAsync(body, tenantName, edition, upgradeUrl, UnsubscribeSentinel, portalUrl, cancellationToken);
 
         // Unsubscribe link removed from digest.html - the sentinel no longer appears in the
         // rendered shell, so the exactly-once assertion below would always throw. Commented out
@@ -73,14 +74,12 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory, st
         return count;
     }
 
-    public async Task<string> RenderFallbackBodyAsync(FreeDigestAggregates aggregates, string? recipientName, DateTime weekEnding, CancellationToken cancellationToken = default)
-    {
-        var template = await ReadTemplateAsync("digest_fallback.txt", cancellationToken);
-        return Substitute(template, TokensFor(aggregates, recipientName, weekEnding));
-    }
-
+    /// <summary>
+    /// <paramref name="edition"/> is the week's email (MonthlyDigestCalendar) - the masthead, title
+    /// and preheader name its month and topic; the footer's "as at" date is its Sunday.
+    /// </summary>
     public async Task<string> RenderHtmlAsync(
-        string body, string tenantName, DateTime weekEnding, string upgradeUrl, string unsubscribeUrl,
+        string body, string tenantName, MonthlyDigestEdition edition, string upgradeUrl, string unsubscribeUrl,
         string? portalUrl = null, CancellationToken cancellationToken = default)
     {
         var template = await ReadTemplateAsync("digest.html", cancellationToken);
@@ -88,7 +87,9 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory, st
         {
             ["Body"] = FormatBody(body),
             ["TenantName"] = tenantName,
-            ["WeekEnding"] = weekEnding.ToString("d MMM yyyy"),
+            ["WeekEnding"] = edition.Sunday.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture),
+            ["PeriodHeading"] = edition.PeriodLabel,
+            ["PeriodPhrase"] = edition.PeriodPhrase,
             ["UpgradeUrl"] = upgradeUrl,
             ["UnsubscribeUrl"] = unsubscribeUrl,
             ["PortalUrl"] = portalUrl ?? string.Empty,
@@ -114,69 +115,12 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory, st
     }
 
     /// <summary>
-    /// The fallback body is meant to read as though the same prompt (prompts/06_freetier_digest.md)
-    /// had written it - a recipient should not be able to tell whether the LLM was skipped this
-    /// week. The raw aggregates alone cannot produce that ("0 obligations" reads fine, but "18 of
-    /// which critical" as a fixed label does not flex for zero or singular) - so the clauses below
-    /// are computed HERE, in code, not in the template. The template stays pure substitution
-    /// (Substitute has no conditional-on-value logic, only conditional-on-non-empty-string), and
-    /// every number still traces straight to an aggregate - same "state the count, never a rate,
-    /// never a fabrication" rule the prompt itself is held to.
+    /// Minimal {{Token}} substitution. The template vocabulary is small and fixed, so a full
+    /// templating library is not warranted.
     /// </summary>
-    private static Dictionary<string, string> TokensFor(FreeDigestAggregates a, string? recipientName, DateTime weekEnding) => new()
-    {
-        ["RecipientName"] = recipientName ?? string.Empty,
-        ["WeekEnding"] = weekEnding.ToString("d MMM yyyy"),
-        ["DueNext7"] = a.DueNext7.ToString(),
-        ["CriticalDueNext7"] = a.CriticalDueNext7.ToString(),
-        ["ImprisonmentDueNext7"] = a.ImprisonmentDueNext7.ToString(),
-        ["DueNext30"] = a.DueNext30.ToString(),
-        ["ImprisonmentDueNext30"] = a.ImprisonmentDueNext30.ToString(),
-        ["LicencesLapsingNext30"] = a.LicencesLapsingNext30.ToString(),
-        ["CompletedLast7"] = a.CompletedLast7.ToString(),
-
-        ["DueNext7Word"] = Plural(a.DueNext7, "obligation", "obligations"),
-        ["DueNext7Verb"] = Plural(a.DueNext7, "is", "are"),
-        ["CriticalClause"] = a.CriticalDueNext7 == 0
-            ? "with none rated critical"
-            : $"{a.CriticalDueNext7} of them rated critical",
-
-        ["DueNext30Word"] = Plural(a.DueNext30, "obligation", "obligations"),
-        ["LiabilityVerb"] = Plural(a.ImprisonmentDueNext30, "carries", "carry"),
-        ["LicenceClause"] = a.LicencesLapsingNext30 == 0
-            ? "no licences are due to lapse"
-            : $"{a.LicencesLapsingNext30} {Plural(a.LicencesLapsingNext30, "licence", "licences")} " +
-              $"{Plural(a.LicencesLapsingNext30, "is", "are")} due to lapse",
-
-        ["CompletedWord"] = Plural(a.CompletedLast7, "completion", "completions"),
-        ["CompletedVerb"] = Plural(a.CompletedLast7, "was", "were"),
-    };
-
-    /// <summary>English pluralisation only ever needs to distinguish "exactly one" from everything else - zero takes the plural form same as any other count.</summary>
-    private static string Plural(int count, string singular, string plural) => count == 1 ? singular : plural;
-
-    /// <summary>
-    /// Minimal mustache subset: {{Token}} substitution plus {{#Token}}...{{/Token}}
-    /// sections that render their contents only when the token is non-empty (used for
-    /// the optional "{{#RecipientName}} {{RecipientName}}{{/RecipientName}}" greeting).
-    /// The template vocabulary is small and fixed, so a full templating library is not
-    /// warranted.
-    /// </summary>
-    private static string Substitute(string template, IReadOnlyDictionary<string, string> tokens)
-    {
-        var withSections = SectionToken().Replace(template, match =>
-        {
-            var key = match.Groups["key"].Value;
-            var hasValue = tokens.TryGetValue(key, out var value) && !string.IsNullOrEmpty(value);
-            return hasValue ? match.Groups["inner"].Value : string.Empty;
-        });
-
-        return PlainToken().Replace(withSections, match =>
+    private static string Substitute(string template, IReadOnlyDictionary<string, string> tokens) =>
+        PlainToken().Replace(template, match =>
             tokens.TryGetValue(match.Groups["key"].Value, out var value) ? value : string.Empty);
-    }
-
-    [GeneratedRegex(@"\{\{#(?<key>\w+)\}\}(?<inner>.*?)\{\{/\k<key>\}\}", RegexOptions.Singleline)]
-    private static partial Regex SectionToken();
 
     [GeneratedRegex(@"\{\{(?<key>\w+)\}\}")]
     private static partial Regex PlainToken();

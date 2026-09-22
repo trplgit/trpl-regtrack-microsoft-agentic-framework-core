@@ -320,6 +320,17 @@ BEGIN
     WHERE Instances >= @rankFloor AND NatureName NOT LIKE N'Other%'
     ORDER BY OverduePct DESC, Instances DESC;
 
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05.
+        Emitted only where there is real exposure to rank.                     */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-NATURE-EXP','imprisonment_overdue_count', NatureName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by rate.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 AND NatureName NOT LIKE N'Other%'
+    ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
+
     IF (SELECT EmitMode FROM #detector WHERE Detector='imprisonment_lineage') = 'individual'
         INSERT #assert
         SELECT TOP 5 'A-IMPLIN-' + CAST(ROW_NUMBER() OVER (ORDER BY ImprisonmentInstances DESC) AS VARCHAR(5)),

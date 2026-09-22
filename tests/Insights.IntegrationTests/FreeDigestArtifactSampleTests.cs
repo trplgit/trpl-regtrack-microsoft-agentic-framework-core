@@ -41,7 +41,13 @@ public sealed class FreeDigestArtifactSampleTests(ITestOutputHelper output)
                 ["Azure:BlobConnectionString"] = RequireEnv("AZURE_BLOB_CONNECTION_STRING"),
                 ["Azure:BlobContainer"] = "insights-reports-temp",
                 ["Azure:DigestBlobContainer"] = "insights-digests",
-                ["Budget:FreeDigestTokenCap"] = "1500",
+                ["Budget:FreeMonthlyTokenCap:Overview"] = "12000",
+                ["Budget:FreeMonthlyTokenCap:Users"] = "9000",
+                ["Budget:FreeMonthlyTokenCap:Location"] = "9000",
+                ["Budget:FreeMonthlyTokenCap:Act"] = "9000",
+                ["Budget:FreeMonthlyTokenCap:Licence"] = "9000",
+                ["FreeDigest:Monthly:MaxDraftAttempts"] = "2",
+                ["FreeDigest:Monthly:AllowPersonNames"] = "true",
                 ["Llm:Provider"] = "azure_openai",
                 ["Llm:AzureOpenAi:Endpoint"] = "https://trpl-prod-saas-ai-1.openai.azure.com/",
                 ["Llm:AzureOpenAi:Deployment"] = "gpt-4o-mini",
@@ -99,7 +105,7 @@ public sealed class FreeDigestArtifactSampleTests(ITestOutputHelper output)
         // encrypt and write to blob - unsubscribe link deliberately left as the sentinel, since
         // that only gets filled in per-recipient at SEND time.
         var html = await renderer.RenderHtmlForArtifactAsync(
-            composed.Body, resolved.TenantName, weekEnding.ToDateTime(TimeOnly.MinValue), settings.UpgradeUrl);
+            composed.Body, resolved.TenantName, MonthlyDigestCalendar.For(weekEnding), settings.UpgradeUrl);
 
         await File.WriteAllTextAsync(OutputPath, html);
         output.WriteLine($"Sample artifact written to {OutputPath}");

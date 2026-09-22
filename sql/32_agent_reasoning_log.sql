@@ -24,6 +24,10 @@
   retry. Deduplicating on RunId+Stage would throw away real, distinct
   reasoning from real, distinct calls.
 
+  -- [RENUMBERED 2026-09-13] Was sql/31, which collided with
+     31_freetier_insight_json.sql. Two files sharing a number in a sequenced
+     deployment resolve by alphabetical luck, not by design. This is 32.
+
   IDEMPOTENT (install script). Target: SQL Server (vitComplianceSystem)
 ===========================================================================*/
 

@@ -41,8 +41,10 @@ public sealed class PersistDigestArtifactActivity(
         if (artifactId == Guid.Empty)
             throw new InvalidOperationException("PersistDigestArtifactActivity: ArtifactId must not be empty.");
 
+        // Same week -> edition answer ComposeDigestActivity used, so the masthead names
+        // the month and topic the body was written for.
         var html = await renderer.RenderHtmlForArtifactAsync(
-            input.Body, input.TenantName, weekEnding.ToDateTime(TimeOnly.MinValue), settings.UpgradeUrl, settings.PortalUrl);
+            input.Body, input.TenantName, MonthlyDigestCalendar.For(weekEnding), settings.UpgradeUrl, settings.PortalUrl);
 
         if (!string.IsNullOrWhiteSpace(settings.DebugDumpHtmlDir))
             await DumpForDebuggingAsync(settings.DebugDumpHtmlDir, input.CustomerId, input.WeekEnding, artifactId, html);

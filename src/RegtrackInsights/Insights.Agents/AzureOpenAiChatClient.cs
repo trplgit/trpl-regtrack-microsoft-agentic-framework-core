@@ -9,19 +9,60 @@ namespace Insights.Agents;
 /// document Claude as the provider. Deployment-based routing, api-key header, api-version
 /// query param - different shape from OpenAiChatClient's public-API call.
 /// </summary>
-public sealed class AzureOpenAiChatClient(HttpClient httpClient, string endpoint, string deployment, string apiKey, string apiVersion = "2024-02-15-preview") : IClaudeClient
+/// <param name="temperature">
+/// <c>Llm:AzureOpenAi:Temperature</c>, or null to send none and let the deployment use its own
+/// default. Null is not the same as 0: the field is omitted from the request body entirely, which
+/// matters because some deployments reject any explicit temperature. Lower values make the digest
+/// wording more repeatable between runs; the numbers never come from the model either way.
+/// </param>
+/// <param name="reasoningEffort">
+/// <c>Llm:AzureOpenAi:ReasoningEffort</c>, or null for a non-reasoning deployment. Setting it also
+/// switches the output budget to <c>max_completion_tokens</c>: a reasoning model rejects
+/// <c>max_tokens</c> outright, and rejects <c>temperature</c> as well, so the two must move together.
+/// </param>
+/// <param name="verbosity"><c>Llm:AzureOpenAi:Verbosity</c> - low gives tighter prose and fewer output tokens.</param>
+/// <param name="maxOutputTokens">
+/// <c>Llm:AzureOpenAi:MaxOutputTokens</c>, used in place of the caller's per-reply estimate when a
+/// reasoning effort is set. REASONING TOKENS COME OUT OF THIS BUDGET, so a reply-sized number lets
+/// the model think itself out of an answer and return an empty body.
+/// </param>
+public sealed class AzureOpenAiChatClient(
+    HttpClient httpClient,
+    string endpoint,
+    string deployment,
+    string apiKey,
+    double? temperature = null,
+    string? reasoningEffort = null,
+    string? verbosity = null,
+    int? maxOutputTokens = null,
+    string apiVersion = "2024-02-15-preview") : IClaudeClient
 {
     public async Task<ClaudeCompletionResult> CompleteAsync(string systemPrompt, string userMessage, int maxTokens, CancellationToken cancellationToken = default)
     {
         var url = $"{endpoint.TrimEnd('/')}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Add("api-key", apiKey);
+
+        var reasoning = reasoningEffort is { Length: > 0 };
+        var budget = reasoning ? maxOutputTokens ?? maxTokens : maxTokens;
+
         request.Content = JsonContent.Create(new AzureOpenAiRequest(
-            maxTokens,
-            [new AzureOpenAiMessage("system", systemPrompt), new AzureOpenAiMessage("user", userMessage)]));
+            reasoning ? null : maxTokens,
+            reasoning ? budget : null,
+            [new AzureOpenAiMessage("system", systemPrompt), new AzureOpenAiMessage("user", userMessage)],
+            reasoning ? null : temperature,
+            reasoningEffort,
+            verbosity));
 
         using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+
+        /*  The body names WHICH parameter a deployment rejected - "Unsupported parameter:
+            'max_tokens'", "'temperature' is not supported with this model". EnsureSuccessStatusCode
+            discards it and leaves only "400 (Bad Request)", which is unactionable.              */
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Azure OpenAI returned {(int)response.StatusCode} for deployment '{deployment}': "
+                + await response.Content.ReadAsStringAsync(cancellationToken));
 
         var body = await response.Content.ReadFromJsonAsync<AzureOpenAiResponse>(cancellationToken)
             ?? throw new InvalidOperationException("Azure OpenAI API returned an empty body.");
@@ -30,7 +71,15 @@ public sealed class AzureOpenAiChatClient(HttpClient httpClient, string endpoint
         return new ClaudeCompletionResult(choice.Message.Content, body.Usage.PromptTokens, body.Usage.CompletionTokens, choice.FinishReason == "length");
     }
 
-    private sealed record AzureOpenAiRequest([property: JsonPropertyName("max_tokens")] int MaxTokens, AzureOpenAiMessage[] Messages);
+    // Every optional field is omitted when null: a reasoning deployment rejects max_tokens and
+    // temperature, and a non-reasoning one rejects reasoning_effort. Only one set is ever sent.
+    private sealed record AzureOpenAiRequest(
+        [property: JsonPropertyName("max_tokens"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxTokens,
+        [property: JsonPropertyName("max_completion_tokens"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxCompletionTokens,
+        AzureOpenAiMessage[] Messages,
+        [property: JsonPropertyName("temperature"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? Temperature,
+        [property: JsonPropertyName("reasoning_effort"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReasoningEffort,
+        [property: JsonPropertyName("verbosity"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Verbosity);
     private sealed record AzureOpenAiMessage(string Role, string Content);
     private sealed record AzureOpenAiResponse(AzureOpenAiChoice[] Choices, AzureOpenAiUsage Usage);
     private sealed record AzureOpenAiChoice(AzureOpenAiMessage Message, [property: JsonPropertyName("finish_reason")] string FinishReason);

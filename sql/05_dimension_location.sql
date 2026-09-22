@@ -513,12 +513,6 @@ SELECT
     CREATE TABLE #assert (
         AssertionId  VARCHAR(20),
         Metric       VARCHAR(60),
-        /*  [FIX - found live, 2026-09-17] Was NVARCHAR(200) - narrower than #rows.BranchName
-            (NVARCHAR(300)), which is inserted here directly at A-WORST, A-PEERSTATE, A-SPOF
-            (individual mode) and A-OWN (individual mode) below. A real branch name over 200
-            characters raises "String or binary data would be truncated" - confirmed live against
-            tenant 29 (177 branches), which was the first tenant with a branch name long enough to
-            hit it. Widened to match the real source column, not guessed.                       */
         ScopeLabel   NVARCHAR(300),
         Value        DECIMAL(18,2),
         Rank_        INT NULL,
@@ -547,6 +541,28 @@ SELECT
            @tenantOverduePct, OverduePct - @tenantOverduePct,
            CASE WHEN OverduePct > @tenantOverduePct THEN 'worse' ELSE 'better' END, NULL
     FROM #rows WHERE Instances > 0 ORDER BY OverduePct DESC, Instances DESC;
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. A-WORST ranks by OverduePct,
+        which puts a 69-obligation area with ZERO imprisonment exposure above one
+        with hundreds of personally-liable items overdue - observed on a live
+        pilot report, where the top recommendation carried no liability at all.
+
+        This assertion ranks the SAME rows by imprisonment-bearing overdue count.
+        Both are emitted; neither replaces the other. The composition layer
+        chooses, and can now choose on consequence.
+
+        Emitted ONLY when there is real exposure to rank - an all-zero ranking
+        would manufacture a "worst" that means nothing.                        */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-EXPOSURE','imprisonment_overdue_count', BranchName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows),
+           NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - the count of overdue obligations carrying personal '
+         + N'liability - not by overdue rate. A higher rate elsewhere on a smaller, '
+         + N'liability-free portfolio is a different and lesser problem.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
 
     -- onboarding artifacts: value is the closure RATIO, with the guard caveat
     /*  State-peer assertion - only where a real peer group exists (>=2 branches

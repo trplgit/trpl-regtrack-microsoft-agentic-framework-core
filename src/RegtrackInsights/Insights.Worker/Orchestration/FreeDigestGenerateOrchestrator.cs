@@ -8,7 +8,7 @@ public sealed record FreeDigestGenerateOrchestrationInput(int TenantId, string? 
 public sealed record FreeDigestGenerateOrchestrationOutput(
     int TenantId, string TenantName, string Decision, string Reason,
     int ScopeGroups, int LlmCalls, int Generated, int AlreadyGenerated, int RecipientsWithoutScope,
-    int TotalInputTokens, int TotalOutputTokens);
+    int TotalInputTokens, int TotalOutputTokens, int Refused = 0);
 
 /// <summary>
 /// SUNDAY half of the two-phase free digest (ADR-0001, 2026-09-10). Same gate + resolve + group
@@ -56,6 +56,7 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
         var alreadyGenerated = 0;
         var totalInputTokens = 0;
         var totalOutputTokens = 0;
+        var refused = 0;
 
         foreach (var group in resolved.Groups)
         {
@@ -77,6 +78,24 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
                 var composed = await context.ScheduleWithRetry<ComposeDigestOutput>(
                     typeof(ComposeDigestActivity).Name, "1.0", retry,
                     new ComposeDigestInput(input.TenantId, group.RepresentativeUserId, resolved.WeekEnding, input.AsOf));
+
+                if (composed.Source == ComposeDigestActivity.RefusedSource)
+                {
+                    /*  Monthly edition only: the slot proc refused the data (fail closed). Store
+                        nothing - no artifact means Monday's send finds nothing to dispatch for this
+                        scope group - and hand the slot back so the slot table stays clean.
+
+                        TERMINAL FOR THE WEEK, deliberately: the instance id is keyed on
+                        (tenant, week), so no later tick re-runs this orchestration - a refusal
+                        is a data problem that needs a person, not a retry. ComposeDigestActivity's
+                        LogError (with the SQL code) is the signal. Never reached by weekly
+                        history, so replay of in-flight runs is unchanged.                      */
+                    await context.ScheduleTask<object?>(
+                        typeof(ReleaseDigestArtifactActivity).Name, "1.0",
+                        new ReleaseDigestArtifactInput(claim.ArtifactId!));
+                    refused++;
+                    continue;
+                }
 
                 llmCalls++;
                 totalInputTokens += composed.InputTokens;
@@ -105,6 +124,6 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
         return new FreeDigestGenerateOrchestrationOutput(
             input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
             resolved.Groups.Count, llmCalls, generated, alreadyGenerated, resolved.RecipientsWithoutScope,
-            totalInputTokens, totalOutputTokens);
+            totalInputTokens, totalOutputTokens, refused);
     }
 }

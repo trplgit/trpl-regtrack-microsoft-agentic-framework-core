@@ -14,7 +14,7 @@ namespace Insights.Agents;
 /// [TRAP] The cap is checked AFTER the call, not before, and that is deliberate: the tokens are
 /// already billed by then. It exists to stop a runaway from continuing through the remaining
 /// stages of a report (4 calls plus up to 2 reflection loops), not to prevent the first
-/// overspend - which nothing on this side of the wire can do. Same shape as FreeDigestWriter's
+/// overspend - which nothing on this side of the wire can do. Same shape as FreeMonthlyDigestWriter's
 /// tokenCap, except the paid path refuses instead of falling back.
 /// </summary>
 public sealed class MeteredChatClient(

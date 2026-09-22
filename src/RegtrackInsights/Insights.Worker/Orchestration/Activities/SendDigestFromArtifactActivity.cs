@@ -86,15 +86,20 @@ public sealed class SendDigestFromArtifactActivity(
     ///
     /// Falls back to the plain form when the name is missing rather than emitting a dangling
     /// separator: an empty tenant name is a data gap, not a reason to send a malformed subject.
+    ///
+    /// The week's Sunday decides which email it is, so the subject names its topic and month:
+    /// "RegTrack Insights: Acme Holdings - Monthly overview, October 2026".
     /// </summary>
     internal static string BuildSubject(string? tenantName, DateOnly weekEnding)
     {
         // InvariantCulture: the worker may run under any locale, and the month name in a
         // customer-facing subject must not depend on the host machine.
-        var week = weekEnding.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
+        var edition = Insights.Domain.MonthlyDigestCalendar.For(weekEnding);
+        var period = $"{Insights.Domain.MonthlyDigestCalendar.Title(edition.Slot)}, " +
+                     edition.CurrMonthStart.ToString("MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
 
         return string.IsNullOrWhiteSpace(tenantName)
-            ? $"RegTrack Insights - week ending {week}"
-            : $"RegTrack Insights: {tenantName.Trim()} - week ending {week}";
+            ? $"RegTrack Insights - {period}"
+            : $"RegTrack Insights: {tenantName.Trim()} - {period}";
     }
 }

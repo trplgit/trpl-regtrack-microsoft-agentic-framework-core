@@ -26,7 +26,6 @@ public sealed class PostInsightJsonActivityTests
 
     private static FreeDigestSettings Settings(bool enabled = true, HttpStatusCode? statusCode = null) => new()
     {
-        TokenCap = 1500,
         FromAddress = "noreply@example.com",
         FromName = "RegTrack Insights",
         UpgradeUrl = "https://example.com/upgrade",
