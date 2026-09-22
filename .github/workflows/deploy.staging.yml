@@ -260,12 +260,24 @@ jobs:
       # --------------------------------------------------------
       # Wait for Rollout
       # --------------------------------------------------------
+      # [ADDED 2026-09-18] Found live: run #25 of this workflow (commit c6b611a)
+      # failed here at exactly 10m0s - "deployment exceeded its progress deadline",
+      # only 2 of 4 replicas updated. Cause: that same commit added
+      # terminationGracePeriodSeconds: 130 (+ a 10s preStop sleep) to
+      # k8s/deployment.staging.yaml, deliberately, so a draining pod gets a real
+      # chance to finish an in-flight activity instead of being SIGKILLed - see
+      # that file's own comment. Under the default rolling-update strategy (no
+      # maxUnavailable/maxSurge override), that makes each pod replacement take
+      # meaningfully longer than before, and 4 replicas no longer fit in 10
+      # minutes. Raised, not the grace period - 130s is tied to a real measured
+      # constant (SqlOrchestrationServiceSettings.WorkItemLockTimeout's actual
+      # default, 2 minutes), shrinking it would undo the fix it exists for.
       - name: Wait for Rollout
         run: |
           kubectl rollout status \
             deployment/trpl-regtrack-insights-worker \
             -n ${{ inputs.environment }} \
-            --timeout=10m
+            --timeout=20m
 
       # ========================================================
       # VERIFICATION

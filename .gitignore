@@ -510,3 +510,5 @@ prod_capture/
 prod_out/
 *.debug.txt
 tokens.csv
+docs/postman/trpl-uat-reginsights-gaurav-collection.postman_collection.json
+docs/postman/trpl-uat-reginsights-gaurav-environment.postman_environment.json

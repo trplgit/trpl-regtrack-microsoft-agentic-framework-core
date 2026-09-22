@@ -110,6 +110,14 @@ BEGIN
        reviewer timing, which would need a different date pair (submission vs
        review date) and is not built here. Timeliness (facet B2 above) only says
        on_time/delayed; this says BY HOW MUCH, in real days, from real dates:
+       [DECIDED 2026-09-13] Dated is the SYSTEM RECORD date - a real timestamp on 100%
+       of rows. StatusChangedOn is the USER-STATED completion date - midnight on 86.6%
+       of rows, i.e. a date not a timestamp. Record date is used because a completion
+       that was never recorded cannot be evidenced to a regulator. The two disagree
+       materially: tenant 1817 medians of +18 days (record) and -1 day (stated) - the
+       same events, opposite conclusions. The choice is therefore DECLARED in
+       data_quality below, never left implicit.
+
        ComplianceScheduleOn.ScheduleOn (the due date) vs ComplianceTransaction.Dated
        (the actual completion-event date - the same column
        tvfInsightsLatestStatus itself already orders by, confirmed live on tenant
@@ -188,6 +196,7 @@ BEGIN
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
         BranchesCovered       INT            NOT NULL,
         Logins12m             INT            NOT NULL,
         EngagementBand        VARCHAR(20)    NULL,
@@ -205,7 +214,7 @@ BEGIN
     );
 
     INSERT #rows (UserID, UserName, IsActive, Instances, PerformerInstances, ReviewerInstances,
-                  OtherRoleInstances, Overdue, ImprisonmentInstances, BranchesCovered, Logins12m,
+                  OtherRoleInstances, Overdue, ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered, Logins12m,
                   CompletedEvents, OnTimeEvents)
     SELECT
         a.UserID,
@@ -217,6 +226,7 @@ BEGIN
         COUNT(DISTINCT CASE WHEN a.RoleID NOT IN (3,4) THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN i.Imprisonment = 1 THEN a.ComplianceInstanceID END),
+        COUNT(DISTINCT CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT i.BranchID),
         ISNULL(MAX(lg.Logins12m), 0),
         ISNULL(MAX(q.CompletedEvents), 0),
@@ -471,6 +481,20 @@ BEGIN
             NULL,@assignedUnion,NULL,NULL,NULL,
             N'single_reviewer_dependency: counted at INSTANCE level so it cannot be double-counted across users');
 
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05: on a
+        live pilot the rate-ranked finding put a 69-obligation area with ZERO
+        imprisonment exposure at rank 1. Both assertions are emitted; the
+        composition layer chooses. Emitted only where exposure exists to rank. */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-USER-EXP','imprisonment_overdue_count', UserName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by '
+         + N'rate or by load. A user holding many low-consequence items is a capacity question; '
+         + N'this is a liability one.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
     SELECT 'assertions' AS ResultSet, * FROM #assert;
 
     /*-- 10. FINDINGS ----------------------------------------------------*/
@@ -542,6 +566,8 @@ BEGIN
                    WHEN 'users_without_quality_reading'        THEN 'OnTimePct'
                    WHEN 'unassigned_instances'                 THEN 'UnassignedInstances'
                    WHEN 'login_keyed_by_email'                 THEN 'LoginBand'
+                   WHEN 'timing_measured_from_record_date'     THEN 'MedianDaysEarlyLate'
+                   WHEN 'recording_lag'                        THEN 'MedianDaysEarlyLate'
                    WHEN 'implausible_completion_gaps'          THEN 'MedianDaysEarlyLate'
                    WHEN 'undocumented_role_id'                 THEN 'OtherRoleInstances'
                    ELSE NULL END AS AppliesToMetric,
@@ -565,6 +591,23 @@ BEGIN
                CONCAT(N'', @unassigned, N' obligation(s) in this scope have no assigned user at all and '
                     + N'therefore appear in no user row.')
         WHERE @unassigned > 0
+        UNION ALL
+        SELECT 'timing_measured_from_record_date',
+               N'MedianDaysEarlyLate is measured from ComplianceTransaction.Dated - the SYSTEM RECORD '
+             + N'date, when the completion was entered. A second date exists: StatusChangedOn, the date '
+             + N'the user states the work was done. They are NOT the same and the choice changes the SIGN '
+             + N'of the answer. Measured live 2026-09-13 on tenant 1817: median 18 days LATE by record '
+             + N'date, 1 day EARLY by stated date - the same events, opposite conclusions. Record date is '
+             + N'used deliberately: a completion that was never recorded cannot be evidenced to a '
+             + N'regulator. NEVER present this as "when the work was done" - it is when the work was '
+             + N'RECORDED.'
+        UNION ALL
+        SELECT 'recording_lag',
+               N'Across four production tenants the record date is later than the user-stated date on 74% '
+             + N'to 99.6% of completed events, never earlier, by a mean of 23 to 66 days. That lag is the '
+             + N'distance between doing the work and being able to prove it, and it inflates every '
+             + N'days-late figure here by roughly that amount. Treat MedianDaysEarlyLate as RECORDING '
+             + N'timeliness, not working timeliness.'
         UNION ALL
         SELECT 'implausible_completion_gaps',
                CONCAT(N'', @timingOutliersExcluded, N' completed event(s) show a gap of more than 365 days '

@@ -8,7 +8,7 @@ metadata:
     app: trpl-regtrack-insights-worker
 
 spec:
-  replicas: 4
+  replicas: 1
 
   selector:
     matchLabels:
@@ -64,9 +64,66 @@ spec:
               cpu: "2"
               memory: "4Gi"
 
+          # [ADDED 2026-09-18] No probes existed at all until now - Kubernetes had zero signal to
+          # avoid routing traffic to a not-yet-ready pod (DurableTaskWorkerReadiness may still be
+          # false right after start - RegisterSqlOrchestrationService blocks synchronously on
+          # CreateIfNotExistsAsync against a real remote SQL Server) or to know a hung pod needs
+          # restarting. /health/live is "self only, always healthy, touches nothing" by design
+          # (HealthCheckRegistration.cs) - safe for liveness, will never flap on a transient DB
+          # blip. /health/ready checks the real DTFx dequeue-loop readiness - exactly what a
+          # readinessProbe needs.
+          #
+          # [BROKEN, 2026-09-19 - NOT FIXED HERE] Confirmed via real pod logs (Ravindra): both
+          # probes get 401'd in production. HealthCheckTokenMiddleware requires X-Health-Token
+          # whenever HealthCheckAuth:Token is set, and it IS set in this environment's real deployed
+          # config (the CI/CD blob's appsettings.json - never seen directly, not owned by this
+          # repo). Neither probe sends that header. Deliberately NOT fixed with a hardcoded value
+          # here - this repo's convention is secrets live in appsettings (gitignored, local-only)
+          # or a real Secret, never committed in a plain YAML. Needs a real k8s Secret plus either
+          # (a) an exec-based probe reading it from an env var (httpGet cannot read a header from a
+          # Secret - a real API limitation), which needs curl/wget confirmed present in the image,
+          # or (b) the actual HealthCheckAuth:Token value pulled from Tanvi/the blob and set via
+          # secretKeyRef for the app's own env var, still leaving the probe's own header problem
+          # open. Until one of those lands, these probes will keep failing pods out of readiness.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            # Deliberately lenient (5 consecutive failures = 75s) - a liveness restart kills
+            # whatever activity this pod is mid-executing. PersistActivity and
+            # RecordTenantTokenUsageActivity are now idempotent on redelivery (2026-09-18), so a
+            # restart is SAFE, but still real wasted work - no reason to trigger one eagerly for a
+            # transient blip that readiness/its own retries would otherwise absorb.
+            failureThreshold: 5
+
+          # Gives an in-flight activity a real chance to finish naturally on a rolling update or
+          # scale-down instead of being SIGKILLed mid-write - directly shrinks the redelivery
+          # window PersistActivity's idempotency fix (2026-09-18) exists to make safe, rather than
+          # relying on that fix alone. 130s (SqlOrchestrationServiceSettings.WorkItemLockTimeout's
+          # real default is 2 minutes, confirmed via the installed package) plus headroom for the
+          # preStop sleep itself.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
           securityContext:
             allowPrivilegeEscalation: false
 
             capabilities:
               drop:
                 - ALL
+
+      terminationGracePeriodSeconds: 130

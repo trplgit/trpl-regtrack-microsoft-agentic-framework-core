@@ -118,6 +118,7 @@ public static class WorkerRegistration
         services.AddTransient<ComposeFreehandDimensionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<AnalyzeAndNarrateActivity>();
         services.AddTransient<PublishGateActivity>();
         services.AddTransient<RenderHtmlActivity>();
         services.AddTransient<InjectFontActivity>();
@@ -145,6 +146,7 @@ public static class WorkerRegistration
             sp.GetRequiredService<IReportEncryptor>(),
             sp.GetRequiredService<IReportBlobWriter>(),
             sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<ILogger<PersistActivity>>(),
             configuration["Reports:LocalFallbackDirectory"]));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
@@ -202,6 +204,7 @@ public static class WorkerRegistration
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
                 ActivityCreator<ComputeScoreActivity>(sp), ActivityCreator<ComposeFreehandDimensionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
+                ActivityCreator<AnalyzeAndNarrateActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
                 ActivityCreator<InjectCoverageCssActivity>(sp), ActivityCreator<InjectCoverageScriptActivity>(sp),
@@ -369,7 +372,19 @@ public static class WorkerRegistration
     {
         var writeConnectionString = configuration["ConnectionStrings:RegTrackReportsWrite"]
             ?? Require(configuration, "ConnectionStrings:RegTrack");
-        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(writeConnectionString));
+        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(
+            writeConnectionString,
+            // [ADDED 2026-09-18] Found live: with 4 worker replicas genuinely parallel (previously
+            // impossible at 1 replica), 3 of 4 concurrent PersistActivity SaveChangesAsync calls
+            // failed with a generic "An error occurred while saving the entity changes" after every
+            // real pipeline stage (compose/narrate/render/QA - full token spend) had already
+            // succeeded - consistent with SQL Server deadlock/lock-wait contention on concurrent
+            // INSERTs into GeneratedReport, not a real data conflict (no unique constraint beyond
+            // the PK, a fresh GUID every call - sql/18_generated_report.sql). EF's own retrying
+            // execution strategy is the correct fix for exactly this transient-fault class - no
+            // manual transaction is opened anywhere in this DbContext's callers, so it needs no
+            // ExecutionStrategy.ExecuteAsync wrapping to be safe.
+            sql => sql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)));
     }
 
     /// <summary>

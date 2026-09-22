@@ -50,5 +50,25 @@ BEGIN
 END
 GO
 
+/*  [ADDED 2026-09-18] IDEMPOTENT was previously enforced ONLY by
+    SqlTenantTokenBudgetRepository's own "IF NOT EXISTS (...) INSERT" - two
+    statements, not one, so two concurrent connections recording the SAME RunId
+    (a redelivered RecordTenantTokenUsageActivity, the same DTFx at-least-once
+    risk as PersistActivity's) can both see "not exists" before either commits,
+    and both insert - double-counting that run's spend against the monthly
+    ceiling. Confirmed zero duplicate RunId rows exist today before adding this,
+    so this is a real, enforceable guarantee going forward, not a retrofit onto
+    already-bad data. The repository now also catches the violation and treats
+    it as "already recorded", not a failure - see its own comment.            */
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE object_id = OBJECT_ID('dbo.InsightsTenantTokenUsage') AND name = 'UQ_InsightsTenantTokenUsage_RunId'
+)
+BEGIN
+    CREATE UNIQUE NONCLUSTERED INDEX UQ_InsightsTenantTokenUsage_RunId
+        ON dbo.InsightsTenantTokenUsage (RunId);
+END
+GO
+
 PRINT 'InsightsTenantTokenUsage installed.';
 GO

@@ -57,6 +57,41 @@ public static class InsightsRunId
     }
 
     /// <summary>
+    /// The SAME per-key identity as <see cref="For"/>, as a <see cref="Guid"/> instead of the
+    /// orchestration instance-id string - for <c>GeneratedReport.Id</c>, not <c>InstanceID</c>.
+    ///
+    /// [ADDED 2026-09-18] PersistActivity used to mint <c>Guid.NewGuid()</c> per call, which is
+    /// fine exactly once and a real duplicate-row/duplicate-blob generator on DTFx's at-least-once
+    /// activity redelivery (a pod dying mid-PersistActivity after its lock expires gets the SAME
+    /// activity re-run on a different pod - confirmed as a real, live risk with 4 replicas, where
+    /// it never had a chance to fire at 1). Deriving the report id from the exact same key <see
+    /// cref="For"/> already hashes for the SAME reason (idempotency lock, §1 of this class's own
+    /// doc comment) makes a redelivered PersistActivity attempt write to the SAME row/blob path
+    /// instead of a new one - the whole point being the SAME one-key-one-identity guarantee this
+    /// class already provides for the orchestration instance itself.
+    /// </summary>
+    public static Guid ReportId(int tenantId, string scopeDescriptor, string reportType, string period)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeDescriptor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reportType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(period);
+
+        var canonical = string.Join('|',
+            tenantId.ToString(),
+            scopeDescriptor.Trim().ToLowerInvariant(),
+            reportType.Trim().ToLowerInvariant(),
+            period.Trim().ToLowerInvariant());
+
+        // First 16 bytes of the same SHA-256 this class already uses for `For` - not RFC 4122
+        // UUIDv5 (no namespace byte-mixing), just a deterministic 128 bits. Nothing here needs
+        // UUID-version compliance, only "same key in, same Guid out, collisions astronomically
+        // unlikely" - SHA-256 already gives that.
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        return new Guid(hash[..16]);
+    }
+
+    /// <summary>
     /// Recovers the tenant id a run id claims to belong to. Returns false on anything malformed.
     ///
     /// The name says <c>TryParse</c> and not <c>Authorize</c> on purpose: a true return means the

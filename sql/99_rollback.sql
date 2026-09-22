@@ -114,6 +114,23 @@ IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadLicences',    'P') IS NOT NULL DR
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadFacts',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_LoadFacts;
 GO
 
+/*   Metric snapshot procedures (sql/33)  */
+IF OBJECT_ID('dbo.usp_Insights_SnapshotPurge',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotPurge;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotTrend',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotTrend;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotRecord', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotRecord;
+GO
+
+/*   sql/28 alters an EXISTING, live table (GeneratedReport, sql/18) rather than
+     creating one. Rollback therefore drops the constraint and the column, never
+     the table - GeneratedReport carries the paid pipeline's production history. */
+IF EXISTS (SELECT 1 FROM sys.check_constraints
+           WHERE parent_object_id = OBJECT_ID('dbo.GeneratedReport')
+             AND name = 'CK_GeneratedReport_DimensionKeyAgrees')
+    ALTER TABLE dbo.GeneratedReport DROP CONSTRAINT CK_GeneratedReport_DimensionKeyAgrees;
+IF COL_LENGTH('dbo.GeneratedReport', 'RequestedDimensions') IS NOT NULL
+    ALTER TABLE dbo.GeneratedReport DROP COLUMN RequestedDimensions;
+GO
+
 /*-- 2. Functions (dropped after the procs that call them) ------------------*/
 IF OBJECT_ID('dbo.tvfInsightsScopedInstances',   'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsScopedInstances;
 IF OBJECT_ID('dbo.tvfInsightsScopePairs',        'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsScopePairs;
@@ -140,9 +157,9 @@ IF OBJECT_ID('dbo.InsightsObjectBackup_20260904','U') IS NOT NULL DROP TABLE dbo
 IF OBJECT_ID('dbo.InsightsTenantTokenUsage',  'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;   -- created by the .NET layer's cost instrumentation; DDL not in this repo
 IF OBJECT_ID('dbo.InsightsFreeDigestLog',     'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestLog;
 IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.InsightsDigestSuppression;
-/*  NOTE: dropping InsightsMetricSnapshot destroys ALL trend history and it
-    cannot be backfilled - the source data holds only the present. Think
-    before running this in an environment that has been accumulating.     */
+/*  sql/28 - NOTE: dropping InsightsMetricSnapshot destroys ALL trend history
+    and it cannot be backfilled - the source data holds only the present.
+    Think before running this in an environment that has been accumulating. */
 /*  Post-log (sql/31) and reasoning capture (sql/32). Both APPEND-ONLY.
     InsightsAgentReasoningLog has a 90-day purge (sql/32); the snapshot table's
     floor is 400 days because it serves trends, not incidents.
@@ -155,9 +172,12 @@ IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.In
     separately - this script only ever touches SQL, never blob storage.     */
 IF OBJECT_ID('dbo.InsightsFreeDigestArtifact', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestArtifact;
 IF OBJECT_ID('dbo.InsightsReportRequest',      'U') IS NOT NULL DROP TABLE dbo.InsightsReportRequest;   -- sql/30, fan-out reqId -> runId grouping
+/*  sql/31 - NOTE: dropping this table discards the insight JSON's weekly-once
+    guarantee. Re-running the lane after a rollback can re-POST a recipient's
+    insight for a week already posted.                                     */
 IF OBJECT_ID('dbo.InsightsFreeDigestJsonLog',  'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestJsonLog;
 IF OBJECT_ID('dbo.InsightsAgentReasoningLog',  'U') IS NOT NULL DROP TABLE dbo.InsightsAgentReasoningLog;
-IF OBJECT_ID('dbo.InsightsMetricSnapshot',    'U') IS NOT NULL DROP TABLE dbo.InsightsMetricSnapshot;
+IF OBJECT_ID('dbo.InsightsMetricSnapshot',     'U') IS NOT NULL DROP TABLE dbo.InsightsMetricSnapshot;
 
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;

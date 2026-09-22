@@ -37,9 +37,31 @@ public sealed class AzureOpenAiChatClient(
     int? maxOutputTokens = null,
     string apiVersion = "2024-02-15-preview") : IClaudeClient
 {
+    // [FIX 2026-09-20, FOUND LIVE] This class expects a BARE resource root and appends its own
+    // "/openai/deployments/{deployment}/chat/completions" path - but Llm:AzureOpenAi:Endpoint has
+    // been set to the same "/openai/v1"-suffixed style Llm:Maf:Endpoint correctly uses for the
+    // modern OpenAI SDK client (which appends its own path differently). Given the suffixed style
+    // unmodified, this doubled to ".../openai/v1/openai/deployments/..." against the real Azure
+    // endpoint - confirmed live via dt.History on the real UAT task hub: every free-tier digest
+    // composition 404'd today (freedigest-gen-1283-2026-09-20, identical 404 on all 3 retries).
+    // Stripping a trailing "/openai/v1" here makes this class correct regardless of which style
+    // the endpoint config uses, rather than depending on every caller getting the format right.
+    private static readonly string[] UnifiedApiSuffixes = ["/openai/v1", "/v1"];
+
+    private static string NormalizeResourceRoot(string endpoint)
+    {
+        var root = endpoint.TrimEnd('/');
+        foreach (var suffix in UnifiedApiSuffixes)
+        {
+            if (root.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return root[..^suffix.Length];
+        }
+        return root;
+    }
+
     public async Task<ClaudeCompletionResult> CompleteAsync(string systemPrompt, string userMessage, int maxTokens, CancellationToken cancellationToken = default)
     {
-        var url = $"{endpoint.TrimEnd('/')}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
+        var url = $"{NormalizeResourceRoot(endpoint)}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Add("api-key", apiKey);
 

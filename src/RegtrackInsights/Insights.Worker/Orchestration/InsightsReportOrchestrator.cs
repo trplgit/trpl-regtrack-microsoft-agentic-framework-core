@@ -303,8 +303,33 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         enqueued - every real "dimension_selection" orchestration instance now only ever has 0 or 1
         requested dimensions, same as this file's pre-existing Entity-ALONE redirect already
         assumed. No version bump needed for this revert either; nothing built on the interim design
-        ever shipped. */
-    public const string Version = "3.6";
+        ever shipped.
+
+        Bumped 3.6 -> 3.7: new InsightsReportOrchestrationInput field UseAnalystNarrative (default
+        false, unchanged for every existing caller). When true AND the request is
+        "dimension_selection" naming exactly one FreehandDimensions.Names member, the Narrating
+        stage schedules ONE AnalyzeAndNarrateActivity call instead of NarrateActivity followed by
+        the up-to-maxReflectionIterations ReflectOnNarrativeActivity/NarrateActivity loop - a real
+        call-sequence change for that specific combination (see AnalyzeAndNarrateActivity's own doc
+        comment and docs/superpowers/specs/2026-09-20-narrative-analyst-agent-design.md). Every
+        other ReportType/dimension combination, and every existing caller that never sets this
+        field, keeps calling NarrateActivity/ReflectOnNarrativeActivity exactly as before - zero
+        history-shape change for any of those. [VERIFY BEFORE DEPLOY] no instance with
+        UseAnalystNarrative=true could have existed before this bump (the field did not exist), so
+        only in-flight dimension_selection freehand-dimension instances need checking, and their
+        own call sequence (the v1 Narrate/Reflect loop) is completely unchanged by this bump.
+
+        Bumped 3.7 -> 3.8: UseAnalystNarrative removed from InsightsReportOrchestrationInput. v2
+        (AnalyzeAndNarrateActivity) is now the ONLY narrate path for the 5 freehand dimensions -
+        real call-sequence change for that combination (was previously conditional on the now-
+        removed flag, defaulting to the v1 Narrate/Reflect loop). Every other ReportType/dimension
+        combination is completely unaffected - still the unchanged v1 loop. [VERIFY BEFORE DEPLOY]
+        any in-flight dimension_selection freehand-dimension instance from a 3.7 build that had
+        UseAnalystNarrative=false (the old default) would replay against a DIFFERENT call sequence
+        under this version - check for in-flight instances of that shape specifically before this
+        deploys; a 3.7 instance that had UseAnalystNarrative=true already matches 3.8's sequence
+        exactly and needs no check. */
+    public const string Version = "3.8";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
     // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
@@ -435,6 +460,14 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             // in this file. Zero tokens spent on composition for either path - nothing to
             // ChargeAndCheck.
             CompositionPlan plan;
+            // [ADDED 2026-09-20] Captured here (composition already parses this exact JSON for the
+            // freehand dimensions below) so the Narrating stage's AnalyzeAndNarrateActivity branch
+            // does not need to re-parse dimensions.DimensionResults itself. Null for every other
+            // ReportType/dimension combination - UseAnalystNarrative is a no-op there regardless of
+            // its value (see InsightsReportOrchestrationInput.UseAnalystNarrative's own doc comment).
+            string? freehandDimensionName = null;
+            string? freehandRowsJson = null;
+            string? freehandControlTotalsJson = null;
             if (input.ReportType == FixedHolisticComposition.ReportType)
             {
                 plan = FixedHolisticComposition.Build();
@@ -456,6 +489,9 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 // throw that today, but the filter is what keeps it true if that ever changes -
                 // same reasoning as render's own comment on this exact pattern).
                 var dimensionJson = System.Text.Json.JsonDocument.Parse(dimensions.DimensionResults[soleDimension]).RootElement;
+                freehandDimensionName = soleDimension;
+                freehandRowsJson = dimensionJson.GetProperty("Rows").GetRawText();
+                freehandControlTotalsJson = dimensionJson.GetProperty("ControlTotals").GetRawText();
                 var composeResult = await context.ScheduleWithRetry<ComposeFreehandDimensionOutput>(
                     typeof(ComposeFreehandDimensionActivity).Name, "1.0",
                     new RetryOptions(TimeSpan.FromSeconds(3), maxNumberOfAttempts: 3)
@@ -465,8 +501,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     },
                     new ComposeFreehandDimensionInput(
                         soleDimension, dimensions.Assertions, dimensions.Findings,
-                        dimensionJson.GetProperty("Rows").GetRawText(),
-                        dimensionJson.GetProperty("ControlTotals").GetRawText(),
+                        freehandRowsJson, freehandControlTotalsJson,
                         dimensionJson.GetProperty("DataQuality").GetRawText(),
                         input.Priority, input.ReqId));
                 ChargeAndCheck(composeResult.TotalTokens);
@@ -496,23 +531,57 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             }
 
             SetStage(InsightsRunStage.Narrating);
-            var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority, input.ReqId));
-            ChargeAndCheck(narrateResult.TotalTokens);
-            var narrative = narrateResult.Narrative;
-
-            for (var i = 0; i < maxReflectionIterations; i++)
+            NarrativeResult narrative;
+            if (freehandDimensionName is not null)
             {
-                var reflection = await context.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0",
-                    new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings, input.Priority, input.ReqId));
-                ChargeAndCheck(reflection.TotalTokens);
-                if (reflection.Result.Verdict == ReflectionVerdict.Approve)
-                    break;
+                // [REPLACED 2026-09-21] v2 is now the ONLY narrate path for the 5 freehand
+                // dimensions - v1 (NarrateActivity/ReflectOnNarrativeActivity) no longer runs for
+                // them at all, not even as a fallback. This was previously opt-in behind
+                // InsightsReportOrchestrationInput.UseAnalystNarrative (now removed - every caller
+                // gets v2 unconditionally for these 5 dimensions, no toggle). One call does
+                // Narrate's and Reflect's jobs (self-reflection is inside
+                // prompts/v2/03_narrative_analyst.md itself) - see AnalyzeAndNarrateActivity's own
+                // doc comment. maxReflectionIterations' loop below is skipped entirely on this
+                // path, not run with a trivial single pass. v1 is UNCHANGED and still the only path
+                // for every other ReportType/dimension combination (fixed_holistic, Users, multi-
+                // dimension dimension_selection) - AnalyzeAndNarrateActivity was never designed for
+                // those shapes.
+                //
+                // [KNOWN GAP, NOT YET FIXED] row_refs_used can cite a real-but-irrelevant member not
+                // actually discussed in the prose (found live on Departments/tenant 1169) - the
+                // existence-only grounding check does not catch this, only a stronger mention-in-
+                // prose check would. Also: no real orchestrator run has reached Completed end to end
+                // with VisionQA enabled yet (2 attempts both hit unrelated infra issues - a VisionQA
+                // deployment 404 and a since-unreproduced ~9min stall); proven instead via 5 clean
+                // direct-agent runs (local lab, now removed). Flagged here, not silently shipped as
+                // if fully proven.
+                var analystResult = await context.ScheduleTask<AnalyzeAndNarrateOutput>(typeof(AnalyzeAndNarrateActivity).Name, "1.0",
+                    new AnalyzeAndNarrateInput(
+                        plan, dimensions.Assertions, dimensions.Findings, freehandDimensionName,
+                        freehandRowsJson!, freehandControlTotalsJson, null, null, input.Priority, input.ReqId));
+                ChargeAndCheck(analystResult.TotalTokens);
+                narrative = analystResult.Narrative;
+            }
+            else
+            {
+                var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
+                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority, input.ReqId));
+                ChargeAndCheck(narrateResult.TotalTokens);
+                narrative = narrateResult.Narrative;
 
-                var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority, input.ReqId));
-                ChargeAndCheck(revised.TotalTokens);
-                narrative = revised.Narrative;
+                for (var i = 0; i < maxReflectionIterations; i++)
+                {
+                    var reflection = await context.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0",
+                        new ReflectOnNarrativeInput(narrative, dimensions.Assertions, dimensions.Findings, input.Priority, input.ReqId));
+                    ChargeAndCheck(reflection.TotalTokens);
+                    if (reflection.Result.Verdict == ReflectionVerdict.Approve)
+                        break;
+
+                    var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
+                        new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority, input.ReqId));
+                    ChargeAndCheck(revised.TotalTokens);
+                    narrative = revised.Narrative;
+                }
             }
 
             SetStage(InsightsRunStage.Verifying);
