@@ -9,29 +9,42 @@ using Microsoft.Extensions.Logging;
 namespace Insights.Worker;
 
 /// <summary>
-/// FreeDigest:Monthly:* and Budget:FreeMonthlyTokenCap:* - the free digest email content (spec
-/// Sec.10). Every value comes from configuration only - there are no defaults in code, so the value
-/// in appsettings is the one that runs, and a missing key stops the worker at startup naming that
-/// key (same "fail at startup, not at 3am" stance as FreeDigestRegistration's Require()).
+/// The free digest email content (spec Sec.10).
+///
+/// <para><b>Only the token caps are configuration</b> - Budget:FreeMonthlyTokenCap:* - because they
+/// are a spend control an environment may legitimately set differently. They have no default in
+/// code, so a missing one stops the worker at startup naming the key (the same "fail at startup,
+/// not at 3am" stance as FreeDigestRegistration's Require()).</para>
+///
+/// <para>The rest are product decisions with one right answer everywhere, so they live here.</para>
 /// </summary>
 public sealed class FreeMonthlySettings
 {
     /// <summary>
-    /// FreeDigest:Monthly:AllowPersonNames. Passed to sql/38's @AllowPersonNames. true names people
-    /// in the Users email; false describes them without a name ("one person who is no longer an
-    /// active user ...").
+    /// Passed to sql/38's <c>@AllowPersonNames</c>. true names people in the Users email; false
+    /// describes them without a name ("one person who is no longer an active user ...").
+    ///
+    /// <para>[MOVED OUT OF CONFIG 2026-09-22] This and <see cref="MaxDraftAttempts"/> were required
+    /// appsettings keys, which meant every environment had to carry them and a missing one stopped
+    /// the worker at startup. Neither is environment-specific: naming people is a product decision
+    /// that is the same everywhere, and the attempt count is a behaviour of the composer. A value
+    /// that is identical in every environment does not belong in per-environment config.</para>
     /// </summary>
-    public required bool AllowPersonNames { get; init; }
+    public bool AllowPersonNames { get; init; } = true;
 
     /// <summary>Budget:FreeMonthlyTokenCap:{Overview|Users|Location|Act|Licence} - total (prompt + completion) per call.</summary>
     public required IReadOnlyDictionary<MonthlyDigestSlot, int> TokenCaps { get; init; }
 
     /// <summary>
-    /// FreeDigest:Monthly:MaxDraftAttempts - how many times the model may write one email. 1 is the
-    /// old behaviour: a single rejected draft falls straight back to the deterministic body. Above 1,
-    /// a rejected draft is handed its own failure list and rewritten. Each attempt is a billed call.
+    /// How many times the model may write one email. 1 means a rejected draft falls straight back
+    /// to the deterministic body; above 1, a rejected draft is handed its own failure list and
+    /// rewritten, and each attempt is a billed call.
+    ///
+    /// <para>1 is deliberate: [MEASURED 2026-09-21] the repair pass now fixes the style failures
+    /// that used to cause rejections, so a second attempt would double the spend to rescue a draft
+    /// that is already being rescued deterministically.</para>
     /// </summary>
-    public required int MaxDraftAttempts { get; init; }
+    public int MaxDraftAttempts { get; init; } = 1;
 
     public int TokenCapFor(MonthlyDigestSlot slot) => TokenCaps[slot];
 
@@ -42,15 +55,9 @@ public sealed class FreeMonthlySettings
 
         var caps = slots.ToDictionary(s => s, s => RequiredPositiveInt(configuration, $"Budget:FreeMonthlyTokenCap:{s}"));
 
-        const string namesKey = "FreeDigest:Monthly:AllowPersonNames";
-        if (!bool.TryParse(Required(configuration, namesKey), out var allowPersonNames))
-            throw new InvalidOperationException($"{namesKey} must be true or false.");
-
         var settings = new FreeMonthlySettings
         {
-            AllowPersonNames = allowPersonNames,
             TokenCaps = caps,
-            MaxDraftAttempts = RequiredPositiveInt(configuration, "FreeDigest:Monthly:MaxDraftAttempts"),
         };
 
         /*  A missing prompt file would otherwise surface on the first Sunday, per scope group, as a
@@ -126,7 +133,7 @@ public sealed class FreeMonthlyDigestComposer(
             whole written email and substitutes the deterministic fallback - which made every rule
             expensive and pushed us to loosen rules that should have stayed. The validator is still
             the only gate and still deterministic: a redraft does not lower the bar, it just asks
-            again. Attempts are billed calls, so the cap is config, not code.                    */
+            again.                                                                                */
         var userMessage = prompt.UserMessage;
         FreeDigestEmail draft;
         string reason;

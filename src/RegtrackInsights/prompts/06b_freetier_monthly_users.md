@@ -1,11 +1,8 @@
-# Free Monthly Insights - Users (v1)
+# Free Monthly Insights - Users
 
-**Version:** v1 - WRITE-ONCE once shipped; a change ships as
-`06b_freetier_monthly_users_v2.md`, selected by
-`FreeDigest:Monthly:PromptVersion:Users`.
 **Runs:** the second Sunday of every month, per recipient scope group.
 **Data:** `dbo.usp_Insights_FreeMonthly_Users` (sql/38).
-**Read first:** `06_freetier_monthly_shared_rules_v1.md`.
+**Read first:** `06_freetier_monthly_shared_rules`.
 
 ---
 
@@ -29,25 +26,42 @@ Write it as past, present, future:
 
 The reader should finish knowing **whether their exposure depends on one person**.
 
-**Length:** 150 to 260 words after `Good morning,`, in 3 or 4 short paragraphs.
+**A second person is named only if they are worth naming.** You are often given two
+findings; the second is not automatically worth a paragraph. Judge it by size against the
+first - its `ItemCount` against the first's, and its `ItemCount` against its own
+`BaseCount`. A finding covering a handful of obligations, beside one covering most of the
+backlog, is noise. **One strong finding beats two of unequal weight.**
+
+> WRONG - the second person is named because a second finding exists, and the paragraph
+> says nothing the reader can act on:
+>
+> *"[First person] holds most of the overdue work across your organisation. ... For
+> [second person], one of that person's open obligations is both performed and reviewed by
+> the same person. [Second person] is the only person in the scope with this position."*
+>
+> RIGHT - the second is dropped, and the space goes to the finding that matters:
+>
+> *"[First person] holds most of the overdue work across your organisation, and is one of a
+> small group in that position. The rest is spread thinly, so this is concentration rather
+> than a general backlog."*
+
+Never give the same person two paragraphs. Everything you have to say about one person
+belongs in one place.
+
+**Length:** up to 320 words after `Good morning,`, in at most 4 short paragraphs. Fewer is better if the input is thin.
 
 ## Care with the numbers
 
-Counts here are **items**, the same unit as the facts - except where a fact counts
-people, which its label says plainly. Never put a count of people and a count of items in
-one sentence as if they were the same thing.
+This email mixes two units - **people** and **obligations**. The label says which. Never
+put one of each in the same clause as though they were comparable.
 
-A finding's `BaseCount` is **that person's** total, not the scope's. "192 of 1041" where
-1041 is `BaseCount` means 192 of that person's 1041 items - saying "of the 1041 items
-across your scope" is false, and the scope's own totals are separate facts.
+A finding's `BaseCount` is **that person's** total, not the scope's: "192 of 1041" means
+192 of that person's 1041 obligations, and "of the 1041 across your scope" would be false.
 
-**The one exception is `overdue_concentration`**, where `BaseCount` is the scope's whole
-overdue total - that is what makes it a concentration. So "holds 4,655 of the 5,178
-overdue items across your organisation" is right, and "out of 5,178 items in their work"
-is wrong: those 5,178 are everybody's, which is the entire point of the finding.
-
-If a finding has no `Placeholder`, names are withheld for this tenant: describe the
-person without naming them, and never guess who it is.
+**The one exception is `overdue_concentration`**, where `BaseCount` IS the scope's whole
+overdue total - that is what makes it a concentration. "holds 4,655 of the 5,178 overdue
+obligations across your organisation" is right; "out of 5,178 in their work" is wrong,
+because those 5,178 are everybody's, which is the entire point of the finding.
 
 If there is no open work in scope at all (`u_open_items` is 0), say so in one sentence
 and stop.

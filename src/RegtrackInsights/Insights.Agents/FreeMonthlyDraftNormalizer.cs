@@ -63,8 +63,21 @@ public static partial class FreeMonthlyDraftNormalizer
     /// </summary>
     private static IEnumerable<string> SplitByPoint(string paragraph)
     {
+        /*  [MEASURED on tenant 1082, 2026-09-22] This was reshaping paragraphs the model had got
+            RIGHT. The Users draft arrived with 5 paragraphs - within the brief - and left with 9,
+            because any paragraph carrying three figures was broken into three. That is what made
+            "Hanif Sumra holds 579 of the 2,852" and "Hanif Sumra is one of 5 people in this
+            position" two separate paragraphs, which then read as the same point made twice.
+
+            This exists as a LAST RESORT against a wall of text, not as a routine reshaper. The
+            prompts now cap a paragraph at two figures and the model follows that, so the bar is
+            raised to a paragraph that is both long and genuinely carrying several subjects.
+            A short paragraph is left exactly as written, whatever it contains.               */
+        if (paragraph.Length < LongParagraph)
+            return [paragraph];
+
         var sentences = Sentences().Matches(paragraph).Select(m => m.Value).Where(s => s.Trim().Length > 0).ToList();
-        if (sentences.Count < 3)
+        if (sentences.Count < 4)
             return [paragraph];
 
         var blocks = new List<List<string>>();
@@ -76,10 +89,13 @@ public static partial class FreeMonthlyDraftNormalizer
             blocks[^1].Add(sentence.Trim());
         }
 
-        return blocks.Count < 3
+        return blocks.Count < 4
             ? [paragraph]
             : blocks.Select(b => string.Join(" ", b));
     }
+
+    /// <summary>Roughly three full lines in an email client - the point at which a block reads as a wall.</summary>
+    private const int LongParagraph = 400;
 
     /// <summary>
     /// True when a sentence introduces its own figure rather than elaborating the one before it.
@@ -160,8 +176,57 @@ public static partial class FreeMonthlyDraftNormalizer
         while (span.EndsWith(" of", StringComparison.Ordinal) || span.EndsWith(" all", StringComparison.Ordinal))
             span = span[..span.LastIndexOf(' ')];
 
-        return paragraph[..start.Index] + $"**{span}**" + paragraph[(start.Index + span.Length)..];
+        var emphasised = paragraph[..start.Index] + $"**{span}**" + paragraph[(start.Index + span.Length)..];
+        return EmphasiseImpact(emphasised);
     }
+
+    /// <summary>
+    /// Also emphasises WHAT KIND of exposure a paragraph describes, not only how much of it there
+    /// is. "12 of the 47 obligations carry personal criminal liability" has two things worth
+    /// seeing, and the count is the less important of them.
+    ///
+    /// <para>[2026-09-22] This replaces the canned consequence sentence that used to follow such a
+    /// figure ("That can mean prosecution of the officer responsible, not only a penalty."). That
+    /// sentence appeared in every email, so readers stopped seeing it. The exposure is now shown
+    /// where the figure is, in the data layer's own words, and nothing is added to the email.</para>
+    ///
+    /// <para>The phrases are a closed set taken from the procs' own <c>DisplayLabel</c>s - this
+    /// never emphasises wording the model invented, and it adds no text.</para>
+    /// </summary>
+    private static string EmphasiseImpact(string paragraph)
+    {
+        foreach (var phrase in ImpactPhrases)
+        {
+            var at = paragraph.IndexOf(phrase, StringComparison.OrdinalIgnoreCase);
+            if (at < 0)
+                continue;
+
+            // Never emphasise inside an existing span - that would produce "**a **b** c**".
+            if (paragraph[..at].Count(c => c == '*') % 4 != 0)
+                continue;
+
+            return paragraph[..at] + $"**{paragraph.Substring(at, phrase.Length)}**" + paragraph[(at + phrase.Length)..];
+        }
+
+        return paragraph;
+    }
+
+    /// <summary>
+    /// What makes a figure matter, most severe first - only one is emphasised per paragraph.
+    /// Every phrase is wording the procs themselves produce.
+    /// </summary>
+    private static readonly string[] ImpactPhrases =
+    [
+        "personal criminal liability",
+        "no renewal in progress",
+        "no renewal filed",
+        "no action recorded",
+        "rated critical",
+        "nobody assigned",
+        "no one else is assigned",
+        "never been started",
+        "no longer an active user",
+    ];
 
     /// <summary>
     /// An age band - "more than 90 days", "31 to 60 days" - is never what a paragraph is about, so

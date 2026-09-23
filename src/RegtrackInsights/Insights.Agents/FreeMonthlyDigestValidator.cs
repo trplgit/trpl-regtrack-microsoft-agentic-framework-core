@@ -24,6 +24,16 @@ public static partial class FreeMonthlyDigestValidator
     private static readonly HashSet<string> CapitalisedAllowList = new(StringComparer.Ordinal)
     {
         "RegTrack", "RegInsights", "Ultimate", "I",
+
+        /*  [FOUND LIVE on tenant 1082, 2026-09-22] "Act" is a common noun here, not a name. The Act
+            email was changed to say "Act" rather than "law" - it is what the reader's own registers
+            call them - and every sentence containing "Acts" was then deleted as an invented proper
+            noun. The email came out as three fragments, one of which ("The responsible officer
+            carries that liability.") had lost the sentence it referred to.
+
+            Allowing these two costs nothing: a real Act's NAME still arrives only as {{NAME_n}},
+            and every other capitalised word is still rejected. "Act" alone identifies no entity. */
+        "Act", "Acts",
     };
 
     /// <summary>Shared Rule 9. "due to" is omitted on purpose: "due to expire" is ordinary licence prose.</summary>
@@ -125,6 +135,21 @@ public static partial class FreeMonthlyDigestValidator
 
         foreach (Match m in DecimalNumber().Matches(stripped))
             problems.Add($"the decimal {m.Value} - every input value is a whole number");
+
+        /*  A PART CANNOT EXCEED ITS WHOLE. [FOUND LIVE on tenant 1082, 2026-09-22] "17 Acts still
+            have obligations open from August, out of 9 Acts with last-month work" - both figures
+            were real and from different populations (17 Acts carry open work; 9 is the base of a
+            separate slippage comparison), and joining them produced a fraction that cannot exist.
+
+            Every number passed the closed-set check, so nothing else here could catch it: the
+            defect is in the RELATIONSHIP the sentence asserts, not in any value. Flagged rather
+            than corrected - which of the two the writer meant is a guess, and the trim path will
+            drop the offending clause if the rest of the sentence stands on its own.            */
+        foreach (Match m in PartOfWhole().Matches(stripped).Concat(PartOutOfWhole().Matches(stripped)))
+            if (int.TryParse(m.Groups["part"].Value.Replace(",", string.Empty), out var part)
+                && int.TryParse(m.Groups["whole"].Value.Replace(",", string.Empty), out var whole)
+                && part > whole)
+                problems.Add($"{part} of {whole} - a part cannot be larger than the whole it is taken from");
 
         foreach (Match m in Percentage().Matches(stripped))
             if (!prompt.AllowedPercentages.Contains(int.Parse(m.Groups["n"].Value, CultureInfo.InvariantCulture)))
@@ -301,11 +326,18 @@ public static partial class FreeMonthlyDigestValidator
         var paragraphs = text.Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         foreach (var paragraph in paragraphs)
         {
+            /*  Two spans per paragraph, not one: FreeMonthlyDraftNormalizer emphasises the lead
+                figure AND, where the paragraph has one, the exposure it carries ("personal
+                criminal liability", "rated critical"). [2026-09-22] The reader needs to see what
+                kind of problem it is as much as how big - so 4 markers is the ceiling, not 2.
+
+                The model still writes no markers at all; both spans are added in code, so this
+                only ever has to catch a draft that arrived with its own.                       */
             var bold = CountOccurrences(paragraph, "**");
             if (bold % 2 != 0)
                 failures.Add("has an unclosed ** bold marker");
-            else if (bold > 2)
-                failures.Add("bolds more than one figure in a paragraph");
+            else if (bold > 4)
+                failures.Add("bolds more than a figure and its impact in one paragraph");
 
             foreach (var line in paragraph.Split('\n'))
                 if (ListOrHeading().IsMatch(line))
@@ -403,6 +435,18 @@ public static partial class FreeMonthlyDigestValidator
 
     [GeneratedRegex(@"\d+\.\d+")]
     private static partial Regex DecimalNumber();
+
+    /// <summary>"17 of the 9" - the two figures side by side.</summary>
+    [GeneratedRegex(@"\b(?<part>\d[\d,]*)\s+of\s+(the\s+|its\s+|your\s+)?(?<whole>\d[\d,]*)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex PartOfWhole();
+
+    /// <summary>
+    /// "17 Acts still have obligations open..., out of 9 Acts with last-month work" - the same
+    /// claim with a clause in between. "out of" is unambiguous enough to look across words for;
+    /// a bare "of" is not, which is why only this form is searched at a distance.
+    /// </summary>
+    [GeneratedRegex(@"\b(?<part>\d[\d,]*)\b[^.!?]{0,60}?\bout of\s+(the\s+)?(?<whole>\d[\d,]*)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex PartOutOfWhole();
 
     [GeneratedRegex(@"(?<n>\d+)\s*(%|per\s?cent\b|percent\b)", RegexOptions.IgnoreCase)]
     private static partial Regex Percentage();

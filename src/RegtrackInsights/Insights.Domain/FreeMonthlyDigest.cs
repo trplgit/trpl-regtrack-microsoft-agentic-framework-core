@@ -75,11 +75,30 @@ public static class MonthlyDigestCalendar
     /// inside its own month, but a retry that lands after midnight on the last day of the month would
     /// otherwise pass an @AsOf from the NEXT month and be refused with 51237.
     /// </summary>
+    /// <summary>
+    /// The instant an edition reports as at.
+    ///
+    /// <para>In production this is simply "now", because an edition is generated ON its own Sunday -
+    /// the scheduler runs that day and no other. A PREVIEW is different: it renders five editions in
+    /// one afternoon, and using "now" for all of them makes every email report the same instant. The
+    /// September set all read "as at 21 Sep 2026" even though the Overview's edition is the 6th and
+    /// Location's is the 20th, so they showed one position five ways instead of the month unfolding.</para>
+    ///
+    /// <para>So the edition's own Sunday wins whenever it has already passed. That is what production
+    /// would have used on the day, which makes a preview of a past week honest rather than
+    /// approximate. A Sunday still in the future clamps back to now - we cannot report a position
+    /// that has not happened - and everything stays inside the edition's month either way.</para>
+    /// </summary>
     public static DateTime AsOfWithinMonth(DateTime localNow, MonthlyDigestEdition edition)
     {
         var start = edition.CurrMonthStart.ToDateTime(TimeOnly.MinValue);
         var end = edition.CurrMonthEnd.ToDateTime(new TimeOnly(23, 59, 59));
-        var asOf = localNow < start ? start : localNow > end ? end : localNow;
+
+        // The edition's own Sunday, at the end of that day - what the scheduler would have seen.
+        var itsSunday = edition.Sunday.ToDateTime(new TimeOnly(23, 59, 59));
+        var preferred = itsSunday <= localNow ? itsSunday : localNow;
+
+        var asOf = preferred < start ? start : preferred > end ? end : preferred;
         return DateTime.SpecifyKind(asOf, DateTimeKind.Unspecified);
     }
 
@@ -88,7 +107,8 @@ public static class MonthlyDigestCalendar
         MonthlyDigestSlot.Overview => "Monthly overview",
         MonthlyDigestSlot.Users => "People and ownership",
         MonthlyDigestSlot.Location => "Locations",
-        MonthlyDigestSlot.Act => "Laws",
+        // "Acts", not "Laws": the reader's own registers name Acts, and the email body says "Act".
+        MonthlyDigestSlot.Act => "Acts",
         MonthlyDigestSlot.Licence => "Licences",
         _ => throw new ArgumentOutOfRangeException(nameof(slot), slot, null),
     };

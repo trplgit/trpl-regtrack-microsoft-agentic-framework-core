@@ -29,7 +29,7 @@ public sealed class DigestSubjectTests
     {
         var subject = SendDigestFromArtifactActivity.BuildSubject("Acme Holdings", Week);
 
-        Assert.Contains("Laws, August 2025", subject); // 24 Aug 2025 is the 4th Sunday -> the Act (laws) email
+        Assert.Contains("Acts, August 2025", subject); // 24 Aug 2025 is the 4th Sunday -> the Act email
         Assert.StartsWith("RegTrack Insights: Acme Holdings", subject);
     }
 
@@ -45,7 +45,7 @@ public sealed class DigestSubjectTests
     {
         var subject = SendDigestFromArtifactActivity.BuildSubject(tenantName, Week);
 
-        Assert.Equal("RegTrack Insights - Laws, August 2025", subject);
+        Assert.Equal("RegTrack Insights - Acts, August 2025", subject);
         Assert.DoesNotContain(":", subject);
     }
 
@@ -54,6 +54,6 @@ public sealed class DigestSubjectTests
     {
         var subject = SendDigestFromArtifactActivity.BuildSubject("  Acme Holdings  ", Week);
 
-        Assert.Equal("RegTrack Insights: Acme Holdings - Laws, August 2025", subject);
+        Assert.Equal("RegTrack Insights: Acme Holdings - Acts, August 2025", subject);
     }
 }

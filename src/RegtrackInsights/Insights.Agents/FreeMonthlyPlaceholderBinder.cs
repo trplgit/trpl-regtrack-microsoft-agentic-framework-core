@@ -23,13 +23,31 @@ public static partial class FreeMonthlyPlaceholderBinder
         if (empty.Count > 0)
             throw new InvalidOperationException($"Placeholder(s) {string.Join(", ", empty)} would bind to empty text.");
 
-        var bound = Placeholder().Replace(body, m => bindings[m.Value]);
+        /*  [2026-09-22] A NAME is emphasised, a date is not. An Act, a site or a person is the
+            thing the reader scans for - "which site?" is the question the paragraph answers - so
+            it gets the same weight as the figure and the exposure.
+
+            This happens at BINDING, deliberately: the validator has already run and counts markers
+            per paragraph, and the model never sees a name at all, so neither can interfere. The
+            model still writes no markers of its own.
+
+            {{AS_AT}}, {{PREV_MONTH}}, {{CURR_MONTH}} and {{DATE_n}} are left plain - a date is
+            context for the figure, not a thing to look up.                                     */
+        var bound = Placeholder().Replace(body, m =>
+            NamePlaceholder().IsMatch(m.Value) ? $"**{bindings[m.Value]}**" : bindings[m.Value]);
+
+        // Two adjacent emphasised spans ("**A** **B**") read as one; never leave "** **" behind.
+        bound = bound.Replace("** **", " ").Replace("****", string.Empty);
 
         if (bound.Contains("{{", StringComparison.Ordinal) || bound.Contains("}}", StringComparison.Ordinal))
             throw new InvalidOperationException("Placeholder syntax survived binding - refusing to send a body with a raw token in it.");
 
         return bound;
     }
+
+    /// <summary>A placeholder naming a thing - an Act, site, person, category or licence.</summary>
+    [GeneratedRegex(@"^\{\{NAME_\d+(_AT)?\}\}$")]
+    private static partial Regex NamePlaceholder();
 
     [GeneratedRegex(@"\{\{[A-Z0-9_]+\}\}")]
     private static partial Regex Placeholder();
@@ -66,12 +84,20 @@ public static class FreeMonthlyClosing
                 what has moved since this one" - month-over-month change is not computed anywhere
                 (snapshots are Phase 2), so the overview simply reports the new month. Each line
                 below states the SUBJECT of the next email and nothing more.                     */
+            /*  [REWRITTEN 2026-09-22] These were labels, not sentences - "Next Monday: the people
+                behind this work" leaves the reader to work out that another email is coming, who
+                it is about and what it will tell them. Each now says plainly what arrives, when,
+                and what question it answers.                                                    */
             MonthlyDigestSlot.Overview =>
-                $"Next Monday: the {next.CurrMonthStart.ToString("MMMM", System.Globalization.CultureInfo.InvariantCulture)} overview, across everything in your scope.",
-            MonthlyDigestSlot.Users => "Next Monday: the people behind this work, and where it depends on one person.",
-            MonthlyDigestSlot.Location => "Next Monday: your locations, and whether this sits across your sites or in a few of them.",
-            MonthlyDigestSlot.Act => "Next Monday: the laws themselves, and which are slipping wherever they apply.",
-            MonthlyDigestSlot.Licence => "Next Monday: your licences, what is due to expire and what has lapsed unrenewed.",
+                $"Next Monday you will get the {next.CurrMonthStart.ToString("MMMM", System.Globalization.CultureInfo.InvariantCulture)} overview, covering everything in your scope.",
+            MonthlyDigestSlot.Users =>
+                "Next Monday's email is about the people doing this work: who is carrying the most, and where a job depends on one person only.",
+            MonthlyDigestSlot.Location =>
+                "Next Monday's email is about your sites: whether this backlog is spread across all of them or concentrated at a few.",
+            MonthlyDigestSlot.Act =>
+                "Next Monday's email is about the Acts you are registered under: which ones are being missed, and at how many of your sites.",
+            MonthlyDigestSlot.Licence =>
+                "Next Monday's email is about your licences: which expire soon, and which have already lapsed without a renewal being filed.",
             _ => throw new ArgumentOutOfRangeException(nameof(edition), next.Slot, null),
         };
 

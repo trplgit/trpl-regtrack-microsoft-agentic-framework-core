@@ -18,7 +18,14 @@ public sealed record CapturedSlot(
     string CapturedAtUtc,
     MonthlyDigestData? Data,
     int? RefusedSqlErrorNumber,
-    string? RefusedMessage);
+    string? RefusedMessage,
+    /*  [ADDED 2026-09-22] The tenant's display name, captured WITH the data.
+
+        A replay has no database, so the name had to come from --FreeDigest:Preview:TenantName and
+        silently fell back to "Tenant 1082" when that was not passed - which is what reached the
+        email masthead. Capturing it removes the flag and the fallback together. Null on captures
+        taken before this field existed; the reader falls back as it always did.               */
+    string? TenantName = null);
 
 /// <summary>
 /// Reads slot data captured by <see cref="CapturedFreeMonthlyDigestStore"/> instead of calling SQL.

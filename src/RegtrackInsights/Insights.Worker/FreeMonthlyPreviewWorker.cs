@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Globalization;
 using System.Text;
 using Insights.Data;
@@ -108,11 +109,28 @@ public sealed class FreeMonthlyPreviewWorker(
         var summary = new StringBuilder();
         var groups = await ResolveGroupsAsync(sp, digestRepository, tenantId, summary, cancellationToken);
 
-        // The tenant's display name is the last SQL read left in a replay - not worth a database for.
-        var tenantName = configuration["FreeDigest:Preview:ReplayDir"] is { Length: > 0 }
-            ? configuration["FreeDigest:Preview:TenantName"] ?? $"Tenant {tenantId}"
-            : (await digestRepository.GetEntitledTenantsAsync(cancellationToken))
-                .FirstOrDefault(t => t.CustomerId == tenantId)?.TenantName ?? $"Tenant {tenantId}";
+        /*  The tenant's display name, in order of trust: what the capture recorded alongside the
+            data, then an explicit override, then the entitled-tenant list, then the id.
+
+            [FOUND LIVE on tenant 1082, 2026-09-22] The masthead read "Tenant 1082". Two separate
+            reasons, both fixed here: a replay has no database and fell straight through to the id
+            unless --TenantName was passed, and the live lookup goes through GetEntitledTenantsAsync,
+            which filters on ProductMapping - so ANY tenant previewed without an entitlement row,
+            which is every production tenant we capture, resolved to its id as well.            */
+        /*  [CORRECTED 2026-09-22] An EXPLICIT override wins, always. This had the captured name
+            first, so an August capture that recorded "Tenant 1082" (the lookup fails for any
+            unentitled tenant, which is every production one) overrode the --TenantName="Agrocel"
+            passed on the replay, and the masthead read "Tenant 1082" anyway. A flag the operator
+            typed is the most specific thing in the room; it cannot be outranked by a fallback.  */
+        var replayDir = configuration["FreeDigest:Preview:ReplayDir"];
+        var tenantName =
+            configuration["FreeDigest:Preview:TenantName"]
+            ?? (replayDir is { Length: > 0 } ? CapturedTenantName(replayDir, tenantId) : null)
+            ?? (replayDir is { Length: > 0 }
+                ? null
+                : (await digestRepository.GetEntitledTenantsAsync(cancellationToken))
+                    .FirstOrDefault(t => t.CustomerId == tenantId)?.TenantName)
+            ?? $"Tenant {tenantId}";
 
         var composer = sp.GetRequiredService<FreeMonthlyDigestComposer>();
         var renderer = sp.GetRequiredService<FreeDigestEmailRenderer>();
@@ -123,7 +141,7 @@ public sealed class FreeMonthlyPreviewWorker(
             (FreeDigest:Preview:ReplayDir), so prompt work survives the UAT database going away.   */
         if (configuration["FreeDigest:Preview:CaptureDir"] is { Length: > 0 } captureDir)
         {
-            await CaptureAsync(sp, Path.GetFullPath(captureDir), tenantId, groups, slots, monthStart, localNow, monthly, cancellationToken);
+            await CaptureAsync(sp, Path.GetFullPath(captureDir), tenantId, tenantName, groups, slots, monthStart, localNow, monthly, cancellationToken);
             return;
         }
 
@@ -143,7 +161,7 @@ public sealed class FreeMonthlyPreviewWorker(
                 var stem = Path.Combine(dir, $"{tenantId}-g{g + 1}-{(int)slot + 1}-{slot.ToString().ToLowerInvariant()}");
 
                 // AsOf = now when previewing this month; the month's last moment when previewing a past one.
-                var asOf = MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition).ToString("s", CultureInfo.InvariantCulture);
+                var asOf = AsOfFor(edition, localNow).ToString("s", CultureInfo.InvariantCulture);
 
                 try
                 {
@@ -152,7 +170,7 @@ public sealed class FreeMonthlyPreviewWorker(
                     var html = await renderer.RenderHtmlAsync(
                         result.Output.Body, tenantName, edition, settings.UpgradeUrl, "#", settings.PortalUrl, cancellationToken);
 
-                    var subject = SendDigestFromArtifactActivity.BuildSubject(tenantName, edition.Sunday);
+                    var subject = SendDigestFromArtifactActivity.BuildSubject(tenantName, edition);
                     // The codec check needs Key Vault and SQL; a replay is deliberately offline.
                     var codec = configuration["FreeDigest:Preview:ReplayDir"] is { Length: > 0 }
                         ? "not checked (replay)"
@@ -220,8 +238,33 @@ public sealed class FreeMonthlyPreviewWorker(
     /// <c>FreeDigest:Preview:CaptureDir</c>. No LLM call, nothing written to the task hub, the blob
     /// store or the database: this is the read half of a preview, saved for later.
     /// </summary>
+    /// <summary>The name stored with the capture, or null for a capture taken before it was stored.</summary>
+    private static string? CapturedTenantName(string replayDir, int tenantId)
+    {
+        foreach (var userId in CapturedFreeMonthlyDigestStore.CapturedUserIds(Path.GetFullPath(replayDir), tenantId))
+            foreach (var slot in Enum.GetValues<MonthlyDigestSlot>())
+            {
+                var path = CapturedFreeMonthlyDigestStore.PathFor(Path.GetFullPath(replayDir), tenantId, userId, slot);
+                if (!File.Exists(path))
+                    continue;
+
+                try
+                {
+                    var captured = JsonSerializer.Deserialize<CapturedSlot>(File.ReadAllText(path), CapturedFreeMonthlyDigestStore.Json);
+                    if (captured?.TenantName is { Length: > 0 } name)
+                        return name;
+                }
+                catch (JsonException)
+                {
+                    // A capture we cannot read is the replay's problem to report, not the masthead's.
+                }
+            }
+
+        return null;
+    }
+
     private async Task CaptureAsync(
-        IServiceProvider sp, string captureDir, int tenantId, IReadOnlyList<DigestScopeGroup> groups,
+        IServiceProvider sp, string captureDir, int tenantId, string tenantName, IReadOnlyList<DigestScopeGroup> groups,
         IReadOnlyList<MonthlyDigestSlot> slots, DateOnly monthStart, DateTime localNow,
         FreeMonthlySettings monthly, CancellationToken cancellationToken)
     {
@@ -234,7 +277,7 @@ public sealed class FreeMonthlyPreviewWorker(
             foreach (var slot in slots)
             {
                 var edition = EditionFor(slot, monthStart);
-                var asOf = MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition);
+                var asOf = AsOfFor(edition, localNow);
                 var userId = group.RepresentativeUserId;
 
                 CapturedSlot record;
@@ -242,14 +285,14 @@ public sealed class FreeMonthlyPreviewWorker(
                 {
                     var data = await repository.GetSlotAsync(edition, tenantId, userId, asOf, monthly.AllowPersonNames, cancellationToken);
                     record = new CapturedSlot(tenantId, userId, slot, asOf, monthly.AllowPersonNames,
-                        DateTime.UtcNow.ToString("s", CultureInfo.InvariantCulture), data, null, null);
+                        DateTime.UtcNow.ToString("s", CultureInfo.InvariantCulture), data, null, null, tenantName);
                     captured++;
                 }
                 catch (FreeMonthlyDigestRefusedException ex)
                 {
                     // A refusal is part of the tenant's truth - replaying it must fail closed too.
                     record = new CapturedSlot(tenantId, userId, slot, asOf, monthly.AllowPersonNames,
-                        DateTime.UtcNow.ToString("s", CultureInfo.InvariantCulture), null, ex.SqlErrorNumber, ex.Message);
+                        DateTime.UtcNow.ToString("s", CultureInfo.InvariantCulture), null, ex.SqlErrorNumber, ex.Message, tenantName);
                     refused++;
                     logger.LogWarning("Capture: tenant {TenantId} user {UserId} {Slot} REFUSED by SQL error {Code} - captured as a refusal.",
                         tenantId, userId, slot, ex.SqlErrorNumber);
@@ -383,6 +426,23 @@ public sealed class FreeMonthlyPreviewWorker(
     /// in a 4-Sunday month it is previewed against the same month data (only the "Next week" line
     /// differs from what a real run would say).
     /// </summary>
+    /// <summary>
+    /// The instant each slot reports as at.
+    ///
+    /// <para>Normally each edition uses its OWN Sunday, because that is the day production would
+    /// have generated it - so a preview of a whole month shows the position moving week by week.
+    /// </para>
+    ///
+    /// <para><c>FreeDigest:Preview:AsOfToday=true</c> puts every slot on today instead. That is not
+    /// how the digest runs, so it is never the default; it exists because a demo set usually wants
+    /// five views of the CURRENT position rather than a re-enactment of the month, and the first
+    /// Sunday of a month is always the thinnest week there is.</para>
+    /// </summary>
+    private DateTime AsOfFor(MonthlyDigestEdition edition, DateTime localNow) =>
+        configuration.GetValue("FreeDigest:Preview:AsOfToday", false)
+            ? MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition with { Sunday = edition.CurrMonthEnd })
+            : MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition);
+
     private static MonthlyDigestEdition EditionFor(MonthlyDigestSlot slot, DateOnly monthStart)
     {
         var firstSunday = monthStart.AddDays(((int)DayOfWeek.Sunday - (int)monthStart.DayOfWeek + 7) % 7);

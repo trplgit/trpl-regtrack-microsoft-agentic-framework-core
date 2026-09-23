@@ -43,15 +43,40 @@ public sealed class MonthlyDigestCalendarTests
         Assert.Equal(new DateOnly(2026, 11, 1), next.CurrMonthStart);
     }
 
+    /// <summary>
+    /// sql/34 THROWs 51237 when @AsOf is outside @CurrMonthStart's month, so a run that slipped past
+    /// midnight must still report inside November.
+    ///
+    /// <para>[UPDATED 2026-09-22] It now reports as at the edition's OWN Sunday rather than the
+    /// month's last moment - that is the position the scheduler would have seen on the day, and it
+    /// is what makes a preview of five editions show five different weeks instead of one instant
+    /// repeated. The guarantee this test exists for is unchanged: the result is inside the month.</para>
+    /// </summary>
     [Fact]
     public void AsOfWithinMonth_ClampsARetryThatCrossedIntoTheNextMonth()
     {
-        // sql/34 THROWs 51237 when @AsOf is outside @CurrMonthStart's month.
         var edition = MonthlyDigestCalendar.For(new DateOnly(2026, 11, 29));
 
         var asOf = MonthlyDigestCalendar.AsOfWithinMonth(new DateTime(2026, 12, 1, 2, 0, 0), edition);
 
-        Assert.Equal(new DateTime(2026, 11, 30, 23, 59, 59), asOf);
+        Assert.Equal(new DateTime(2026, 11, 29, 23, 59, 59), asOf);
+        Assert.Equal(11, asOf.Month);
+    }
+
+    /// <summary>
+    /// Each edition reports as at its own Sunday, so a preview of a whole month shows the position
+    /// moving week by week rather than one instant rendered five ways.
+    /// </summary>
+    [Fact]
+    public void AsOfWithinMonth_UsesEachEditionsOwnSunday()
+    {
+        var wellAfterTheMonth = new DateTime(2026, 9, 22, 10, 0, 0);
+
+        var overview = MonthlyDigestCalendar.AsOfWithinMonth(wellAfterTheMonth, MonthlyDigestCalendar.For(new DateOnly(2026, 8, 2)));
+        var licence = MonthlyDigestCalendar.AsOfWithinMonth(wellAfterTheMonth, MonthlyDigestCalendar.For(new DateOnly(2026, 8, 30)));
+
+        Assert.Equal(new DateTime(2026, 8, 2, 23, 59, 59), overview);
+        Assert.Equal(new DateTime(2026, 8, 30, 23, 59, 59), licence);
     }
 
     [Fact]
@@ -464,11 +489,24 @@ public sealed class FreeMonthlyDigestValidatorTests
     }
 
     [Fact]
-    public void RejectsTwoBoldFiguresInOneParagraph()
+    /// <summary>
+    /// [UPDATED 2026-09-22] Two spans per paragraph are now correct - the lead figure and the
+    /// exposure it carries. Three is still a shout, and that is what this guards.
+    /// </summary>
+    public void RejectsThreeBoldSpansInOneParagraph()
     {
-        var result = Validate("Good morning,\n\n**5 items** carry personal liability, and **146 items** are overdue across your scope today as at {{AS_AT}}.");
+        var result = Validate("Good morning,\n\n**5 items** carry **personal criminal liability**, and **146 items** are overdue across your scope today as at {{AS_AT}}.");
 
-        Assert.Contains(result.FailedChecks, f => f.Contains("bolds more than one"));
+        Assert.Contains(result.FailedChecks, f => f.Contains("bolds more than"));
+    }
+
+    /// <summary>A figure and its impact together is the intended shape, and must NOT fail.</summary>
+    [Fact]
+    public void AllowsAFigureAndItsImpactBoldedTogether()
+    {
+        var result = Validate("Good morning,\n\n**5 items** carry **personal criminal liability** as at {{AS_AT}} across your scope today.");
+
+        Assert.DoesNotContain(result.FailedChecks, f => f.Contains("bolds more than"));
     }
 
     private static FreeMonthlyReview Validate(string body) =>
@@ -621,6 +659,217 @@ public sealed class FreeMonthlyDraftRepairTests
 
     /// <summary>
 
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] The Overview opened two paragraphs with the same
+    /// date. The rule said "once", which the model read as once per paragraph. The qualifier now
+    /// appears once per EMAIL; the figures and sentences carrying it are untouched.
+    /// </summary>
+    [Fact]
+    public void StatesTheAsAtDateOnceInTheWholeEmail()
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply(
+            "Good morning,\n\nAs at {{AS_AT}}, 12 obligations carry personal criminal liability.\n\n"
+            + "As at {{AS_AT}}, 47 of the 194 obligations that fell due remain open.");
+
+        Assert.Equal(1, Regex.Matches(repaired.Body, @"\{\{AS_AT\}\}").Count);
+        Assert.Contains("12 obligations carry personal criminal liability.", repaired.Body, StringComparison.Ordinal);
+        Assert.Contains("47 of the 194 obligations that fell due remain open.", repaired.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [THE RECURRING DEFECT] "Items" names nothing a reader recognises, and it has now been fixed
+    /// twice by hand - once for the <c>od_*</c> labels, then again when the Act email said "189
+    /// items" from its own <c>law_*</c> labels. Fixing a word where it was noticed is how it keeps
+    /// coming back, so this checks every label of every slot instead.
+    /// </summary>
+    [Theory]
+    [InlineData(MonthlyDigestSlot.Overview)]
+    [InlineData(MonthlyDigestSlot.Users)]
+    [InlineData(MonthlyDigestSlot.Location)]
+    [InlineData(MonthlyDigestSlot.Act)]
+    [InlineData(MonthlyDigestSlot.Licence)]
+    public void NoLabelSentToTheModelSaysItem(MonthlyDigestSlot slot)
+    {
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName(slot.ToString().ToLowerInvariant()));
+
+        // The LABELS only - "ItemCount" is a field name the prompts describe, not prose the model copies.
+        var labels = Regex.Matches(prompt.UserMessage, @"""DisplayLabel"":""(?<text>[^""]*)""")
+            .Select(m => m.Groups["text"].Value)
+            .ToList();
+
+        Assert.NotEmpty(labels);
+        Assert.DoesNotContain(labels, l => Regex.IsMatch(l, @"\bitems?\b", RegexOptions.IgnoreCase));
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] "Sexual Harassment of Women at Workplace
+    /// (Prevention, Prohibition &amp; Redressal) Act, 2013 &amp; ... Rules 2013" reached a customer
+    /// email as "Sexual Harassment of Women at Workplace (Prevention, Prohibition" - cut at the
+    /// "&amp;" INSIDE its own title, leaving an unclosed bracket. A joiner between two statutes only
+    /// occurs where the brackets are balanced.
+    /// </summary>
+    [Fact]
+    public void KeepsAStatuteNameWhoseOwnTitleContainsAJoiner()
+    {
+        const string name = "Sexual Harassment of Women at Workplace (Prevention, Prohibition & Redressal) Act, 2013 "
+                            + "& Sexual Harassment of Women at Workplace (Prevention, Prohibition & Redressal) Rules 2013";
+
+        var clean = FreeMonthlyDigestPrompt.CleanLabel(name);
+
+        Assert.Equal("Sexual Harassment of Women at Workplace (Prevention, Prohibition & Redressal) Act, 2013", clean);
+        Assert.Equal(clean.Count(c => c == '('), clean.Count(c => c == ')'));
+    }
+
+    /// <summary>The ordinary case still shortens - one statute plus its Rules keeps only the statute.</summary>
+    [Fact]
+    public void StillShortensAStatuteJoinedToItsRules()
+    {
+        var clean = FreeMonthlyDigestPrompt.CleanLabel("Minimum Wages Act, 1948 and Minimum Wages Gujarat Rules, 1961");
+
+        Assert.Equal("Minimum Wages Act, 1948", clean);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] The stammer guard stripped the scope from a
+    /// comparison, leaving "35%, compared with 21%." - 21% of what? A phrase completing a
+    /// comparison is the second half of the claim, never a refrain.
+    /// </summary>
+    [Fact]
+    public void KeepsTheScopeThatCompletesAComparison()
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply(
+            "Good morning,\n\n5 sites hold overdue work across your organisation.\n\n"
+            + "412 overdue obligations sit at one site across your organisation.\n\n"
+            + "That site runs at 35%, compared with 21% across your organisation.");
+
+        Assert.Contains("compared with 21% across your organisation", repaired.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] "24 Acts have overdue obligations carrying personal
+    /// criminal liability... A further 22 Acts are overdue across an unusually large share of their
+    /// locations." Those 22 are the same Acts counted a second way, so the reader was told there
+    /// were 46. The connective asserts an addition nobody computed; removing it cannot make a true
+    /// sentence false.
+    /// </summary>
+    [Theory]
+    [InlineData("A further 22 Acts are overdue at many sites.", "22 Acts are overdue at many sites.")]
+    [InlineData("Another 144 obligations have no reviewer.", "144 obligations have no reviewer.")]
+    [InlineData("In addition, 5 locations cannot be assessed.", "5 locations cannot be assessed.")]
+    public void RemovesAConnectiveThatAddsTwoCountsTogether(string written, string expected)
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply($"Good morning,\n\n{written}");
+
+        Assert.Contains(expected, repaired.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("a further", repaired.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("another", repaired.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] "17 Acts still have obligations open from August,
+    /// out of 9 Acts with last-month work." Both figures were real, from different populations, and
+    /// joining them produced a fraction that cannot exist. Every value passed the closed-set check,
+    /// so only a check on the RELATIONSHIP catches it.
+    /// </summary>
+    [Fact]
+    public void RejectsAPartLargerThanItsWhole()
+    {
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.Overview());
+
+        var problems = FreeMonthlyDigestValidator.SentenceProblems("17 Acts remain open, out of 9 Acts compared.", prompt);
+
+        Assert.Contains(problems, p => p.Contains("a part cannot be larger"));
+    }
+
+    /// <summary>An ordinary "N of M" where the part fits inside the whole is untouched.</summary>
+    [Fact]
+    public void AcceptsAPartThatFitsInsideItsWhole()
+    {
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.Overview());
+
+        var problems = FreeMonthlyDigestValidator.SentenceProblems("5 of the 24 locations are affected.", prompt);
+
+        Assert.DoesNotContain(problems, p => p.Contains("a part cannot be larger"));
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] The inference trim cut ", showing an unusually large
+    /// share still open" and left "...with 4 of the 11 people who had work due." - a clause whose
+    /// verb had been removed. A participle carrying a "with ..." clause is never trimmed.
+    /// </summary>
+    [Fact]
+    public void NeverTrimsAParticipleThatIsAClausesOnlyVerb()
+    {
+        const string sentence = "47 of last month's obligations remain open, with 4 of the 11 people "
+                                + "who had work due showing an unusually large share still open.";
+
+        var repaired = FreeMonthlyDraftRepair.Apply($"Good morning,\n\n{sentence}");
+
+        Assert.Contains("showing an unusually large share still open", repaired.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on tenant 1082, 2026-09-22] "personal criminal liability" appeared four times in
+    /// one 120-word Overview. It is the most serious thing the email says, and repeating it turns
+    /// it into wallpaper. Shortened on the third mention, never deleted - the claim is real.
+    /// </summary>
+    [Fact]
+    public void ShortensAHeavyPhraseAfterTwoMentions()
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply(
+            "Good morning,\n\n12 obligations carry personal criminal liability.\n\n"
+            + "587 overdue obligations carry personal criminal liability.\n\n"
+            + "13 obligations due this month carry personal criminal liability.");
+
+        Assert.Equal(2, Regex.Matches(repaired.Body, "personal criminal liability", RegexOptions.IgnoreCase).Count);
+        Assert.Contains("that liability", repaired.Body, StringComparison.OrdinalIgnoreCase);
+
+        // The figures and the claim survive - only the wording of the third mention changes.
+        foreach (var figure in new[] { "12", "587", "13" })
+            Assert.Contains(figure, repaired.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>The proc's comparison wording is shortened the same way, and stays grammatical.</summary>
+    [Fact]
+    public void ShortensTheRepeatedComparisonWordingGrammatically()
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply(
+            "Good morning,\n\n4 people hold an unusually large share of the work.\n\n"
+            + "6 sites hold an unusually large share of the work.\n\n"
+            + "3 Acts hold an unusually large share of the work.");
+
+        Assert.Contains("a larger share than most", repaired.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("an larger", repaired.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// [COST TWO EMAILS, 2026-09-22] Banning "in that position" deleted the residual line - the one
+    /// sentence carrying {{NAME_1}} - so the draft named none of its findings, failed validation,
+    /// and shipped the deterministic fallback instead. A phrase that appears in a sentence the
+    /// prompts REQUIRE can never go on the delete list.
+    /// </summary>
+    [Fact]
+    public void KeepsTheResidualLineThatNamesTheFinding()
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply(
+            "Good morning,\n\n{{NAME_1}} expired without a renewal filed; it is 1 of 3 licences in that position.");
+
+        Assert.Contains("{{NAME_1}}", repaired.Body, StringComparison.Ordinal);
+        Assert.Contains("1 of 3 licences", repaired.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>"1 of 1 licences" says nothing - with or without a determiner.</summary>
+    [Theory]
+    [InlineData("1 of 1 licences has expired.", "the only licences has expired.")]
+    [InlineData("2 of the 2 licences expire.", "both licences expire.")]
+    [InlineData("3 of its 3 sites are affected.", "all 3 sites are affected.")]
+    public void RewritesAPartThatEqualsItsWhole(string written, string expected)
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply($"Good morning,\n\n{written}");
+
+        Assert.Contains(expected, repaired.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>A number that is not a near-miss is invented, and its sentence goes - nothing false ships.</summary>
     [Fact]
     public void DeletesTheSentenceWhenANumberIsTrulyInvented()
@@ -717,11 +966,11 @@ public sealed class FreeMonthlyDraftRepairTests
     public void AllowsAnApprovedConsequenceOnceAndCutsTheSecond()
     {
         var repaired = FreeMonthlyDraftRepair.Apply(
-            "Good morning,\n\n6 items carry personal criminal liability. This can mean prosecution of the officer responsible, not only a penalty.\n\n"
-            + "2 items due before month end carry it too. That can mean prosecution of the officer responsible, not only a penalty.");
+            "Good morning,\n\n47 licences are expired. Until a licence is renewed, there is no valid licence on record for that activity.\n\n"
+            + "2 more expire before month end. Until a licence is renewed, there is no valid licence on record for that activity.");
 
-        Assert.Equal(1, Regex.Matches(repaired.Body, "prosecution of the officer", RegexOptions.IgnoreCase).Count);
-        Assert.Contains("2 items due before month end carry it too.", repaired.Body, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Matches(repaired.Body, "no valid licence on record", RegexOptions.IgnoreCase).Count);
+        Assert.Contains("2 more expire before month end.", repaired.Body, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -733,10 +982,10 @@ public sealed class FreeMonthlyDraftRepairTests
     public void KeepsASecondConsequenceWhenItIsADifferentOne()
     {
         var repaired = FreeMonthlyDraftRepair.Apply(
-            "Good morning,\n\n6 items carry liability. This can mean prosecution of the officer responsible, not only a penalty.\n\n"
+            "Good morning,\n\n6 obligations rest on one person. If that person is unavailable, no one else is assigned to that work in RegTrack.\n\n"
             + "47 licences are expired. Until a licence is renewed, there is no valid licence on record for that activity.");
 
-        Assert.Contains("prosecution of the officer", repaired.Body, StringComparison.Ordinal);
+        Assert.Contains("if that person is unavailable", repaired.Body, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("no valid licence on record", repaired.Body, StringComparison.Ordinal);
     }
 
@@ -826,20 +1075,38 @@ public sealed class FreeMonthlyDraftNormalizerTests
     /// carrying four subjects. Splitting is lossless: only the blank lines move.
     /// </summary>
     [Fact]
-    public void SplitsAParagraphThatMakesSeveralPoints()
+    public void SplitsAWallOfTextThatMakesSeveralPoints()
     {
         var normalized = FreeMonthlyDraftNormalizer.Normalize(
-            "Good morning,\n\n2 sites have overdue items carrying personal criminal liability. "
-            + "Across your organisation, 50 overdue items carry that exposure. "
-            + "At one site, 39 of 143 overdue items carry personal criminal liability. "
-            + "This can mean prosecution of the officer responsible.");
+            "Good morning,\n\n2 sites have overdue obligations carrying personal criminal liability. "
+            + "Across your organisation, 50 overdue obligations carry that exposure. "
+            + "At one site, 39 of 143 overdue obligations carry personal criminal liability. "
+            + "12 locations hold work that has been overdue for more than 90 days. "
+            + "5 locations have no obligations configured at all and cannot be assessed today. "
+            + "Ownership is missing from 144 of them.");
 
         var paragraphs = normalized.Split("\n\n");
 
-        Assert.Equal(4, paragraphs.Length);   // greeting + three points
-        // The consequence has no figure, so it stays with the point it explains.
-        Assert.EndsWith("This can mean prosecution of the officer responsible.", paragraphs[^1], StringComparison.Ordinal);
-        Assert.Contains("39 of 143", paragraphs[^1], StringComparison.Ordinal);
+        Assert.True(paragraphs.Length > 2, "a long paragraph carrying several subjects should be broken up");
+        // A sentence with no figure explains the point before it, so it never starts a paragraph.
+        Assert.EndsWith("Ownership is missing from **144** of them.", paragraphs[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [MEASURED on tenant 1082, 2026-09-22] The splitter was reshaping work the model got RIGHT:
+    /// a 5-paragraph Users draft left as 9, which turned one point about one person into two
+    /// paragraphs that read as the same thing said twice. A short paragraph is now left alone
+    /// however many figures it carries - this is a guard against a wall of text, not a reformatter.
+    /// </summary>
+    [Fact]
+    public void LeavesAShortParagraphAloneEvenWhenItCarriesSeveralFigures()
+    {
+        const string paragraph = "Hanif Sumra holds 579 of the 2,852 overdue obligations, 20% of the total. "
+                                 + "Hanif Sumra is one of 5 people in this position.";
+
+        var normalized = FreeMonthlyDraftNormalizer.Normalize($"Good morning,\n\n{paragraph}");
+
+        Assert.Equal(2, normalized.Split("\n\n").Length);   // greeting + the paragraph, unbroken
     }
 
     /// <summary>A figure with one supporting figure is a single point and stays whole.</summary>
@@ -897,7 +1164,7 @@ public sealed class FreeMonthlyDraftNormalizerTests
     public void ADraftThatOnlyOverBolds_NowPasses()
     {
         var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.Overview());
-        var draft = "Good morning,\n\n**5 items** from last month carry personal criminal liability and **24 items** are still open as at {{AS_AT}} across your scope.\n\n"
+        var draft = "Good morning,\n\n**5 items** from last month carry **personal criminal liability** and **24 items** are still open as at {{AS_AT}} across your scope.\n\n"
                     + "Between today and the end of {{CURR_MONTH}}, **268 items** fall due, and 4 of the overdue items have no one assigned.\n\n"
                     // Both findings are named: an email given findings has to use them, so a draft
                     // testing emphasis still has to satisfy that check.
@@ -919,7 +1186,10 @@ public sealed class FreeMonthlyDraftNormalizerTests
             "Good morning,\n\nAs at today, **5 people have an unusually high share of overdue work carrying personal criminal liability**.");
 
         Assert.Contains("**5 people**", normalized, StringComparison.Ordinal);
-        Assert.Contains("have an unusually high share of overdue work carrying personal criminal liability", normalized, StringComparison.Ordinal);
+        Assert.Contains("have an unusually high share of overdue work carrying", normalized, StringComparison.Ordinal);
+
+        // [2026-09-22] The exposure is now emphasised too - the kind of problem, not only its size.
+        Assert.Contains("**personal criminal liability**", normalized, StringComparison.Ordinal);
     }
 
     /// <summary>A short emphasis - the figure and its unit - is exactly right and is left alone.</summary>
@@ -953,7 +1223,9 @@ public sealed class FreeMonthlyPlaceholderBinderTests
 
         var bound = FreeMonthlyPlaceholderBinder.Bind("{{NAME_1}} at {{NAME_1_AT}} expires on {{DATE_1}}, as at {{AS_AT}}.", prompt.Bindings);
 
-        Assert.Equal("Trade Licence at Pune Plant expires on 30 Nov 2026, as at 29 Nov 2026.", bound);
+        // [2026-09-22] A NAME is emphasised at binding - it is what the reader scans for. A DATE
+        // is not: it is context for the figure, not a thing to look up.
+        Assert.Equal("**Trade Licence** at **Pune Plant** expires on 30 Nov 2026, as at 29 Nov 2026.", bound);
     }
 
     [Fact]
@@ -1003,12 +1275,12 @@ public sealed class FreeMonthlyClosingTests
 {
     [Fact]
     public void LastSundayOfAMonth_PointsToNextMonthsOverview() =>
-        Assert.StartsWith("Next Monday: the November overview",
+        Assert.StartsWith("Next Monday you will get the November overview",
             FreeMonthlyClosing.For(MonthlyDigestCalendar.For(new DateOnly(2026, 10, 25))));
 
     [Fact]
     public void FourthSundayOfAFiveSundayMonth_PointsToLicences() =>
-        Assert.StartsWith("Next Monday: your licences",
+        Assert.StartsWith("Next Monday's email is about your licences",
             FreeMonthlyClosing.For(MonthlyDigestCalendar.For(new DateOnly(2026, 11, 22))));
 }
 
@@ -1016,13 +1288,11 @@ public sealed class FreeMonthlySettingsTests
 {
     private static Dictionary<string, string?> FullConfig() => new()
     {
-        ["FreeDigest:Monthly:AllowPersonNames"] = "true",
         ["Budget:FreeMonthlyTokenCap:Overview"] = "12000",
         ["Budget:FreeMonthlyTokenCap:Users"] = "9000",
         ["Budget:FreeMonthlyTokenCap:Location"] = "9000",
         ["Budget:FreeMonthlyTokenCap:Act"] = "9000",
         ["Budget:FreeMonthlyTokenCap:Licence"] = "9000",
-        ["FreeDigest:Monthly:MaxDraftAttempts"] = "2",
     };
 
     private static FreeMonthlySettings Build(Dictionary<string, string?> values) =>
@@ -1031,23 +1301,38 @@ public sealed class FreeMonthlySettingsTests
             MonthlyExamples.PromptDirectory());
 
     [Fact]
-    public void Build_ReadsEveryValueFromConfiguration()
+    public void Build_ReadsEveryTokenCapFromConfiguration()
     {
         var values = FullConfig();
-        values["FreeDigest:Monthly:AllowPersonNames"] = "false";
         values["Budget:FreeMonthlyTokenCap:Act"] = "8000";
 
         var settings = Build(values);
 
-        Assert.False(settings.AllowPersonNames);
         Assert.Equal(8000, settings.TokenCapFor(MonthlyDigestSlot.Act));
+    }
+
+    /// <summary>
+    /// [MOVED OUT OF CONFIG 2026-09-22] AllowPersonNames and MaxDraftAttempts were required
+    /// appsettings keys that every environment had to carry and that stopped the worker if absent.
+    /// Neither varies by environment, so both now live in code - and a deployment that never
+    /// mentions them still gets the intended behaviour.
+    /// </summary>
+    [Fact]
+    public void Build_NeedsNoMonthlySectionInConfiguration()
+    {
+        var values = FullConfig();
+        foreach (var key in values.Keys.Where(k => k.StartsWith("FreeDigest:Monthly:", StringComparison.Ordinal)).ToList())
+            values.Remove(key);
+
+        var settings = Build(values);
+
+        Assert.True(settings.AllowPersonNames);
+        Assert.Equal(1, settings.MaxDraftAttempts);
     }
 
     /// <summary>No defaults in code: every missing key stops startup, and the message names the key.</summary>
     [Theory]
-    [InlineData("FreeDigest:Monthly:AllowPersonNames")]
     [InlineData("Budget:FreeMonthlyTokenCap:Overview")]
-    [InlineData("FreeDigest:Monthly:MaxDraftAttempts")]
     public void Build_MissingKey_StopsStartupNamingTheKey(string key)
     {
         var values = FullConfig();

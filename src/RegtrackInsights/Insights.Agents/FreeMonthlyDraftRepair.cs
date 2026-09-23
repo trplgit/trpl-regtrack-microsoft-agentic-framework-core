@@ -73,8 +73,26 @@ public static partial class FreeMonthlyDraftRepair
         /*  [FOUND LIVE on tenant 5] The model describing its own input to the reader: "It is the
             only licence in the recent finding with that position." The reader has no idea what a
             finding is - they have licences and sites.                                          */
-        "the recent finding", "the named finding", "this finding", "the finding",
+        /*  [WIDENED 2026-09-22] These were "the named finding" etc, and "1 of the 2 licences in
+            this position is also represented by the other named finding" walked straight through.
+            The bare noun catches every determiner.                                              */
+        "named finding", "recent finding", "this finding", "the finding",
         "the figures provided", "the data provided", "the input",
+
+        /*  [FOUND LIVE on tenant 1082, 2026-09-22] "This is the only location identified with that
+            pattern." Identified by whom, and what pattern? The sentence reports on the ANALYSIS
+            instead of on the reader's business, and a compliance head has sites and Acts, not
+            patterns. Deleting is right: strip the claim and nothing is left to keep.            */
+        /*  [REVERTED 2026-09-22, SAME DAY] "this position" / "that position" were added here and
+            cost two of five emails outright. They appear in the RESIDUAL line the prompts ask for -
+            "it is 1 of 3 licences in that position" - which is the sentence carrying {{NAME_1}}.
+            Deleting it left a draft naming none of its findings, so validation failed and the
+            deterministic fallback shipped: a raw list of every fact, which is far worse than a
+            slightly stiff phrase. The comment ten lines below had warned of this exactly.
+
+            "identified with" and "pattern" stay: those describe the ANALYSIS and never carry a
+            placeholder, so removing them costs nothing.                                          */
+        "identified with", "this pattern", "that pattern", "the comparison",
 
         /*  [2026-09-21] A phrase that became a tic: it appeared in almost every email, and a
             sentence a reader learns to skip is worse than no sentence. The prompt now asks for the
@@ -96,6 +114,15 @@ public static partial class FreeMonthlyDraftRepair
             position" is the residual line and is doing real work.                             */
         "the forward position", "in the forward position", "part of the position",
         "ongoing challenges", "need attention", "needs attention", "the situation reflects",
+
+        /*  [REMOVED FROM THE PRODUCT 2026-09-22] The canned liability consequence. It was in the
+            shared bank, so it appeared in every email, verbatim, and a sentence a reader sees five
+            times a month stops carrying weight - which is the opposite of what it was for.
+
+            Nothing is lost by deleting it: the fact's own label says "carry personal criminal
+            liability for the responsible officer", and the normaliser now EMPHASISES that phrase.
+            The impact is shown where the figure is, rather than restated underneath it.        */
+        "prosecution of the officer", "not only a penalty",
 
         // Reassurance a personally liable reader must not be given.
         "well done", "good news", "on track", "healthy",
@@ -145,6 +172,9 @@ public static partial class FreeMonthlyDraftRepair
                 severe item, so they read as a point rather than a refrain.                      */
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var consequencesUsed = new HashSet<string>(StringComparer.Ordinal);
+        var asAtStated = false;
+        var namesStated = new Dictionary<string, int>(StringComparer.Ordinal);
+        var phrasesUsed = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var paragraph in body.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.None))
         {
@@ -165,11 +195,116 @@ public static partial class FreeMonthlyDraftRepair
                 /*  Least destructive first: trim the model's own inference off the end, then its
                     intensifiers, and only drop the whole sentence if what remains is still a claim
                     the data never made. A comparison keeps its facts and loses its editorialising. */
-                var sentence = TrailingInference().Replace(original, string.Empty);
+                /*  [FOUND LIVE on tenant 1082, 2026-09-22] The inference trim broke a sentence:
+                    "47 of last month's obligations remain open, with 4 of the 11 people who had
+                    work due showing an unusually large share still open" lost ", showing..." and
+                    ended "...who had work due." - a clause with its predicate cut off.
+
+                    A participle carries the verb of the clause introduced by "with" or "including".
+                    Trimming it there leaves a fragment, so the sentence is left whole; the words
+                    it keeps are the data's own and the reader can follow them.                  */
+                var sentence = DanglingIfTrimmed(original)
+                    ? original
+                    : TrailingInference().Replace(original, string.Empty);
                 sentence = Intensifier().Replace(sentence, string.Empty);
 
                 foreach (var (word, digit) in SpelledNumbers)
                     sentence = Regex.Replace(sentence, $@"\b{word}\b", digit, RegexOptions.IgnoreCase);
+
+                /*  "As at {{AS_AT}}" belongs on the FIRST as-at figure and nowhere else. [FOUND
+                    LIVE on tenant 1082, 2026-09-22] The Overview opened two paragraphs with the
+                    same date. The rule said "once", meaning once per paragraph, so every paragraph
+                    citing such a figure repeated it - and a date the reader already has, restated,
+                    is the same filler as any other refrain. Only the qualifier is removed; the
+                    figure and its sentence are untouched.                                       */
+                if (asAtStated && AsAtPrefix().IsMatch(sentence))
+                {
+                    sentence = AsAtPrefix().Replace(sentence, " ", 1);
+                    removed.Add($"repeats 'as at': {original.Trim()}");
+                }
+                else if (AsAtPrefix().IsMatch(sentence))
+                {
+                    asAtStated = true;
+                }
+
+                /*  A SCOPING PHRASE IS A QUALIFIER, NOT A REFRAIN. [FOUND LIVE on tenant 1082,
+                    2026-09-22] "Across your organisation" opened three paragraphs of the Location
+                    email and twice inside one of them - "...across your organisation. Across your
+                    organisation, 47 of the 194..." - which reads as a stammer.
+
+                    Shared Rule 6 ("every figure says where it applies") is what produced it, and
+                    it is a good rule: the first use earns its place. After two, the reader has
+                    understood the frame and the phrase is noise, so it is stripped from the
+                    sentence. Only the qualifier goes; the figure and the claim stay.           */
+                /*  A HEAVY PHRASE, TWICE AT MOST. [FOUND LIVE on tenant 1082, 2026-09-22] "personal
+                    criminal liability" appeared four times in one Overview. It is the most serious
+                    thing the email says, and saying it four times in 120 words turns it into
+                    wallpaper - the reader skims past the fourth exactly when it matters most.
+
+                    Substituted, not deleted: by the third mention the reader knows what liability
+                    is meant, and "that liability" reads as ordinary English while keeping the claim
+                    intact. Deleting would remove a real finding, which is never the right trade. */
+                foreach (var (phrase, shortForm) in HeavyPhrases)
+                {
+                    if (!sentence.Contains(phrase, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (phrasesUsed.GetValueOrDefault(phrase) >= MaxHeavyPhraseUses)
+                    {
+                        sentence = Regex.Replace(sentence, Regex.Escape(phrase), shortForm, RegexOptions.IgnoreCase);
+                        removed.Add($"shortened repeated '{phrase}': {original.Trim()}");
+                    }
+                    else
+                    {
+                        phrasesUsed[phrase] = phrasesUsed.GetValueOrDefault(phrase) + 1;
+                    }
+                }
+
+                foreach (var phrase in ScopingPhrases)
+                {
+                    if (!sentence.Contains(phrase, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    /*  [CORRECTED 2026-09-22] A phrase completing a COMPARISON is never stripped.
+                        Removing it left "412 of its 1,170 carry personal criminal liability: 35%,
+                        compared with 21%." in a customer email - 21% of what? The guard against a
+                        stammer had created the vagueness it was meant to prevent. Everywhere else
+                        the frame is already established and the phrase is noise; after "compared
+                        with" or "against" it is the second half of the claim.                  */
+                    if (ComparisonScope().IsMatch(sentence))
+                        continue;
+
+                    if (phrasesUsed.GetValueOrDefault(phrase) >= MaxScopingPhraseUses)
+                    {
+                        sentence = Regex.Replace(sentence, Regex.Escape(phrase) + @",?\s*", " ", RegexOptions.IgnoreCase);
+                        removed.Add($"repeats '{phrase}': {original.Trim()}");
+                    }
+                    else
+                    {
+                        phrasesUsed[phrase] = phrasesUsed.GetValueOrDefault(phrase) + 1;
+                    }
+                }
+
+                /*  "3 of the 3 expired licences" is arithmetic pretending to be a comparison.
+                    [FOUND LIVE on tenant 1082, 2026-09-22] The emails carried "3 of the 3 expired
+                    licences have no renewal", "2 of the 2 licences", "1 of its 1 expired licences".
+                    A part equal to its whole is "all of them", and English has shorter words for
+                    it. Both numbers came from the data, so nothing here changes what is asserted -
+                    only how the same fact reads.                                                */
+                /*  "A FURTHER" ADDS TWO NUMBERS THAT DO NOT ADD. [FOUND LIVE on tenant 1082,
+                    2026-09-22] "Overdue obligations carrying personal criminal liability sit under
+                    24 Acts... A further 22 Acts are overdue across an unusually large share of the
+                    locations where they apply." Those 22 are not 22 MORE Acts - they are the same
+                    Act population measured a second way, so the sentence told the reader there
+                    were 46. Shared Rule 8.3 forbids exactly this and the model wrote it anyway.
+
+                    The words are simply removed. A count stands perfectly well on its own, and
+                    deleting a connective can never make a true sentence false - whereas leaving
+                    it in asserts an arithmetic relationship nobody computed.                    */
+                sentence = AdditiveOpener().Replace(sentence, string.Empty);
+
+                sentence = SamePartAndWhole().Replace(sentence, m =>
+                    m.Groups["n"].Value == "1" ? "the only " : m.Groups["n"].Value == "2" ? "both " : $"all {m.Groups["n"].Value} ");
 
                 sentence = Tidy(sentence, original);
 
@@ -245,6 +380,30 @@ public static partial class FreeMonthlyDraftRepair
                     explanation phrase "standing position" consumed it before either. An email may
                     legitimately carry a liability point AND a licence point; what it may not do is
                     make the SAME point twice.                                                     */
+                /*  A NAME IS STATED AT MOST TWICE. [FOUND LIVE on tenant 1082, 2026-09-22] The
+                    Licence email named one licence in three paragraphs and twice inside the first
+                    one - "Motor Vehicle Pollution under Control has expired... Motor Vehicle
+                    Pollution under Control at Khavda remains expired..." - which reads as three
+                    problems when there is one. Naming is the email's scarcest currency: it gets
+                    at most two named things, and repeating one crowds out the other.
+
+                    The third sentence to carry a name goes. By then the reader has been told
+                    which licence twice; a third mention is restatement, not information.       */
+                var repeatedName = Placeholders().Matches(sentence)
+                    .Select(m => m.Value)
+                    .Where(p => p.StartsWith("{{NAME_", StringComparison.Ordinal))
+                    .FirstOrDefault(p => namesStated.TryGetValue(p, out var seen) && seen >= MaxNameMentions);
+
+                if (repeatedName is not null)
+                {
+                    removed.Add($"names {repeatedName} a third time: {sentence.Trim()}");
+                    continue;
+                }
+
+                foreach (var placeholder in Placeholders().Matches(sentence).Select(m => m.Value).Distinct())
+                    if (placeholder.StartsWith("{{NAME_", StringComparison.Ordinal))
+                        namesStated[placeholder] = namesStated.GetValueOrDefault(placeholder) + 1;
+
                 var consequence = ApprovedConsequences.FirstOrDefault(c => sentence.Contains(c, StringComparison.OrdinalIgnoreCase));
                 if (consequence is not null && !consequencesUsed.Add(consequence))
                 {
@@ -314,7 +473,12 @@ public static partial class FreeMonthlyDraftRepair
     {
         /*  A cut can leave punctuation stranded at either end. [FOUND LIVE on tenant 5] a sentence
             reached a real email as ", Adinath Kothare holds 147 of these overdue items."       */
+        /*  [FOUND LIVE on tenant 1082, 2026-09-22] "...carry personal criminal liability,." reached
+            a finished email. A cut that removes a trailing clause takes the words but leaves the
+            comma that introduced it, and the checks below only tidy a sentence that does NOT
+            already end in a terminator - so a stranded comma immediately before one survived.   */
         var text = Whitespace().Replace(sentence, " ").Replace(" ,", ",").Replace(" .", ".").TrimEnd();
+        text = StrandedComma().Replace(text, "$1");
         text = text.TrimStart().TrimStart(',', ';', ':', '-', ' ');
         if (text.Length > 0 && char.IsLower(text[0]) && sentence.TrimStart() is { Length: > 0 } s && !char.IsLower(s[0]))
             text = char.ToUpperInvariant(text[0]) + text[1..];
@@ -332,6 +496,18 @@ public static partial class FreeMonthlyDraftRepair
     }
 
     private static bool HasWords(string text) => text.Any(char.IsLetterOrDigit);
+
+    /// <summary>
+    /// True when the inference trim would cut the verb out of a "with ..." / "including ..." clause
+    /// and leave a fragment behind. The sentence is then kept whole rather than broken.
+    /// </summary>
+    private static bool DanglingIfTrimmed(string sentence) =>
+        TrailingInference().Match(sentence) is { Success: true } m
+        && ClauseNeedingItsParticiple().IsMatch(sentence[..m.Index]);
+
+    /// <summary>A trailing "with N of the M people who..." - a subject still waiting for its verb.</summary>
+    [GeneratedRegex(@",\s*(with|including)\b[^,]*$", RegexOptions.IgnoreCase)]
+    private static partial Regex ClauseNeedingItsParticiple();
 
     /// <summary>
     /// Drops trailing comma-separated clauses, one at a time, and returns the first result that the
@@ -370,9 +546,45 @@ public static partial class FreeMonthlyDraftRepair
     /// The distinctive fragments of the approved consequence sentences (shared Rule 6b). Each may be
     /// stated once per email; a second use is the model reaching for a phrase instead of a fact.
     /// </summary>
+    /// <summary>How often one name may be stated before a further mention is restatement.</summary>
+    private const int MaxNameMentions = 2;
+
+    /// <summary>
+    /// Stock phrases that place a figure in the whole scope. Useful once or twice, a stammer after.
+    /// </summary>
+    private static readonly string[] ScopingPhrases =
+    [
+        "across your organisation", "across your scope", "in your scope", "across the organisation",
+    ];
+
+    private const int MaxScopingPhraseUses = 2;
+
+    /// <summary>
+    /// Phrases that carry real weight and lose it by repetition. The short form is what a person
+    /// would say on the third mention - it refers back rather than restating.
+    /// </summary>
+    private static readonly (string Phrase, string ShortForm)[] HeavyPhrases =
+    [
+        ("personal criminal liability", "that liability"),
+        ("no renewal in progress", "no renewal"),
+        ("no renewal filed", "no renewal"),
+
+        /*  The procs' own comparison wording. It is accurate and it is also the only phrase they
+            give for "worse than the rest", so it arrives on every detector that compares a rate -
+            and the model repeats it verbatim. Three of these in one email reads as one observation
+            made three times, which is the opposite of what three separate findings deserve.     */
+        /*  The article is INSIDE the phrase, and only one form of each is listed. Both matter:
+            "an unusually large share" -> "an larger share..." is broken English, and listing the
+            bare form as well would count the same words twice and shorten on the second mention
+            rather than the third.                                                               */
+        ("an unusually large share", "a larger share than most"),
+        ("an unusually high share", "a higher share than most"),
+    ];
+
+    private const int MaxHeavyPhraseUses = 2;
+
     private static readonly string[] ApprovedConsequences =
     [
-        "prosecution of the officer",
         "no valid licence on record",
         "no one is assigned to these",
         "has been recorded against",
@@ -398,6 +610,32 @@ public static partial class FreeMonthlyDraftRepair
 
     [GeneratedRegex(@"[\d,]+")]
     private static partial Regex Digits();
+
+    /// <summary>
+    /// "3 of the 3", "2 of its 2", "1 of the 1" - the same figure as part and as whole.
+    /// </summary>
+    /// <summary>"A further", "Another", "In addition" opening a sentence - an addition nobody computed.</summary>
+    [GeneratedRegex(@"(?<=^|[.!?]\s)(a further|another|in addition,|additionally,|a total of)\s+", RegexOptions.IgnoreCase)]
+    private static partial Regex AdditiveOpener();
+
+    /// <summary>A scoping phrase that completes a comparison - "compared with 21% across your scope".</summary>
+    [GeneratedRegex(@"\b(compared with|against|versus|vs\.?)\b[^.!?]*\b(across|in) (your|the) (organisation|scope)", RegexOptions.IgnoreCase)]
+    private static partial Regex ComparisonScope();
+
+    /*  The determiner is OPTIONAL: "1 of 1 licences" reached a customer email because the pattern
+        required "of the 1". Both forms say the same useless thing.                              */
+    [GeneratedRegex(@"\b(?<n>\d+) of (the |its |their |your )?\k<n>\s+", RegexOptions.IgnoreCase)]
+    private static partial Regex SamePartAndWhole();
+
+    /// <summary>
+    /// An "as at &lt;date&gt;" qualifier, before or after binding, with its trailing comma.
+    /// </summary>
+    [GeneratedRegex(@"\s*\bas at (\{\{AS_AT\}\}|\d{1,2} [A-Za-z]{3} \d{4})\s*,?\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex AsAtPrefix();
+
+    /// <summary>A comma or semicolon left immediately before a sentence terminator by a cut.</summary>
+    [GeneratedRegex(@"\s*[,;:]+\s*([.!?])")]
+    private static partial Regex StrandedComma();
 
     /// <summary>A comma that ends a clause - one followed by whitespace, never a thousands separator.</summary>
     [GeneratedRegex(@",(?=\s)")]
