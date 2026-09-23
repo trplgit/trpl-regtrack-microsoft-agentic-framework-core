@@ -2,9 +2,7 @@
   RegTrack Insights - Phase 1d
   METRIC SNAPSHOT - the only way this engine will ever answer "since when?"
 
-  Error block : 51042-51049 (see note below - NOT 51050-51059, which is
-  already allocated to sql/07 entity, and NOT 51040-51041, already in real
-  live use - see the note below).
+  Error block : 51150-51159  (from the free list, CLAUDE.md Sec.5b)
 
   -- WHY THIS EXISTS ------------------------------------------------------
   Every dimension answers "what is true now". Not one can answer "is this
@@ -29,29 +27,6 @@
   the minimum discipline; anything ad-hoc will produce sawtooth noise that
   reads as a trend. IsComparable carries that judgement per row rather than
   leaving the reader to guess.
-
-  -- [RECONCILED 2026-09-18] This object set (table + 3 procs) was already
-  deployed live to UAT (confirmed via sys.objects/sys.sql_modules) before it
-  had ever been merged into this repo - handed off as a file numbered 28,
-  which collides with this repo's OWN sql/28 (generated_report_dimension_key,
-  also already live, also predating this handoff). Renumbered 33 here, the
-  free slot on THIS repo's sequence - the opposite direction from the
-  handoff's own renumbering, because the two environments' number 28 was
-  already taken by two DIFFERENT objects independently.
-
-  The handoff's original file also claimed error block 51050-51059 was "from
-  the free list" per CLAUDE.md Sec.5b. It is not: that block belongs to
-  sql/07 (entity), and the deployed procs below genuinely threw 51050/51051 -
-  the exact same numbers sql/07's live proc throws for two unrelated real
-  conditions (scope denied; reconciliation failed). Confirmed live via
-  sys.sql_modules on both procs before this fix. Renumbered to 51042/51043
-  here - also avoiding 51040/51041, which sql/07's live proc uses too (a
-  deliberate cross-dimension SHARED code for a Flagged>Eligible guard, not
-  tracked in this repo's own sql/07 file - a separate, still-open drift).
-  The live SnapshotRecord/SnapshotPurge procs need an ALTER PROCEDURE to
-  actually pick up 51042/51043 - this file alone does not change them,
-  since both already exist and this script's CREATE is a no-op against a
-  live object of the same name and definition-mismatch.
 
   ADDITIVE. One table, three procedures. Touches nothing that exists.
 ===========================================================================*/
@@ -106,7 +81,7 @@ BEGIN
     SET NOCOUNT ON;
 
     IF @MetricClass NOT IN ('stock', 'flow', 'rate')
-        THROW 51042, N'METRIC SNAPSHOT - MetricClass must be stock, flow or rate. A metric whose class is unknown cannot be trended safely.', 1;
+        THROW 51150, N'METRIC SNAPSHOT - MetricClass must be stock, flow or rate. A metric whose class is unknown cannot be trended safely.', 1;
 
     UPDATE dbo.InsightsMetricSnapshot
        SET Value = @Value, IsComparable = @IsComparable,
@@ -193,7 +168,7 @@ BEGIN
     SET NOCOUNT ON;
 
     IF @RetentionDays < 400
-        THROW 51043, N'METRIC SNAPSHOT - retention below 400 days would destroy the year-over-year comparison this table exists to enable. Raise the retention or change this guard deliberately.', 1;
+        THROW 51151, N'METRIC SNAPSHOT - retention below 400 days would destroy the year-over-year comparison this table exists to enable. Raise the retention or change this guard deliberately.', 1;
 
     DELETE FROM dbo.InsightsMetricSnapshot
     WHERE AsOfDate < DATEADD(DAY, -@RetentionDays, CAST(SYSUTCDATETIME() AS DATE));

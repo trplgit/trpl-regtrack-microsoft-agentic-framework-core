@@ -338,6 +338,16 @@ BEGIN
            NULL
     FROM #rows WHERE RiskType = @criticalRisk AND Instances > 0;
 
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05.
+        Emitted only where there is real exposure to rank.                     */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-RISK-EXP','imprisonment_overdue_count', RiskLabel, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by rate.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
+
     /*  THE TRAP, as an assertion. Critical and imprisonment are ~95% the same
         population; this states the overlap so a narrator can see it rather than
         treating the two as independent axes.                                   */

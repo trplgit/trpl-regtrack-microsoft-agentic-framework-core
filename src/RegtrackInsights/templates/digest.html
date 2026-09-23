@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<title>RegTrack Insights &mdash; {{TenantName}}, week ending {{WeekEnding}}</title>
+<title>RegTrack Insights &mdash; {{TenantName}}, {{PeriodPhrase}}</title>
 <!--
   ============================================================================
   REGINSIGHTS DIGEST - EMAIL SHELL TEMPLATE
@@ -17,7 +17,10 @@
   Tokens substituted by FreeDigestEmailRenderer.Substitute (Insights.
   Presentation/FreeDigestEmailRenderer.cs):
     {{TenantName}}       Customer.Name
-    {{WeekEnding}}       anchor date, "d MMM yyyy"
+    {{WeekEnding}}       anchor date, "d MMM yyyy" (footer "as at")
+    {{PeriodHeading}}    masthead period: "Week ending 6 Sep 2026", or the monthly
+                          edition's "October 2026 - Monthly overview"
+    {{PeriodPhrase}}     same, lower-case, for the title and preheader
     {{Body}}             LLM prose or the deterministic fallback - HTML-encoded
                           then **bold** converted to <strong> (FormatBody)
     {{UpgradeUrl}}       Email:UpgradeUrl - the RegInsights Ultimate upsell link
@@ -32,8 +35,8 @@
   ink #646a73) and white-space:pre-line. The generator may emit plain prose
   with blank lines between paragraphs and <strong> for emphasis, and it will
   inherit the design system automatically - no class needed on <strong>.
-  06_freetier_digest.md's prompt never emits headings or lists (free tier has
-  no location/user/Act data to structure by), but the .slot h2/h3/ul/ol/li/a
+  The 06_freetier_monthly_* prompts never emit headings or lists (shared
+  rules, "Form"), but the .slot h2/h3/ul/ol/li/a
   rules below exist so ANY tag the generator emits stays inside the design
   system rather than falling back to browser defaults - this shell is shared
   chrome, not free-tier-specific markup.
@@ -107,7 +110,7 @@
 
 <!-- Preheader (hidden preview text) -->
 <div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  Your RegTrack compliance snapshot for the week ending {{WeekEnding}}.
+  Your RegTrack compliance snapshot for the {{PeriodPhrase}}.
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef0f3;">
@@ -144,7 +147,7 @@
       {{TenantName}}
     </h1>
     <div style="font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:13px; font-weight:500; line-height:20px; color:#646a73; padding-top:3px;">
-      Week ending {{WeekEnding}}
+      {{PeriodHeading}}
     </div>
   </td></tr>
 

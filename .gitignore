@@ -501,5 +501,14 @@ docs/postman/RegTrack-Insights.postman_environment.json
 docs/postman/RegTrack-Insights-UAT.postman_environment.json
 docs/postman/trpl-uat-reginsights-endpoints-collection.postman_collection.json
 docs/postman/trpl-uat-reginsights-endpoints-environment.postman_environment.json
+
+# Free-digest preview/capture output. These files contain REAL tenant data - person names,
+# site names and who carries personal criminal liability - written unencrypted to disk by
+# FreeMonthlyPreviewWorker. They must never be committed.
+monthly-preview/
+prod_capture/
+prod_out/
+*.debug.txt
+tokens.csv
 docs/postman/trpl-uat-reginsights-gaurav-collection.postman_collection.json
 docs/postman/trpl-uat-reginsights-gaurav-environment.postman_environment.json

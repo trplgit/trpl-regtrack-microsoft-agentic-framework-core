@@ -114,6 +114,7 @@ BEGIN
         NoInstanceOwner             INT            NOT NULL,
         NoInstanceOwnerPct          DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
         CriticalInstances     INT            NOT NULL,
         DistinctUsers         INT            NOT NULL,
         BranchesCovered       INT            NOT NULL,
@@ -123,13 +124,14 @@ BEGIN
     );
 
     INSERT #rows (DepartmentID, DepartmentName, Instances, Overdue, NoInstanceOwner,
-                  ImprisonmentInstances, CriticalInstances, DistinctUsers, BranchesCovered)
+                  ImprisonmentInstances, ImprisonmentOverdue, CriticalInstances, DistinctUsers, BranchesCovered)
     SELECT
         d.DepartmentID, d.DepartmentName,
         COUNT(i.ComplianceInstanceID),
         SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.ComplianceInstanceID IS NOT NULL AND w.ComplianceInstanceID IS NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.RiskType = @criticalRisk THEN 1 ELSE 0 END),
         ISNULL(MAX(p.DistinctUsers), 0),
         COUNT(DISTINCT i.BranchID)
@@ -265,6 +267,22 @@ BEGIN
                     THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' departments share this rate - not uniquely the highest. ')
                     ELSE N'' END), N'')
     FROM #rows WHERE Instances >= @rankFloor ORDER BY OverduePct DESC, Instances DESC;
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. A-WORST-DEPT ranks by
+        OverduePct - on a live pilot that put a 69-obligation department with
+        ZERO imprisonment exposure at rank 1, above one with 1,440 overdue
+        obligations of which ~46% carry personal liability. Both assertions are
+        emitted; the composition layer chooses.                                */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-DEPT-EXP','imprisonment_overdue_count', DepartmentName,
+           ImprisonmentOverdue, NULL, (SELECT SUM(ImprisonmentOverdue) FROM #rows),
+           NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - '
+         + N'not by overdue rate. A higher rate on a smaller, liability-free portfolio '
+         + N'is a different and lesser problem.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
 
     IF (SELECT EmitMode FROM #detector WHERE Detector='high_no_instance_owner') = 'individual'
         INSERT #assert

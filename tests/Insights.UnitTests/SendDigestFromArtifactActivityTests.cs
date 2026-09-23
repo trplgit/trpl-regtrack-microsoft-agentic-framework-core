@@ -21,7 +21,6 @@ public sealed class SendDigestFromArtifactActivityTests
 {
     private static FreeDigestSettings Settings() => new()
     {
-        TokenCap = 1500,
         FromAddress = "noreply@example.com",
         FromName = "RegTrack Insights",
         UpgradeUrl = "https://example.com/upgrade",

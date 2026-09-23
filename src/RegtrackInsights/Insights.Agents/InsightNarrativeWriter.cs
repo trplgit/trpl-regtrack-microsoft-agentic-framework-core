@@ -7,7 +7,7 @@ namespace Insights.Agents;
 /// Result of one call to <see cref="InsightNarrativeWriter.WriteAsync"/>. Empty
 /// <see cref="Headline"/>/<see cref="Explanation"/> with <see cref="Source"/> =
 /// <see cref="FreeDigestSource.Fallback"/> means the caller must substitute the deterministic
-/// fallback (InsightFallbackNarrative) - same "never blocks the run" shape FreeDigestWriter uses.
+/// fallback (InsightFallbackNarrative) - same "never blocks the run" shape FreeMonthlyDigestWriter uses.
 /// </summary>
 public sealed record InsightNarrativeDraft(string Headline, string Explanation, FreeDigestSource Source, string? SkippedReason, int InputTokens, int OutputTokens)
 {
@@ -18,7 +18,7 @@ public sealed record InsightNarrativeDraft(string Headline, string Explanation, 
 /// <summary>
 /// Writes the "current insight" headline + explanation for the per-user insight JSON (ADR-0002,
 /// 2026-09-11) - prompts/07_insight_json_narrative.md. Same one-call, non-reflective, capped shape
-/// as <see cref="FreeDigestWriter"/>; <see cref="InsightFocus"/> is computed and fixed BEFORE this
+/// as <see cref="FreeMonthlyDigestWriter"/>; <see cref="InsightFocus"/> is computed and fixed BEFORE this
 /// call, never chosen by the model.
 /// </summary>
 public sealed class InsightNarrativeWriter(IClaudeClient client, IPromptLoader promptLoader)
@@ -71,7 +71,7 @@ public sealed class InsightNarrativeWriter(IClaudeClient client, IPromptLoader p
         return new InsightNarrativeDraft(parsed.Value.Headline, parsed.Value.Explanation, FreeDigestSource.Llm, null, result.InputTokens, result.OutputTokens);
     }
 
-    /// <summary>Same estimate-then-clamp shape as FreeDigestWriter.CompletionTokenBudget - see that method's own doc comment for why the prompt cost is measured, not guessed.</summary>
+    /// <summary>Same estimate-then-clamp shape as FreeMonthlyDigestWriter.CompletionTokenBudget - see that class's own doc comment for why the prompt cost is measured, not guessed.</summary>
     internal static int CompletionTokenBudget(string systemPrompt, string userMessage, int tokenCap)
     {
         var estimatedPromptTokens = (int)Math.Ceiling((systemPrompt.Length + userMessage.Length) / CharsPerToken);

@@ -1350,14 +1350,39 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         output.WriteLine($"ClientId: {config.ClientId}");
     }
 
-    // [DELETED 2026-09-22] CheckWhichEnvironmentTheTrackedDllIsFor called Trplclientsecret.BU.GetEnv()
-    // - the vendored DLL was swapped this day (libs/Trplclientsecret.dll's CONTENT replaced, exact
-    // filename kept per the csproj's own documented runtime-loading trap) after the old secret
-    // failed live with AADSTS7000215 (invalid client secret - ID pasted instead of value). The new
-    // DLL's BU class exposes only GetClientSecret()/GetHMACSecret() - no GetEnv() - confirmed via
-    // reflection, not guessed. AdalKeyVaultReportEncryptor only ever calls GetClientSecret(), so
-    // this is not a functional gap for anything real; this one throwaway diagnostic fact is simply
-    // gone along with the method it called.
+    /// <summary>
+    /// Identifies WHICH build of libs/Trplclientsecret.dll is vendored, without printing a secret.
+    ///
+    /// <para>[REWRITTEN 2026-09-22] This called <c>new BU().GetEnv()</c>, which does not exist in
+    /// this assembly - reflection shows <c>BU</c> exposes only <c>GetClientSecret()</c> and
+    /// <c>GetHMACSecret()</c>. The test therefore never compiled against the DLL it was written to
+    /// check, and it broke the whole Insights.IntegrationTests project.</para>
+    ///
+    /// <para>The question it was asking is real: AADSTS7000215 is "invalid client secret", so when
+    /// encryption fails you need to know whether the DLL or the vault is at fault. A SHA-256 prefix
+    /// answers that - the same DLL always prints the same fingerprint, a different build prints a
+    /// different one - while the secret itself never reaches the test output or a CI log.</para>
+    /// </summary>
+    [Fact]
+    public void CheckWhichBuildOfTheTrackedDllIsVendored()
+    {
+        var bu = new Trplclientsecret.BU();
+
+        output.WriteLine("libs/Trplclientsecret.dll (tracked; MUST keep this exact filename - the assembly");
+        output.WriteLine("name is baked in at build time and renaming it throws at runtime).");
+        output.WriteLine($"  assembly:         {typeof(Trplclientsecret.BU).Assembly.FullName}");
+        output.WriteLine($"  client secret:    {Fingerprint(bu.GetClientSecret())}");
+        output.WriteLine($"  HMAC secret:      {Fingerprint(bu.GetHMACSecret())}");
+
+        // A blank secret is the one outcome that is certainly wrong - it cannot authenticate.
+        Assert.False(string.IsNullOrWhiteSpace(bu.GetClientSecret()), "The vendored DLL returned an empty client secret.");
+    }
+
+    /// <summary>Stable identity for a secret, revealing nothing about the secret itself.</summary>
+    private static string Fingerprint(string? secret) =>
+        string.IsNullOrEmpty(secret)
+            ? "(EMPTY)"
+            : $"sha256:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secret)))[..16]} (length {secret.Length})";
 
     /// <summary>
     /// [ADDED 2026-09-15] Real single freehand-dimension run - Departments, Agrocel (1082/14128,

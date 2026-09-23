@@ -1,4 +1,5 @@
-﻿using Insights.Agents;
+﻿using System.Globalization;
+using Insights.Agents;
 using Insights.Data;
 using Insights.Data.Email;
 using Insights.Persistence;
@@ -68,8 +69,27 @@ public static class FreeDigestRegistration
             return new RateLimitedEmailSender(inner, settings.EmailRateLimitPerSecond, settings.EmailRateLimitAcquireTimeout);
         });
 
-        services.AddSingleton<FreeDigestWriter>();
         services.AddSingleton<InsightNarrativeWriter>();
+
+        /*  The digest email content (spec 2026-09-18) - ComposeDigestActivity always uses these.
+            Settings are read and validated HERE, eagerly - including that every configured prompt
+            version exists on disk - for the same reason as BuildSettings above.                  */
+        var monthlySettings = FreeMonthlySettings.Build(configuration, promptDirectory);
+        services.AddSingleton(monthlySettings);
+        services.AddSingleton<FreeMonthlyDigestWriter>();
+        /*  FreeDigest:Preview:ReplayDir replaces SQL with slot data captured earlier to disk, so
+            prompt and model tuning can continue when the UAT database is unavailable. Development
+            only: it is ignored unless FreeDigest:Preview:Enabled is also true, which no deployed
+            worker sets. See CapturedFreeMonthlyDigestRepository.                                */
+        var replayDir = configuration.GetValue("FreeDigest:Preview:Enabled", false)
+            ? configuration["FreeDigest:Preview:ReplayDir"]
+            : null;
+
+        if (replayDir is { Length: > 0 })
+            services.AddSingleton<IFreeMonthlyDigestRepository>(_ => new CapturedFreeMonthlyDigestRepository(Path.GetFullPath(replayDir)));
+        else
+            services.AddSingleton<IFreeMonthlyDigestRepository>(_ => new SqlFreeMonthlyDigestRepository(Require(configuration, "ConnectionStrings:RegTrack")));
+        services.AddTransient<FreeMonthlyDigestComposer>();
 
         // ADR-0002 (2026-09-11) - the insight JSON POST lane. Registered unconditionally (same
         // "inert unless configured" pattern as FreeDigestScheduler below) - a named HttpClient with
@@ -133,8 +153,6 @@ public static class FreeDigestRegistration
 
     private static FreeDigestSettings BuildSettingsCore(IConfiguration configuration) => new()
     {
-        TokenCap = configuration.GetValue<int?>("Budget:FreeDigestTokenCap")
-                   ?? throw new InvalidOperationException("Budget:FreeDigestTokenCap is not configured."),
         InsightJsonTokenCap = configuration.GetValue("Budget:InsightJsonTokenCap", 3000),
         FromAddress = Require(configuration, "Email:FromAddress"),
         FromName = configuration["Email:FromName"] ?? "RegTrack Insights",
@@ -185,7 +203,48 @@ public static class FreeDigestRegistration
                 var endpoint = Require(configuration, "Llm:AzureOpenAi:Endpoint");
                 var deployment = Require(configuration, "Llm:AzureOpenAi:Deployment");
                 var azureKey = Require(configuration, "Llm:AzureOpenAi:ApiKey");
-                return http => new AzureOpenAiChatClient(http, endpoint, deployment, azureKey);
+
+                /*  Optional, and deliberately so: absent means no temperature is sent and the
+                    deployment's own default applies. An explicit value is rejected outright by some
+                    deployments, so this must stay "unset" rather than defaulting to a number.     */
+                var temperature = configuration["Llm:AzureOpenAi:Temperature"] is { Length: > 0 } rawTemperature
+                    ? double.TryParse(rawTemperature, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && parsed is >= 0 and <= 2
+                        ? parsed
+                        : throw new InvalidOperationException("Llm:AzureOpenAi:Temperature must be a number between 0 and 2, or absent to use the deployment default.")
+                    : (double?)null;
+
+                /*  ReasoningEffort present = this is a reasoning deployment (gpt-5.6-luna and
+                    siblings). It steers accuracy in place of temperature, which such a model
+                    rejects outright - so the two are mutually exclusive and setting both stops
+                    startup rather than failing on the first call at 3am. Leave it empty for
+                    gpt-4o-mini and nothing about the request changes.                          */
+                var effort = configuration["Llm:AzureOpenAi:ReasoningEffort"]?.Trim().ToLowerInvariant();
+                if (effort is { Length: > 0 })
+                {
+                    if (effort is not ("none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max"))
+                        throw new InvalidOperationException($"Llm:AzureOpenAi:ReasoningEffort '{effort}' is not a known level (none|minimal|low|medium|high|xhigh|max).");
+
+                    if (temperature is not null)
+                        throw new InvalidOperationException(
+                            "Llm:AzureOpenAi:Temperature and ReasoningEffort are both set. A reasoning model rejects "
+                            + "temperature - clear Temperature and use ReasoningEffort as the accuracy control.");
+                }
+
+                var verbosity = configuration["Llm:AzureOpenAi:Verbosity"]?.Trim().ToLowerInvariant();
+                if (verbosity is { Length: > 0 } and not ("low" or "medium" or "high"))
+                    throw new InvalidOperationException($"Llm:AzureOpenAi:Verbosity '{verbosity}' is not a known level (low|medium|high).");
+
+                /*  Sized in THOUSANDS when reasoning is on: reasoning tokens are spent from this same
+                    budget, so a reply-sized number lets the model think itself out of an answer and
+                    return an empty body.                                                          */
+                int? maxOutputTokens = int.TryParse(configuration["Llm:AzureOpenAi:MaxOutputTokens"], out var parsedMax) ? parsedMax : null;
+                if (effort is { Length: > 0 } && maxOutputTokens is null or < 1000)
+                    throw new InvalidOperationException(
+                        "Llm:AzureOpenAi:MaxOutputTokens must be at least 1000 when ReasoningEffort is set. "
+                        + "Reasoning tokens come out of it, so a small budget returns an empty body. 8000 is a sensible start.");
+
+                return http => new AzureOpenAiChatClient(
+                    http, endpoint, deployment, azureKey, temperature, effort, verbosity, maxOutputTokens);
 
             case "openai":
                 var openAiKey = Require(configuration, "Llm:OpenAi:ApiKey");

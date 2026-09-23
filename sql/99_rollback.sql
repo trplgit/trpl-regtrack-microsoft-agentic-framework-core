@@ -1,6 +1,7 @@
 /*===========================================================================
   RegTrack Insights - ROLLBACK
-  Cleanly removes every object created by sql/01 - sql/33.
+  Cleanly removes every object created by sql/01 - sql/41.
+  (sql/42 is a validation script and creates nothing permanent.)
 
   SAFETY: this script touches ONLY objects created by the Insights scripts.
           It does NOT reference, alter, or delete any existing RegTrack table
@@ -58,7 +59,38 @@ IF OBJECT_ID('dbo.usp_Insights_Dimension_Risk',        'P') IS NOT NULL DROP PRO
 IF OBJECT_ID('dbo.usp_Insights_Dimension_Entity',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Entity;
 GO
 
-/*   Free-tier digest artifact procedures (sql/29)  */
+/*   Free-tier send log + suppression procedures (sql/15, 16)  */
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestReleaseClaim',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestReleaseClaim;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestRecordOutcome', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestRecordOutcome;
+IF OBJECT_ID('dbo.usp_Insights_FreeDigestClaimSend',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestClaimSend;
+IF OBJECT_ID('dbo.usp_Insights_DigestSuppressionList',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppressionList;
+IF OBJECT_ID('dbo.usp_Insights_DigestUnsuppress',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestUnsuppress;
+IF OBJECT_ID('dbo.usp_Insights_DigestSuppress',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppress;
+IF OBJECT_ID('dbo.usp_Insights_EligibleTenants',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_EligibleTenants;
+/*  sql/33 alters an EXISTING, live table (GeneratedReport, sql/18) rather than
+    creating one. Rollback therefore drops the constraint and the column, never
+    the table - GeneratedReport carries the paid pipeline's production history. */
+IF EXISTS (SELECT 1 FROM sys.check_constraints
+           WHERE parent_object_id = OBJECT_ID('dbo.GeneratedReport')
+             AND name = 'CK_GeneratedReport_DimensionKeyAgrees')
+    ALTER TABLE dbo.GeneratedReport DROP CONSTRAINT CK_GeneratedReport_DimensionKeyAgrees;
+IF COL_LENGTH('dbo.GeneratedReport', 'RequestedDimensions') IS NOT NULL
+    ALTER TABLE dbo.GeneratedReport DROP COLUMN RequestedDimensions;
+
+IF OBJECT_ID('dbo.usp_Insights_AgentReasoningSize',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_AgentReasoningSize;
+IF OBJECT_ID('dbo.usp_Insights_AgentReasoningPurge',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_AgentReasoningPurge;
+IF OBJECT_ID('dbo.usp_Insights_InsightJsonReleaseClaim',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonReleaseClaim;
+IF OBJECT_ID('dbo.usp_Insights_InsightJsonRecordOutcome', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonRecordOutcome;
+IF OBJECT_ID('dbo.usp_Insights_InsightJsonClaimPost',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonClaimPost;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotPurge',           'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotPurge;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotTrend',           'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotTrend;
+IF OBJECT_ID('dbo.usp_Insights_SnapshotRecord',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_SnapshotRecord;
+GO
+
+/*   Free-tier digest artifact procedures (sql/29). [RESTORED 2026-09-18] These
+     were present in the committed rollback and missing from the working copy,
+     while sql/29 still creates them - the verification step below would have
+     reported the rollback INCOMPLETE.                                         */
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactDelete',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactDelete;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactsForPurge',      'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactsForPurge;
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactMarkDispatched', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactMarkDispatched;
@@ -68,17 +100,18 @@ IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactComplete',       'P') IS NOT NU
 IF OBJECT_ID('dbo.usp_Insights_FreeDigestArtifactClaim',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestArtifactClaim;
 GO
 
-/*   Free-tier send log + suppression procedures (sql/15, 16)  */
-IF OBJECT_ID('dbo.usp_Insights_FreeDigestReleaseClaim',  'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestReleaseClaim;
-IF OBJECT_ID('dbo.usp_Insights_FreeDigestRecordOutcome', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestRecordOutcome;
-IF OBJECT_ID('dbo.usp_Insights_InsightJsonClaimPost',    'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonClaimPost;
-IF OBJECT_ID('dbo.usp_Insights_InsightJsonRecordOutcome','P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonRecordOutcome;
-IF OBJECT_ID('dbo.usp_Insights_InsightJsonReleaseClaim', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_InsightJsonReleaseClaim;
-IF OBJECT_ID('dbo.usp_Insights_FreeDigestClaimSend',     'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeDigestClaimSend;
-IF OBJECT_ID('dbo.usp_Insights_DigestSuppressionList',   'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppressionList;
-IF OBJECT_ID('dbo.usp_Insights_DigestUnsuppress',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestUnsuppress;
-IF OBJECT_ID('dbo.usp_Insights_DigestSuppress',          'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_DigestSuppress;
-IF OBJECT_ID('dbo.usp_Insights_EligibleTenants',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_EligibleTenants;
+/*   Free-tier MONTHLY edition (sql/34 - sql/41). Callers first, then the
+     helpers they call. To remove ONLY the monthly tier, run just this
+     batch (the eight DROP lines below, up to the next GO) - nothing else
+     in this file depends on them.                                            */
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Overview',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Overview;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Users',           'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Users;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Location',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Location;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Act',             'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Act;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Licence',         'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Licence;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_MemberDetectors', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_MemberDetectors;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadLicences',    'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_LoadLicences;
+IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadFacts',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_LoadFacts;
 GO
 
 /*   Metric snapshot procedures (sql/33)  */
@@ -121,23 +154,30 @@ GO
     match the '%Insights%' pattern the verification step below uses. Left in
     place they make the rollback report itself incomplete.                   */
 IF OBJECT_ID('dbo.InsightsObjectBackup_20260904','U') IS NOT NULL DROP TABLE dbo.InsightsObjectBackup_20260904;  -- pre-deployment definition snapshot, UAT only
-IF OBJECT_ID('dbo.InsightsReportRequest',     'U') IS NOT NULL DROP TABLE dbo.InsightsReportRequest;   -- sql/30, fan-out reqId -> runId grouping
 IF OBJECT_ID('dbo.InsightsTenantTokenUsage',  'U') IS NOT NULL DROP TABLE dbo.InsightsTenantTokenUsage;   -- created by the .NET layer's cost instrumentation; DDL not in this repo
-IF OBJECT_ID('dbo.InsightsAgentReasoningLog', 'U') IS NOT NULL DROP TABLE dbo.InsightsAgentReasoningLog;   -- sql/32, permanent home for agent reasoning summaries (outlives any future DTFx purge)
 IF OBJECT_ID('dbo.InsightsFreeDigestLog',     'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestLog;
 IF OBJECT_ID('dbo.InsightsDigestSuppression', 'U') IS NOT NULL DROP TABLE dbo.InsightsDigestSuppression;
-/*  sql/29 - NOTE: dropping this table discards every artifact index row.
+/*  sql/28 - NOTE: dropping InsightsMetricSnapshot destroys ALL trend history
+    and it cannot be backfilled - the source data holds only the present.
+    Think before running this in an environment that has been accumulating. */
+/*  Post-log (sql/31) and reasoning capture (sql/32). Both APPEND-ONLY.
+    InsightsAgentReasoningLog has a 90-day purge (sql/32); the snapshot table's
+    floor is 400 days because it serves trends, not incidents.
+    Dropping it discards the only permanent record of what each agent said it
+    was doing on each run.                                                    */
+/*  [RESTORED 2026-09-18] sql/29 and sql/30 tables - present in the committed
+    rollback, missing from the working copy, still created by those scripts.
+    sql/29 NOTE: dropping this table discards every artifact index row.
     Delete the corresponding "insights-digests" blob container contents
-    separately - this script only ever touches SQL, never blob storage.    */
+    separately - this script only ever touches SQL, never blob storage.     */
 IF OBJECT_ID('dbo.InsightsFreeDigestArtifact', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestArtifact;
+IF OBJECT_ID('dbo.InsightsReportRequest',      'U') IS NOT NULL DROP TABLE dbo.InsightsReportRequest;   -- sql/30, fan-out reqId -> runId grouping
 /*  sql/31 - NOTE: dropping this table discards the insight JSON's weekly-once
     guarantee. Re-running the lane after a rollback can re-POST a recipient's
     insight for a week already posted.                                     */
-IF OBJECT_ID('dbo.InsightsFreeDigestJsonLog', 'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestJsonLog;
-/*  sql/33 - NOTE: dropping this table destroys ALL trend history and it
-    cannot be backfilled - the source data holds only the present. Think
-    before running this in an environment that has been accumulating.     */
-IF OBJECT_ID('dbo.InsightsMetricSnapshot', 'U') IS NOT NULL DROP TABLE dbo.InsightsMetricSnapshot;
+IF OBJECT_ID('dbo.InsightsFreeDigestJsonLog',  'U') IS NOT NULL DROP TABLE dbo.InsightsFreeDigestJsonLog;
+IF OBJECT_ID('dbo.InsightsAgentReasoningLog',  'U') IS NOT NULL DROP TABLE dbo.InsightsAgentReasoningLog;
+IF OBJECT_ID('dbo.InsightsMetricSnapshot',     'U') IS NOT NULL DROP TABLE dbo.InsightsMetricSnapshot;
 
 IF OBJECT_ID('dbo.InsightsStatusClassification', 'U') IS NOT NULL DROP TABLE dbo.InsightsStatusClassification;
 IF OBJECT_ID('dbo.InsightsEnumPolarity',         'U') IS NOT NULL DROP TABLE dbo.InsightsEnumPolarity;
