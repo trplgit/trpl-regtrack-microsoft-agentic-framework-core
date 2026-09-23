@@ -204,6 +204,39 @@ public static class RunEndpoints
             return Results.Empty;
         });
 
+        app.MapPost("/api/insights/runs/{runId}/cancel", async (
+            string runId,
+            [FromServices] IInsightsCaller caller,
+            [FromServices] ITenantDirectoryRepository tenants,
+            [FromServices] IRunStatusReader runs,
+            [FromServices] IInsightsRunCanceller canceller,
+            CancellationToken cancellationToken) =>
+        {
+            // Same auth order as the stream endpoint above, same reasoning: the tenant is parsed
+            // out of the (guessable, derived) runId and treated as a claim to verify, never a
+            // grant - checked before anything about the run's existence is revealed.
+            if (!InsightsRunId.TryParse(runId, out var tenantId))
+                return InsightsResults.TenantNotEligible();
+
+            var tenant = await tenants.IsEligibleAsync(caller.UserId, tenantId, cancellationToken);
+            if (tenant is null)
+                return InsightsResults.TenantNotEligible();
+
+            var status = await runs.GetStatusAsync(runId, cancellationToken);
+            if (status is null)
+                return InsightsResults.Error(InsightsErrorCode.ReportNotVisible, "No such report run.");
+
+            // Idempotent, not an error - cancelling a run that already finished (by itself, or via
+            // an earlier cancel call) is a no-op, not a refusal. No new InsightsErrorCode for this:
+            // API_CONTRACTS.md's five codes are locked, and "already finished" is not a failure to
+            // report as one.
+            if (status.IsTerminal)
+                return Results.Ok(new { runId, cancelled = false, status = status.Status });
+
+            var cancelled = await canceller.CancelAsync(runId, $"Cancelled via API by user {caller.UserId}.", cancellationToken);
+            return Results.Ok(new { runId, cancelled, status = cancelled ? "failed" : status.Status });
+        });
+
         app.MapGet("/api/insights/requests/{reqId:guid}/stream", async (
             Guid reqId,
             HttpContext http,

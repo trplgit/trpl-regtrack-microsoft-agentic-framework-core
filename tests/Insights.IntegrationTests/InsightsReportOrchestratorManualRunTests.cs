@@ -1350,17 +1350,14 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
         output.WriteLine($"ClientId: {config.ClientId}");
     }
 
-    [Fact]
-    public void CheckWhichEnvironmentTheTrackedDllIsFor()
-    {
-        var env = new Trplclientsecret.BU().GetEnv();
-        output.WriteLine($"Trplclientsecret.dll (libs/Trplclientsecret.dll, tracked - confirmed UAT-only, must keep this exact filename for runtime loading) GetEnv() = '{env}'");
-
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile(@"D:\trpl-reginsights-dev\trpl-regtrack-microsoft-agentic-framework-core-dev\src\RegtrackInsights\appsettings.json")
-            .Build();
-        output.WriteLine($"ConnectionStrings:RegTrack points at: {new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configuration["ConnectionStrings:RegTrack"]).DataSource}, DB={new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(configuration["ConnectionStrings:RegTrack"]).InitialCatalog}");
-    }
+    // [DELETED 2026-09-22] CheckWhichEnvironmentTheTrackedDllIsFor called Trplclientsecret.BU.GetEnv()
+    // - the vendored DLL was swapped this day (libs/Trplclientsecret.dll's CONTENT replaced, exact
+    // filename kept per the csproj's own documented runtime-loading trap) after the old secret
+    // failed live with AADSTS7000215 (invalid client secret - ID pasted instead of value). The new
+    // DLL's BU class exposes only GetClientSecret()/GetHMACSecret() - no GetEnv() - confirmed via
+    // reflection, not guessed. AdalKeyVaultReportEncryptor only ever calls GetClientSecret(), so
+    // this is not a functional gap for anything real; this one throwaway diagnostic fact is simply
+    // gone along with the method it called.
 
     /// <summary>
     /// [ADDED 2026-09-15] Real single freehand-dimension run - Departments, Agrocel (1082/14128,

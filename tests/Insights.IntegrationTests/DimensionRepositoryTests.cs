@@ -28,6 +28,17 @@ public sealed class DimensionRepositoryTests
     public static IEnumerable<object[]> ValidatedTenants =>
     [
         [35, 5], [36, 23], [38, 29], [11885, 1355], [12006, 1363],
+        // [ADDED 2026-09-23] Real live bug, not a guess: usp_Insights_Dimension_Location's
+        // A-WORST-EXPOSURE caveat literal was 205 chars against its own Caveat NVARCHAR(200)
+        // column - a genuine SqlException (8152, "String or binary data would be truncated"),
+        // reachable ONLY when a tenant has real ImprisonmentOverdue > 0 Location data (the
+        // IF EXISTS guard on that INSERT). None of the five tenants above ever exercised that
+        // branch, so it shipped undetected until a real fixed_holistic run for 1285 hit it live.
+        // Fixed (the literal shortened, both live and re-verified); this tenant stays in the
+        // validated set so that specific branch is never untested again - see CLAUDE.md Sec.11's
+        // own "never validate on one tenant" discipline and the location-caveat-truncation-bug
+        // memory for the full trace.
+        [11416, 1285],
     ];
 
     /// <summary>

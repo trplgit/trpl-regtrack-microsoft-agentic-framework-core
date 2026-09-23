@@ -657,7 +657,15 @@ SELECT
     IF OBJECT_ID('tempdb..#find') IS NOT NULL DROP TABLE #find;
     CREATE TABLE #find (
         FindingId VARCHAR(20), Severity VARCHAR(10),
-        Headline NVARCHAR(300), AssertionIds VARCHAR(400),
+        /*  [FIX - found live 2026-09-21] Was NVARCHAR(300) - the 2026-09-17 fix widened
+            #assert.ScopeLabel to NVARCHAR(300) to match #rows.BranchName, but never checked the
+            NEXT hop: every headline below is CONCAT(ScopeLabel, <30-70 chars of literal text>,
+            Value, ...) - up to ~374 characters into a 300-wide column. Same bug class as the
+            ScopeLabel fix, one hop further downstream. Confirmed live against Minda (real
+            production data, prod-readonly replica) - "String or binary data would be truncated",
+            reconciliation refused to publish. 500 = 300 (ScopeLabel max) + longest literal suffix
+            (~70, F-PEERSTATE) + Value's string form + safety margin.                          */
+        Headline NVARCHAR(500), AssertionIds VARCHAR(400),
         NarrativeGuard NVARCHAR(300) NULL
     );
 

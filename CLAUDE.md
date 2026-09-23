@@ -19,32 +19,110 @@ Two products, already present in `Product` table of `vitComplianceSystem`:
 | 18 | RegInsights Basic | Free | Weekly email digest |
 | 19 | RegInsights Pro | Paid | In-app interactive report |
 
-### V1 release scope (2026-09-14)
+### V1 release scope (2026-09-14, Risk/Nature/Internal/Event added 2026-09-22, Users 2026-09-23)
 
-`dimension_selection` ships with exactly **7 dimensions** in this release. Do not assume the other
-2 of the 9 real dimensions (`docs/DIMENSION_SPECS.md`) are in scope - they are explicitly not, yet.
+`dimension_selection` ships with **all 9 real dimensions** in `docs/DIMENSION_SPECS.md` - complete
+as of 2026-09-22, Users moved from a fixed dedicated template to freehand 2026-09-23.
 
 | Dimension | Composition | Render |
 |---|---|---|
 | Entity | Deterministic (`FixedHolisticComposition.Build`) - Entity-alone requests redirect to `fixed_holistic` | The fixed 6-tab template |
-| Users | Deterministic (`DimensionSelectionComposition.Build`) | Own dedicated fixed template (Sambram's design system) |
+| Users | **Freehand** (moved 2026-09-23 - see note below) | Freehand, `sol` |
 | Departments | **Freehand** - real LLM call (`ComposeFreehandDimensionActivity`, `sol`) | Freehand, `sol` |
 | BacklogAging | **Freehand** | Freehand, `sol` |
 | Act | **Freehand** | Freehand, `sol` |
 | Licence | **Freehand** | Freehand, `sol` |
 | Location | **Freehand** | Freehand, `sol` |
+| Risk | **Freehand** (added 2026-09-22) | Freehand, `sol` |
+| Nature | **Freehand** (added 2026-09-22) | Freehand, `sol` |
+| Internal | **Freehand** (added 2026-09-22) | Freehand, `sol` |
+| Event | **Freehand** (added 2026-09-22) | Freehand, `sol` |
 
 "Freehand" means the composition agent genuinely decides section count/order/hero per tenant
 (grounded in that tenant's own real `dimension_rows`/`dimension_control_totals` - never a fixed
 subject) and the render agent gets creative freedom under a shared theme contract (font, palette,
 tab CSS) rather than a fixed document skeleton - see `FreehandDimensions.Names` and
 `src/RegtrackInsights/prompts/02_composition_freehand_*.md`/`05_report_html_dimension_selection_*.md`.
+**Entity is now the only real dimension NOT freehand** - it keeps its fixed 6-tab template on
+purpose (real Angular-product reference UI, not a design gap); Entity-alone requests never even
+reach `FreehandDimensions.Names` (`ReportTypeRouter.cs` redirects them to `fixed_holistic` first).
 
-**Risk, Nature, Internal, Event are NOT in v1.** They have neither a dedicated template nor
-freehand treatment yet - a request naming them still renders through the oldest generic template
-(`05_report_html_dimension_selection.md`), with zero LLM judgement on structure. This is a real,
-known gap, not a silent inconsistency - do not add tenant-facing content for these 4 without first
-closing it the same way the other 5 were closed.
+**[REPLACED 2026-09-23] Users retired its fixed dedicated template (Sambram's design system)
+entirely, moved to freehand.** Lab-tested first (composition + narrate + render, real Minda run) -
+the composition agent chose a genuinely different, tenant-specific hero (a 100% sole-reviewer-
+dependency finding: 21,751 of 21,751 assigned obligations have a sole reviewer) that the fixed
+template never surfaced, and real blocks like "68 of 305 users hold current work despite not
+logging in" that had no fixed slot to live in before. User decision: lock it in, delete the fixed
+template. Orchestrator version bumped 3.8 -> 3.9 (see its own history comment) to remove
+`ValidateUserDimensionStructureActivity` - that gate enforced the OLD fixed template's specific
+markup (4 named tabs, donut, role strip, lens toggle) and would have refused every real freehand
+render; deleted along with its class and tests, same as the fixed template's own render prompt.
+
+**[ADDED 2026-09-22] Tenant memory - cross-run narrative history, both narrate agents.** Every
+narrate call (v1 `MafNarrativeAgent`, v2 `MafAnalystNarrativeAgent`) can now read its own
+dimension's notes from past runs (`tenant_history`, always injected, never a tool call) and
+optionally save new notes via a real `write_tenant_memory` tool - one blob per tenant
+(`<tenantId>/history.md.enc`, container `insights-tenant-memory`), one `## {Dimension}` markdown
+section per dimension inside it, same envelope encryption as report blobs. Full design:
+`docs/superpowers/specs/2026-09-22-tenant-memory-blob-design.md`. Guardrails class:
+`Insights.Agents/TenantMemoryTool.cs` (dimension scope validated against a closed set, size cap,
+optimistic-concurrency retry via blob ETags). **Fails soft by design** - a Key Vault/blob failure
+here degrades to empty history / a logged error, never fails or blocks the actual report.
+`BlobServiceClient`'s default retry policy took over two minutes to give up against an unreachable
+host during implementation - bounded to `MaxRetries=1, NetworkTimeout=5s` in the tool's own
+`ClientOptions`; if a future blob-touching class here ever seems to hang instead of failing fast,
+
+**[CONFIRMED LIVE 2026-09-22, then FIXED SAME DAY]** A real end-to-end lab test first hit
+`AADSTS7000215: Invalid client secret provided` against real UAT - the vendored
+`libs/Trplclientsecret.dll` carried the App Registration's secret ID instead of its secret value.
+Fail-soft caught it correctly (clean error, no crash). Fixed by swapping the DLL's CONTENT (not its
+filename - renaming it breaks runtime loading, see that Reference's own doc comment in the csproj)
+with a corrected build carrying a working secret; re-ran the same lab test and it PASSED - real Key
+Vault encrypt/decrypt and real blob conditional read/write, both confirmed live. This is the first
+real proof this session that `AdalKeyVaultReportEncryptor` (shared with `PersistActivity`, real
+report persistence) actually works against live UAT Key Vault - previously only ever flagged as
+unconfirmed. Prod's own credential remains a SEPARATE, still-unconfirmed question. See
+`tenant-memory-blob-feature` memory for the full detail.
+check its retry policy first.
+
+**[FOUND LIVE 2026-09-22] `prompts/v2/03_narrative_analyst.md` must never hardcode a closed
+dimension list again.** It once did (a header naming only the original 5), and the model read that
+documentation as a literal allowlist, silently refusing every dimension added later with zero
+blocks in the output - a real, billed, silently-accepted-as-successful failure until a fail-loud
+check was added. Fixed; `dimension_name` in the input is now the documented sole authority. Check
+that file has no reintroduced closed list before adding any future dimension.
+
+**Event's tone constraint, distinct from every other freehand dimension:** the CONCLUSION that
+event-triggered work is unmanaged must never be stated as settled fact
+(`prompts/02_composition_freehand_event.md`/`05_report_html_dimension_selection_event.md`) - events
+may legitimately be tracked off-system, so absence of activity in this database is evidence about
+the database, not the tenant's operations. Real numbers still get stated PLAINLY, same register as
+every other dimension - only the neglect/mismanagement conclusion stays open, via one direct
+verification question per section, not a question mark on every sentence.
+
+**[FOUND LIVE 2026-09-22, FIXED SAME DAY]** The first version of this rule said "everything must
+read as a question" - real output then rendered nearly the whole page as "Could X be Y?", confirmed
+on 2 real runs (tenant 29 and Minda). Both prompt files rewritten with explicit good/bad phrasing
+examples; re-verified on the same real Minda case - now states facts plainly with one clear
+question per section. If this pattern resurfaces on a future dimension, the fix is the same: narrow
+"must be a question" to name the ONE conclusion that must stay open, never the whole sentence.
+
+`05_report_html_dimension_selection.md` (the oldest, generic, zero-LLM-judgement template) is now
+unreferenced by anything in v1 scope - every real dimension has its own specific render prompt.
+
+**[FOUND LIVE 2026-09-22] `ReadOnlySqlFetchTool` (`Insights.Agents`) lost its own `#scoped` temp
+table on real tenant 1105/user 10315 - "Invalid object name '#scoped'"**, reproduced with no LLM
+involved at all. Root cause: the tool built `#scoped` and ran the model's query as TWO separate
+round-trips on the same `SqlConnection`. `@@SPID` was identical before and after the failure,
+ruling out a new physical connection or a MARS session mismatch - the signature instead matches
+Microsoft.Data.SqlClient's idle/connection resiliency (`ConnectRetryCount=1`, on by default): a
+silently recovered connection restores most session state but explicitly never restores local temp
+tables or table variables. Any gap between two round-trips on the same connection is a real window
+for this, however rare. Fixed by combining the `#scoped` build and the model's query into ONE batch,
+ONE round-trip - `SELECT...INTO` never returns its own result set, so this is a pure fix, not a
+behavior change. If this tool (or any future one built the same way - temp table setup, then a
+second command on the same connection) ever throws "Invalid object name" again, check `@@SPID`
+before assuming it is something else; if it is unchanged, this is very likely the same class of bug.
 
 ### Authoritative documents — read before implementing a component
 
@@ -262,6 +340,8 @@ On one tenant that was a phantom 3,946-instance gap.
 | `Compliance.IsDeleted` | Instances can reference a **soft-deleted** Compliance master (70 on one tenant). Omitting the filter makes the control total disagree with every dimension |
 | SQL file encoding | The deployment path is **not** UTF-8 aware. It corrupted a pre-existing RegTrack proc (`USP_GetEscalationCounts_Mobile_Statutory`) as well as ours |
 | Character detection | Default collation is accent-insensitive; `LIKE` gives false positives when detecting non-ASCII |
+| `usp_Insights_Dimension_Location`'s `Caveat` column | **[FOUND LIVE 2026-09-23]** `#assert.Caveat NVARCHAR(200)` - the `A-WORST-EXPOSURE` assertion's hardcoded caveat literal was 205 chars, a real `SqlException 8152 ("String or binary data would be truncated")`. Only reachable when `EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)` - a real, data-dependent branch that none of the five long-standing `DimensionRepositoryTests.ValidatedTenants` ever exercised, so it shipped and sat undetected until a real tenant (1285) hit it live. Fixed (literal shortened to 186 chars, live-verified); tenant 1285 added to the validated set. **General lesson: any hardcoded string literal inserted into a fixed-width temp-table column is a live truncation risk if the literal is ever edited without re-measuring it against the column - and if the INSERT sits behind a conditional, standard single/few-tenant testing will not catch it. Count the characters before widening or rewording a literal like this one.** |
+| `AdalKeyVaultReportEncryptor`'s connection string | **[FOUND LIVE 2026-09-23]** It reads its Key Vault client secret from whatever DB its constructor's connection string points to - construct it with the prod-readonly replica (`regtech_dev01_readonly`, 10.224.254.4) instead of the writable UAT DB and every encrypt/decrypt call fails with a real `AADSTS7000215: Invalid client secret provided` (the replica's copy of that secret is stale). Same fix as `PersistActivity`'s own `RegTrackReportsWrite` split: reads may target the replica, but Key Vault/encryption (and, by the same reasoning, `SqlToolInvocationRecorder`/`SqlAgentReasoningRecorder` writes) must always go through the writable connection string, never the read-only one, even in a lab harness that only reads tenant data from the replica |
 
 ---
 
@@ -511,6 +591,7 @@ Useful tenant profiles for validation:
 | 522 | **No branch ≥50 instances** — empty peer sample |
 | 2480 / 1807 | **Single-branch** tenants |
 | 1216 | Very large (1.49M past-due schedules) — perf testing |
+| 1285 (user 11416) | **Real `ImprisonmentOverdue > 0` Location data** — the only tenant among all of these that exercises Location's `A-WORST-EXPOSURE` caveat branch. Found the truncation bug in §5 below; now in `DimensionRepositoryTests.ValidatedTenants` so that branch stays tested. |
 
 ---
 

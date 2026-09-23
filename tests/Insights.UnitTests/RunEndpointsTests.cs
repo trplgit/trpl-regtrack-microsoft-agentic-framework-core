@@ -172,6 +172,76 @@ public sealed class RunEndpointsTests
         Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("reportId").ValueKind);
     }
 
+    /// <summary>POST /api/insights/runs/{runId}/cancel - same IDOR guard as the stream endpoint.</summary>
+    [Fact]
+    public async Task Cancel_RefusesARunBelongingToAnotherTenant()
+    {
+        var otherTenantRun = RunIdFor(9999);
+        var runs = new FakeRunStatusReader(Running(otherTenantRun));
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var canceller = new FakeRunCanceller();
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, runs, canceller: canceller);
+
+        var response = await client.PostAsync($"/api/insights/runs/{otherTenantRun}/cancel", null);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await AssertErrorCodeAsync(response, "TENANT_NOT_ELIGIBLE");
+        Assert.Empty(canceller.Calls);
+    }
+
+    [Fact]
+    public async Task Cancel_ReturnsNotFoundForAnUnknownRunOnAnEligibleTenant()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var canceller = new FakeRunCanceller();
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, new FakeRunStatusReader(null), canceller: canceller);
+
+        var response = await client.PostAsync($"/api/insights/runs/{RunIdFor(Tenant)}/cancel", null);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await AssertErrorCodeAsync(response, "REPORT_NOT_VISIBLE");
+        Assert.Empty(canceller.Calls);
+    }
+
+    /// <summary>Already-finished run: a no-op, not an error - the canceller is never even called.</summary>
+    [Fact]
+    public async Task Cancel_IsANoOpOnAnAlreadyTerminalRun()
+    {
+        var runId = RunIdFor(Tenant);
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var runs = new FakeRunStatusReader(new InsightsRunStatus(runId, "complete", "complete", 7, 7, null));
+        var canceller = new FakeRunCanceller();
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, runs, canceller: canceller);
+        var response = await client.PostAsync($"/api/insights/runs/{runId}/cancel", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(json.RootElement.GetProperty("cancelled").GetBoolean());
+        Assert.Empty(canceller.Calls);
+    }
+
+    /// <summary>A running run: the canceller is invoked for exactly this runId, and success is reported.</summary>
+    [Fact]
+    public async Task Cancel_CallsTheCancellerForARunningRun()
+    {
+        var runId = RunIdFor(Tenant);
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var runs = new FakeRunStatusReader(Running(runId));
+        var canceller = new FakeRunCanceller(cancelledResult: true);
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, runs, canceller: canceller);
+        var response = await client.PostAsync($"/api/insights/runs/{runId}/cancel", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(json.RootElement.GetProperty("cancelled").GetBoolean());
+
+        var call = Assert.Single(canceller.Calls);
+        Assert.Equal(runId, call.RunId);
+    }
+
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)
     {
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());

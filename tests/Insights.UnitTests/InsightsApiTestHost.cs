@@ -28,7 +28,8 @@ internal static class InsightsApiTestHost
         IInsightsRunEnqueuer? enqueuer = null,
         IReportContentService? content = null,
         ICooldownRepository? cooldown = null,
-        IReportRequestRepository? requests = null)
+        IReportRequestRepository? requests = null,
+        IInsightsRunCanceller? canceller = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -48,6 +49,8 @@ internal static class InsightsApiTestHost
                     services.AddSingleton(content);
                 if (cooldown is not null)
                     services.AddSingleton(cooldown);
+                if (canceller is not null)
+                    services.AddSingleton(canceller);
                 services.AddSingleton(requests ?? new FakeReportRequestRepository());
             });
             web.Configure(app =>
@@ -240,6 +243,18 @@ internal sealed class FakeReportRequestRepository : IReportRequestRepository
 
     public Task<IReadOnlyList<string>> GetRunIdsAsync(Guid reqId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<string>>(_byReqId.TryGetValue(reqId, out var runIds) ? runIds : []);
+}
+
+/// <summary>Records every cancel request and hands back a fixed result, never touching a real task hub.</summary>
+internal sealed class FakeRunCanceller(bool cancelledResult = true) : IInsightsRunCanceller
+{
+    public List<(string RunId, string Reason)> Calls { get; } = [];
+
+    public Task<bool> CancelAsync(string runId, string reason, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((runId, reason));
+        return Task.FromResult(cancelledResult);
+    }
 }
 
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
