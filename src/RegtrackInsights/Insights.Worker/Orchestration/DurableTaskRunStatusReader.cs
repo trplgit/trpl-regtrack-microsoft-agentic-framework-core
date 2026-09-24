@@ -59,7 +59,47 @@ public sealed class DurableTaskRunStatusReader(
             StagesComplete: stagesComplete,
             StagesTotal: StagesTotal,
             Message: status == "failed" ? FailureMessage : null,
-            ReportId: status == "complete" ? ParseReportId(state.Output, runId) : null);
+            ReportId: status == "complete" ? ParseReportId(state.Output, runId) : null,
+            Dimension: ParseDimension(state.Input, runId));
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-24] Reads the real dimension this run is for straight out of the
+    /// orchestration's OWN stored input (DTFx persists whatever object CreateOrchestrationInstanceAsync
+    /// was called with as InputText) - no new column, no new write path, this data was already
+    /// there. RequestedDimensions is a single-element list for a fanned-out dimension_selection unit
+    /// (RunEndpoints.cs's GenerateOneReportAsync - one orchestration instance per requested
+    /// dimension) - real, verified, never the ORIGINAL caller's full multi-dimension list. Null/
+    /// absent RequestedDimensions with ReportType fixed_holistic means "Entity", the same product-
+    /// facing label ReportTypeRouter's own Entity-alone redirect already uses - never invented here,
+    /// just read back. Same defensive stance as ParseReportId/ParseCustomStatus: unreadable input
+    /// degrades to null, never throws past a status read.
+    /// </summary>
+    private string? ParseDimension(string? input, string runId)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(input);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("RequestedDimensions", out var dimensions)
+                && dimensions.ValueKind == JsonValueKind.Array && dimensions.GetArrayLength() > 0)
+                return dimensions[0].GetString();
+
+            if (root.TryGetProperty("ReportType", out var reportType)
+                && reportType.GetString() == FixedHolisticComposition.ReportType)
+                return "Entity";
+
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Run {RunId} has an unreadable orchestration input; dimension will be reported as unknown.", runId);
+            return null;
+        }
     }
 
     /// <summary>

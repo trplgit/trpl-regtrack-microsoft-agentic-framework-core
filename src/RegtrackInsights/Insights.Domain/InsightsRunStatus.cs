@@ -21,6 +21,15 @@ namespace Insights.Domain;
 /// report to open, and this is not the internal-diagnostics channel Message's own doc comment warns
 /// about - it is either the real id or nothing.
 /// </param>
+/// <param name="Dimension">
+/// [ADDED 2026-09-24] The real dimension this run is for - "Entity" for fixed_holistic (matching
+/// the product-facing label ReportTypeRouter's own Entity redirect already uses), the requested
+/// dimension name for dimension_selection, null only if the orchestration's own stored Input could
+/// not be read (never a reason to fail the whole status read - see DurableTaskRunStatusReader's own
+/// ParseDimension). Lets a caller polling several runs under one reqId (RunEndpoints.cs's
+/// /api/insights/requests/{reqId}/stream) tell which real dimension each runId/reportId belongs to
+/// without having to keep its own separate mapping from the original POST response.
+/// </param>
 public sealed record InsightsRunStatus(
     string RunId,
     string Status,
@@ -28,7 +37,8 @@ public sealed record InsightsRunStatus(
     int StagesComplete,
     int StagesTotal,
     string? Message,
-    string? ReportId = null)
+    string? ReportId = null,
+    string? Dimension = null)
 {
     public bool IsTerminal => Status is "complete" or "failed";
 }

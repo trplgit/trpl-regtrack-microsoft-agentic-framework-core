@@ -472,7 +472,7 @@ public static class RunEndpoints
         var initial = await AggregateStatusAsync(runs, runIds, cancellationToken);
         await WriteRequestFrameAsync(http, eventName: null, reqId, initial, cancellationToken);
 
-        if (IsTerminalRequestStatus(initial))
+        if (IsTerminalRequestStatus(initial.Status))
             return;
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -488,13 +488,20 @@ public static class RunEndpoints
 
                 var current = await AggregateStatusAsync(runs, runIds, deadline.Token);
 
-                if (current != previous)
+                // [CHANGED 2026-09-24] Was `current != previous` on the bare aggregate status
+                // string - real gap: the aggregate can sit on "in_progress" for its WHOLE
+                // lifetime while individual dimensions finish one at a time underneath it, so a
+                // caller would never see a sibling's real reportId land until every dimension was
+                // done. Comparing the per-run detail too means a frame goes out the moment ANY
+                // one dimension's own status/reportId changes, not just when the rollup category
+                // flips.
+                if (RequestStatusChanged(previous, current))
                 {
                     await WriteRequestFrameAsync(http, eventName: null, reqId, current, deadline.Token);
                     previous = current;
                 }
 
-                if (IsTerminalRequestStatus(current))
+                if (IsTerminalRequestStatus(current.Status))
                     return;
             }
         }
@@ -506,28 +513,36 @@ public static class RunEndpoints
     }
 
     /// <summary>
-    /// One status read per sub-run, then RequestStatusAggregator's worst-first rollup. A sub-run
-    /// the instance store has no record of yet (freshly enqueued, before its first checkpoint)
-    /// reports null here - treated as "queued", the same "no stage yet" window a single run's own
-    /// GetStatusAsync already models, not a genuine absence (SaveAsync only ever stores a runId
-    /// this same request just successfully enqueued).
+    /// One status read per sub-run, then RequestStatusAggregator's worst-first rollup - plus, as of
+    /// 2026-09-24, the real per-run detail (dimension/runId/status/reportId) the aggregate rollup
+    /// alone throws away. A sub-run the instance store has no record of yet (freshly enqueued,
+    /// before its first checkpoint) reports null here - treated as "queued", the same "no stage
+    /// yet" window a single run's own GetStatusAsync already models, not a genuine absence
+    /// (SaveAsync only ever stores a runId this same request just successfully enqueued).
     /// </summary>
-    private static async Task<string> AggregateStatusAsync(
+    private static async Task<RequestAggregateStatus> AggregateStatusAsync(
         IRunStatusReader runs, IReadOnlyList<string> runIds, CancellationToken cancellationToken)
     {
         var subStatuses = new List<string>(runIds.Count);
+        var reports = new List<RequestSubReportStatus>(runIds.Count);
         foreach (var runId in runIds)
         {
             var status = await runs.GetStatusAsync(runId, cancellationToken);
-            subStatuses.Add(status?.Status ?? "queued");
+            var runStatus = status?.Status ?? "queued";
+            subStatuses.Add(runStatus);
+            reports.Add(new RequestSubReportStatus(status?.Dimension, runId, runStatus, status?.ReportId));
         }
 
-        return RequestStatusAggregator.Aggregate(subStatuses);
+        return new RequestAggregateStatus(RequestStatusAggregator.Aggregate(subStatuses), reports);
     }
+
+    /// <summary>Record equality on RequestAggregateStatus would use reference equality for its Reports list - compared explicitly instead.</summary>
+    private static bool RequestStatusChanged(RequestAggregateStatus previous, RequestAggregateStatus current) =>
+        previous.Status != current.Status || !previous.Reports.SequenceEqual(current.Reports);
 
     private static bool IsTerminalRequestStatus(string status) => status is "completed" or "error";
 
-    private static async Task TryWriteFinalRequestFrameAsync(HttpContext http, Guid reqId, string last)
+    private static async Task TryWriteFinalRequestFrameAsync(HttpContext http, Guid reqId, RequestAggregateStatus last)
     {
         try
         {
@@ -540,9 +555,17 @@ public static class RunEndpoints
     }
 
     private static async Task WriteRequestFrameAsync(
-        HttpContext http, string? eventName, Guid reqId, string status, CancellationToken cancellationToken)
+        HttpContext http, string? eventName, Guid reqId, RequestAggregateStatus aggregate, CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.Serialize(new { reqId, status });
+        var payload = JsonSerializer.Serialize(new
+        {
+            reqId,
+            status = aggregate.Status,
+            // [ADDED 2026-09-24] Real per-dimension detail - lets a caller polling this one
+            // reqId learn every sibling's runId/reportId without keeping its own separate
+            // mapping from the original POST response.
+            reports = aggregate.Reports.Select(r => new { dimension = r.Dimension, runId = r.RunId, status = r.Status, reportId = r.ReportId }),
+        });
 
         var frame = eventName is null
             ? "data: " + payload + "\n\n"
@@ -552,6 +575,15 @@ public static class RunEndpoints
         await http.Response.Body.FlushAsync(cancellationToken);
     }
 }
+
+/// <summary>
+/// [ADDED 2026-09-24] One sub-run's real detail under a fan-out reqId - see
+/// RunEndpoints.MapInsightsRunEndpoints's AggregateStatusAsync/WriteRequestFrameAsync.
+/// </summary>
+public sealed record RequestSubReportStatus(string? Dimension, string RunId, string Status, string? ReportId);
+
+/// <summary>The combined rollup plus the real per-run detail it rolls up from - see AggregateStatusAsync.</summary>
+public sealed record RequestAggregateStatus(string Status, IReadOnlyList<RequestSubReportStatus> Reports);
 
 /// <summary>
 /// The wire shape of API_CONTRACTS.md §3's POST body.
