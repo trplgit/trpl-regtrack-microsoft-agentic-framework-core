@@ -57,7 +57,8 @@ CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Location
     @ConcentrationFactor DECIMAL(4,2) = 2.00,
     @MemberFloor         INT          = 5,
     @SpofFloor           INT          = 5,     -- min open items for a site to be a single-point-of-failure candidate
-    @MaxPerDetector      INT          = 5
+    @MaxPerDetector      INT          = 5,
+    @MaxExamples         INT          = 3      -- examples named inside an aggregate-mode pattern (2026-09-23)
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -112,6 +113,15 @@ BEGIN
         BaseCount INT NULL, EventDate DATE NULL, AsAtRequired BIT NOT NULL DEFAULT 0,
         ProblemCount INT NOT NULL, PopulationCount INT NOT NULL, DefaultSlot TINYINT NULL);
 
+    /*  Examples for aggregate-mode patterns (grid #6). Shared shape - byte-identical in sql/36,
+        38, 39, 40, 41; sql/37 fills it for the four shared detectors.                          */
+    IF OBJECT_ID('tempdb..#eg') IS NOT NULL DROP TABLE #eg;
+    CREATE TABLE #eg (
+        Detector VARCHAR(40) NOT NULL, PatternFactKey VARCHAR(40) NOT NULL, ExampleRank INT NOT NULL,
+        EntityKind VARCHAR(20) NOT NULL, EntityId BIGINT NULL, EntityLabel NVARCHAR(MAX) NOT NULL,
+        ContextKind VARCHAR(20) NULL, ContextLabel NVARCHAR(MAX) NULL,
+        ItemCount INT NULL, BaseCount INT NULL, UnitLabel NVARCHAR(200) NOT NULL);
+
     IF OBJECT_ID('tempdb..#facts') IS NOT NULL DROP TABLE #facts;
     CREATE TABLE #facts (
         FactKey VARCHAR(40) NOT NULL PRIMARY KEY, FactValue INT NOT NULL, DisplayLabel NVARCHAR(MAX) NOT NULL,
@@ -152,7 +162,7 @@ BEGIN
     EXEC dbo.usp_Insights_FreeMonthly_MemberDetectors
          @EntityKind = 'location', @EntityPlural = N'locations',
          @RelativeRiskFactor = @RelativeRiskFactor, @ConcentrationFactor = @ConcentrationFactor,
-         @MemberFloor = @MemberFloor, @MaxPerDetector = @MaxPerDetector;
+         @MemberFloor = @MemberFloor, @MaxPerDetector = @MaxPerDetector, @MaxExamples = @MaxExamples;
 
     /*===================================================================
       3. LOCATION-ONLY DETECTORS
@@ -273,13 +283,32 @@ BEGIN
                 N'per cent of all overdue items sit at the 3 locations holding the most (rounded down)',
                 'locations', 180, 'stock', 'operational_continuity', 3, 0, 8);
 
+    /*  [2026-09-23] Each pattern now carries its _of partner - the population it was measured
+        against. SPOF's population is the sites holding enough open work (@SpofFloor), NOT every
+        site in scope: without the partner a model reaching for a denominator took loc_in_scope
+        and produced "N of 24" - both figures real, the fraction nobody's.                    */
     IF @spofMode = 'aggregate'
         INSERT #facts (FactKey, FactValue, DisplayLabel, Section, DisplayOrder, WindowScope, ImpactClass, SeverityTier, AsAtRequired, HeadlineRank)
-        VALUES ('pat_single_point_of_failure', @spofF, N'locations depend on a single person for all their open work - a pattern across your scope', 'patterns', 740, 'stock', 'operational_continuity', 2, 0, 6);
+        VALUES ('pat_single_point_of_failure',    @spofF, N'locations depend on a single person for all their open work - a pattern across your scope', 'patterns', 740, 'stock', 'operational_continuity', 2, 0, 6),
+               ('pat_single_point_of_failure_of', @spofE, N'locations holding enough open work to be assessed were compared',                          'patterns', 741, 'ctx',   'volume',                 5, 0, NULL);
 
     IF @ghostMode = 'aggregate'
         INSERT #facts (FactKey, FactValue, DisplayLabel, Section, DisplayOrder, WindowScope, ImpactClass, SeverityTier, AsAtRequired, HeadlineRank)
-        VALUES ('pat_ghost_location', @ghostF, N'locations in your scope have no obligations configured - a structural pattern, likely a wider location master', 'patterns', 750, 'ctx', 'operational_continuity', 3, 0, 7);
+        VALUES ('pat_ghost_location',    @ghostF, N'locations in your scope have no obligations configured - a structural pattern, likely a wider location master', 'patterns', 750, 'ctx', 'operational_continuity', 3, 0, 7),
+               ('pat_ghost_location_of', @ghostE, N'locations in your scope were checked for configured obligations',                                          'patterns', 751, 'ctx', 'volume',                 5, 0, NULL);
+
+    /*  EXAMPLES - single_point_of_failure only. ghost_location NEVER: its members hold zero
+        obligations, so its order is alphabetical, and "including A, B and C" would present an
+        alphabetical accident as significance. The count stands on its own.                    */
+    IF @spofMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'single_point_of_failure', 'pat_single_point_of_failure',
+               ROW_NUMBER() OVER (ORDER BY st.OpenItems DESC, st.BranchID),
+               'location', st.BranchID, m.MemberLabel, st.OpenItems, NULL,
+               N'open obligations at this location are all assigned to one person'
+        FROM #site st JOIN #mem m ON m.MemberId = st.BranchID
+        WHERE st.IsSpof = 1 AND m.MemberLabel IS NOT NULL
+        ORDER BY st.OpenItems DESC, st.BranchID;
 
     /*===================================================================
       5. DEFAULT SLOTS + HEADLINE (identical block in every dimension slot)
@@ -310,6 +339,13 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM #facts WHERE IsHeadline = 1)
             UPDATE #facts SET IsHeadline = 1 WHERE FactKey = 't_rm_due';
     END
+
+    /*  EXAMPLES CONTRACT (2026-09-23 design, Sec.2.7). An example exists only in aggregate
+        mode, beside the pattern fact it illustrates. Codes from this file's own block.       */
+    IF EXISTS (SELECT 1 FROM #eg e JOIN #cand c ON c.Detector = e.Detector)
+        THROW 51283, N'EXAMPLES CONTRACT VIOLATED - a free monthly location detector emitted both named candidates and examples. Examples exist only in aggregate mode. Refusing to emit.', 1;
+    IF EXISTS (SELECT 1 FROM #eg e LEFT JOIN #facts f ON f.FactKey = e.PatternFactKey WHERE f.FactKey IS NULL)
+        THROW 51285, N'EXAMPLES CONTRACT VIOLATED - a free monthly location example refers to a pattern fact that was not emitted. Refusing to emit.', 1;
 
     /*===================================================================
       6. EMIT
@@ -354,6 +390,13 @@ BEGIN
         ('prev_month_not_settled', (SELECT ISNULL(SUM(LmDue), 0) FROM #mm),
          N'Last-month figures are as at the run date; late closures can still arrive.')
     ) AS dq(Code, ItemCount, Detail);
+
+    /*  Grid #6 - APPENDED LAST, never before data_quality (a reader not yet updated would
+        map example rows onto its data_quality shape). Empty is normal.                     */
+    SELECT 'examples' AS ResultSet, Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel,
+           ContextKind, ContextLabel, ItemCount, BaseCount, UnitLabel
+    FROM #eg
+    ORDER BY PatternFactKey, ExampleRank;
 END
 GO
 

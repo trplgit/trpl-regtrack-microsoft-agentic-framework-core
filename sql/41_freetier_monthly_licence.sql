@@ -57,7 +57,8 @@ CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Licence
     @AsOf                DATETIME,
     @RelativeRiskFactor  DECIMAL(4,2) = 1.50,
     @TypeFloor           INT          = 10,    -- min licences for a type to be compared (declared fallback to 1)
-    @MaxPerDetector      INT          = 5
+    @MaxPerDetector      INT          = 5,
+    @MaxExamples         INT          = 3      -- examples named inside an aggregate-mode pattern (2026-09-23)
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -82,6 +83,15 @@ BEGIN
         Metric VARCHAR(40) NOT NULL, MetricPct INT NULL, TenantPct INT NULL, ItemCount INT NULL,
         BaseCount INT NULL, EventDate DATE NULL, AsAtRequired BIT NOT NULL DEFAULT 0,
         ProblemCount INT NOT NULL, PopulationCount INT NOT NULL, DefaultSlot TINYINT NULL);
+
+    /*  Examples for aggregate-mode patterns (grid #6). Shared shape - byte-identical in sql/36,
+        38, 39, 40, 41; sql/37 fills it for the four shared detectors.                          */
+    IF OBJECT_ID('tempdb..#eg') IS NOT NULL DROP TABLE #eg;
+    CREATE TABLE #eg (
+        Detector VARCHAR(40) NOT NULL, PatternFactKey VARCHAR(40) NOT NULL, ExampleRank INT NOT NULL,
+        EntityKind VARCHAR(20) NOT NULL, EntityId BIGINT NULL, EntityLabel NVARCHAR(MAX) NOT NULL,
+        ContextKind VARCHAR(20) NULL, ContextLabel NVARCHAR(MAX) NULL,
+        ItemCount INT NULL, BaseCount INT NULL, UnitLabel NVARCHAR(200) NOT NULL);
 
     IF OBJECT_ID('tempdb..#facts') IS NOT NULL DROP TABLE #facts;
     CREATE TABLE #facts (
@@ -301,6 +311,28 @@ BEGIN
         VALUES ('pat_licence_type_lapse_rate',    @typeF, N'licence types lapse without renewal unusually often - a pattern', 'patterns', 710, 'stock', 'licence_continuity', 2, 0, 5),
                ('pat_licence_type_lapse_rate_of', @typeE, N'licence types were compared',                                    'patterns', 711, 'ctx',   'volume',             5, 0, NULL);
 
+    /*  EXAMPLES - the sites / types holding the most expired-unrenewed licences. Same order
+        as individual mode, counts only. An unnamed type (NULL master name) is never one.    */
+    IF @locMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'expired_unrenewed_location', 'pat_expired_unrenewed_location',
+               ROW_NUMBER() OVER (ORDER BY ll.ExpiredUnrenewed DESC, ll.BranchID),
+               'location', ll.BranchID, ll.BranchName, ll.ExpiredUnrenewed, ll.Licences,
+               N'of the licences held at this location are expired with no renewal in progress'
+        FROM #licLoc ll
+        WHERE ll.IsFlagged = 1 AND ll.BranchName IS NOT NULL
+        ORDER BY ll.ExpiredUnrenewed DESC, ll.BranchID;
+
+    IF @typeMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'licence_type_lapse_rate', 'pat_licence_type_lapse_rate',
+               ROW_NUMBER() OVER (ORDER BY lt.ExpiredUnrenewed DESC, lt.LicenseTypeID),
+               'licence_type', lt.LicenseTypeID, lt.LicenseTypeName, lt.ExpiredUnrenewed, lt.Licences,
+               N'of the licences of this type are expired with no renewal in progress'
+        FROM #licType lt
+        WHERE lt.IsFlagged = 1 AND lt.LicenseTypeName IS NOT NULL
+        ORDER BY lt.ExpiredUnrenewed DESC, lt.LicenseTypeID;
+
     /*===================================================================
       5. DEFAULT SLOTS + HEADLINE (identical block in every dimension slot)
     ===================================================================*/
@@ -330,6 +362,13 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM #facts WHERE IsHeadline = 1)
             UPDATE #facts SET IsHeadline = 1 WHERE FactKey = 'lic_total';
     END
+
+    /*  EXAMPLES CONTRACT (2026-09-23 design, Sec.2.7). An example exists only in aggregate
+        mode, beside the pattern fact it illustrates. Codes from this file's own block.       */
+    IF EXISTS (SELECT 1 FROM #eg e JOIN #cand c ON c.Detector = e.Detector)
+        THROW 51301, N'EXAMPLES CONTRACT VIOLATED - a free monthly licence detector emitted both named candidates and examples. Examples exist only in aggregate mode. Refusing to emit.', 1;
+    IF EXISTS (SELECT 1 FROM #eg e LEFT JOIN #facts f ON f.FactKey = e.PatternFactKey WHERE f.FactKey IS NULL)
+        THROW 51305, N'EXAMPLES CONTRACT VIOLATED - a free monthly licence example refers to a pattern fact that was not emitted. Refusing to emit.', 1;
 
     /*===================================================================
       6. EMIT
@@ -377,6 +416,13 @@ BEGIN
         ('licence_scope_branch_only', CASE WHEN @total > 0 THEN 1 ELSE 0 END,
          N'Licences are scoped by authorised branch only (no category link without Lic_tbl_LicenseComplianceInstanceMapping).')
     ) AS dq(Code, ItemCount, Detail);
+
+    /*  Grid #6 - APPENDED LAST, never before data_quality (a reader not yet updated would
+        map example rows onto its data_quality shape). Empty is normal.                     */
+    SELECT 'examples' AS ResultSet, Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel,
+           ContextKind, ContextLabel, ItemCount, BaseCount, UnitLabel
+    FROM #eg
+    ORDER BY PatternFactKey, ExampleRank;
 END
 GO
 

@@ -105,6 +105,8 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory, st
     /// prompt's **bold** markdown into &lt;strong&gt; - safe to do in that order because encoding
     /// leaves the ASCII asterisks untouched.
     /// </summary>
+    /*  [OWNER, 2026-09-23] Emphasis is weight only - no colour, no tint. The insight phrases a
+        paragraph carries are chosen in FreeMonthlyDraftNormalizer; here every span renders alike. */
     private static string FormatBody(string body) =>
         BoldMarkdown().Replace(WebUtility.HtmlEncode(body), "<strong>$1</strong>");
 

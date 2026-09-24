@@ -161,6 +161,30 @@ public sealed record MonthlyCandidate(
 public sealed record MonthlyDataQuality(string Code, int ItemCount, string Detail);
 
 /// <summary>
+/// One row of the <c>examples</c> result set (grid #6, sql/36-41): a member that ILLUSTRATES an
+/// aggregate-mode pattern fact. Not a finding. The emission policy (CLAUDE.md Sec.4) still reports a
+/// pattern that covers more than a fifth of the members as ONE aggregate finding; an example only
+/// lets the email say "18 of your 24 locations ..., including Khavda, Jabalpur and Surat".
+///
+/// <para>[DECIDED 2026-09-23, docs/superpowers/specs/2026-09-23-aggregate-mode-examples-design.md]
+/// An example carries identification and scale - its own <see cref="ItemCount"/> of
+/// <see cref="BaseCount"/> - and never a rate against the scope: the rate-versus-tenant comparison
+/// is what makes a row an individual finding, so it is structurally absent here.</para>
+/// </summary>
+public sealed record MonthlyExample(
+    string Detector,
+    string PatternFactKey,
+    int ExampleRank,
+    string EntityKind,
+    long? EntityId,
+    string EntityLabel,
+    string? ContextKind,
+    string? ContextLabel,
+    int? ItemCount,
+    int? BaseCount,
+    string UnitLabel);
+
+/// <summary>
 /// Everything one monthly slot proc returned for one scope group. <see cref="HeadlineSource"/> is
 /// <c>fact</c> (a fact carries IsHeadline) or <c>candidate</c> (the DefaultSlot 1 candidate leads).
 /// </summary>
@@ -171,7 +195,15 @@ public sealed record MonthlyDigestData(
     IReadOnlyList<MonthlyFact> Facts,
     IReadOnlyList<MonthlyDetectorPolicy> DetectorPolicy,
     IReadOnlyList<MonthlyCandidate> Candidates,
-    IReadOnlyList<MonthlyDataQuality> DataQuality);
+    IReadOnlyList<MonthlyDataQuality> DataQuality)
+{
+    /// <summary>
+    /// Grid #6, examples for aggregate-mode patterns. An init property rather than a positional
+    /// parameter so that preview captures serialised before the grid existed deserialise to empty,
+    /// and a proc not yet redeployed simply yields none.
+    /// </summary>
+    public IReadOnlyList<MonthlyExample> Examples { get; init; } = [];
+}
 
 /// <summary>
 /// A monthly slot proc refused to return data (THROW 51230-51309: scope denied, reconciliation failed,

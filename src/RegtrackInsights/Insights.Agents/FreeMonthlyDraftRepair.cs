@@ -79,6 +79,17 @@ public static partial class FreeMonthlyDraftRepair
         "named finding", "recent finding", "this finding", "the finding",
         "the figures provided", "the data provided", "the input",
 
+        /*  [FOUND LIVE on UAT tenant 5, 2026-09-23] "The figures describe the standing backlog
+            and work left from August; no separate work due before September ends is provided."
+            The model reporting on its own input again - "is provided" by whom? The reader was
+            sent an email, not a dataset.                                                       */
+        "is provided", "are provided", "not provided", "the figures describe",
+
+        /*  [OWNER, 2026-09-23] "the other 4 are not named here" reads as the email apologising
+            for what it withholds. The closing line already says the briefing names only what
+            stands out; the body never says what it leaves out.                                */
+        "not named here", "not named in this", "are not named", "is not named", "not shown here", "not included here",
+
         /*  [FOUND LIVE on tenant 1082, 2026-09-22] "This is the only location identified with that
             pattern." Identified by whom, and what pattern? The sentence reports on the ANALYSIS
             instead of on the reader's business, and a compliance head has sites and Acts, not
@@ -139,7 +150,11 @@ public static partial class FreeMonthlyDraftRepair
         "concerning", "worrying", "critical situation", "the situation is",
 
         // A recap is not content. The last paragraph should carry its own.
-        "in summary", "to summarise", "to summarize", "overall,", "in conclusion",
+        "in summary", "to summarise", "to summarize", "in conclusion",
+        /*  "overall," moved to RecapOpeners. [FOUND LIVE on PROD tenant 1008, 2026-09-23] It matched
+            "a higher overdue rate than the organisation overall, including {{EG_1}}..." mid-sentence
+            and deleted the one sentence carrying all six example names. A recap word is a recap
+            only when it OPENS the sentence.                                                      */
     ];
 
     /*  A figure the model spelled out. Converting it to digits does not change what the sentence
@@ -149,8 +164,16 @@ public static partial class FreeMonthlyDraftRepair
         number - and still rejects if it was invented. "one" is left alone: it is nearly always the
         pronoun ("one of 3 licences"), and "three" is converted like the rest, because the labels
         that legitimately say "three" all carry a top-3 fact whose value is in the allowed set.  */
+    /*  [FOUND LIVE on UAT tenant 5, 2026-09-23] "Thirty other Acts meeting the same measure are
+        not named here" - the residual line the prompt asks for, with ResidualCount 30 spelled
+        out. The tens were not in this table, so the word reached the validator unconverted and
+        a true, four-name Act email was replaced by the deterministic fallback over one word.
+        The tens are converted like the units; compounds ("thirty-two") are not, and still
+        reject, because a hyphenated pair cannot be checked as one figure.                     */
     private static readonly (string Word, string Digit)[] SpelledNumbers =
     [
+        ("ninety", "90"), ("eighty", "80"), ("seventy", "70"), ("sixty", "60"),
+        ("fifty", "50"), ("forty", "40"), ("thirty", "30"),
         ("twenty", "20"), ("nineteen", "19"), ("eighteen", "18"), ("seventeen", "17"),
         ("sixteen", "16"), ("fifteen", "15"), ("fourteen", "14"), ("thirteen", "13"),
         ("twelve", "12"), ("eleven", "11"), ("ten", "10"), ("nine", "9"), ("eight", "8"),
@@ -173,8 +196,24 @@ public static partial class FreeMonthlyDraftRepair
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var consequencesUsed = new HashSet<string>(StringComparer.Ordinal);
         var asAtStated = false;
+        var officerTailStated = false;
         var namesStated = new Dictionary<string, int>(StringComparer.Ordinal);
         var phrasesUsed = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-09-24] "At your {{NAME_1}}, all 39 obligations
+            remain open" - and NAME_1 was the Companies Act. "At your" is the site formulation
+            the rules ask for; an Act takes "under". The placeholders that name an Act are known
+            from the prompt, so the preposition is corrected rather than asked for again.       */
+        var actPlaceholders = new HashSet<string>(StringComparer.Ordinal);
+        if (prompt is not null)
+        {
+            foreach (var n in prompt.NamedFindings)
+                if (string.Equals(n.Candidate.EntityKind, "act", StringComparison.OrdinalIgnoreCase) && n.NamePlaceholder is { } np)
+                    actPlaceholders.Add(np);
+            foreach (var e in prompt.Examples)
+                if (string.Equals(e.Example.EntityKind, "act", StringComparison.OrdinalIgnoreCase))
+                    actPlaceholders.Add(e.Placeholder);
+        }
 
         foreach (var paragraph in body.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.None))
         {
@@ -190,7 +229,9 @@ public static partial class FreeMonthlyDraftRepair
             }
 
             var kept = new List<string>();
-            foreach (var original in SplitSentences(trimmed))
+            var sentences = SplitSentences(trimmed).ToList();
+            var fullMentionsInParagraph = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var original in sentences)
             {
                 /*  Least destructive first: trim the model's own inference off the end, then its
                     intensifiers, and only drop the whole sentence if what remains is still a claim
@@ -208,8 +249,25 @@ public static partial class FreeMonthlyDraftRepair
                     : TrailingInference().Replace(original, string.Empty);
                 sentence = Intensifier().Replace(sentence, string.Empty);
 
-                foreach (var (word, digit) in SpelledNumbers)
-                    sentence = Regex.Replace(sentence, $@"\b{word}\b", digit, RegexOptions.IgnoreCase);
+                /*  A sentence never OPENS with a digit. [FOUND LIVE on PROD tenant 1008, 2026-09-23]
+                    "Three compliance categories also have overdue rates..." became "3 compliance
+                    categories also..." - correct, checkable, and the one thing a company secretary
+                    would never write. The opening word is left as the model spelled it; the
+                    validator checks a sentence-initial number word against the closed set by its
+                    value, so nothing is lost but the ugliness.                                   */
+                var opening = SentenceInitialNumberWord().Match(sentence);
+                var opensWithNumberWord = opening.Success
+                    && SpelledNumbers.Any(s => s.Word.Equals(opening.Groups[1].Value, StringComparison.OrdinalIgnoreCase));
+                if (!opensWithNumberWord)
+                    foreach (var (word, digit) in SpelledNumbers)
+                        sentence = Regex.Replace(sentence, $@"\b{word}\b", digit, RegexOptions.IgnoreCase);
+                else
+                    /*  ...and in a sentence that opens with a word, a small bare digit becomes a
+                        word too: "Three of the 8 compliance categories" reads as a misprint;
+                        "Three of the eight" does not. Only 2-20, never a percentage, never a
+                        comma-grouped figure. The validator checks each by value.             */
+                    sentence = SmallBareDigit().Replace(sentence, m =>
+                        SpelledNumbers.FirstOrDefault(s => s.Digit == m.Value).Word is { } word ? word : m.Value);
 
                 /*  "As at {{AS_AT}}" belongs on the FIRST as-at figure and nowhere else. [FOUND
                     LIVE on tenant 1082, 2026-09-22] The Overview opened two paragraphs with the
@@ -219,7 +277,10 @@ public static partial class FreeMonthlyDraftRepair
                     figure and its sentence are untouched.                                       */
                 if (asAtStated && AsAtPrefix().IsMatch(sentence))
                 {
-                    sentence = AsAtPrefix().Replace(sentence, " ", 1);
+                    /*  Keep the comma the qualifier carried. [FOUND LIVE on PROD tenant 1008,
+                        2026-09-23] "17,041 obligations as at {{AS_AT}}, including 14,049" became
+                        "17,041 obligations including 14,049" - the clause comma went with the date. */
+                    sentence = AsAtPrefix().Replace(sentence, m => m.Value.Contains(',') ? ", " : " ", 1);
                     removed.Add($"repeats 'as at': {original.Trim()}");
                 }
                 else if (AsAtPrefix().IsMatch(sentence))
@@ -244,19 +305,58 @@ public static partial class FreeMonthlyDraftRepair
                     Substituted, not deleted: by the third mention the reader knows what liability
                     is meant, and "that liability" reads as ordinary English while keeping the claim
                     intact. Deleting would remove a real finding, which is never the right trade. */
-                foreach (var (phrase, shortForm) in HeavyPhrases)
+                /*  [FOUND LIVE on tenant 1082, 2026-09-23] ...but only where "that" has something
+                    to point at. The Users email's last paragraph read "13 obligations due this month
+                    carry that liability" - its first and only mention of liability, the full phrase
+                    having been used up two paragraphs earlier. A reader skimming one paragraph has no
+                    idea what "that" refers to. So the short form is used only when the SAME
+                    paragraph already spelled the phrase out; a paragraph's first mention is always
+                    the full phrase, whatever the email-wide count.                                  */
+                /*  THE OFFICER TAIL, ONCE. [OWNER, PROD tenant 1008, 2026-09-23] "personal criminal
+                    liability for the responsible officer" appeared in full in four of six
+                    paragraphs. The rule below keeps the full phrase at each paragraph's first
+                    mention, correctly, so it never fired. The TAIL is different: "personal
+                    criminal liability" stands on its own in any paragraph, so after the first
+                    full statement the tail is dropped everywhere. Only words go; the claim stays. */
+                if (OfficerTail().IsMatch(sentence))
+                {
+                    if (officerTailStated)
+                    {
+                        sentence = OfficerTail().Replace(sentence, m => $"{m.Groups[1].Value}personal criminal liability{m.Groups[2].Value}");
+                        removed.Add($"shortened repeated 'for the responsible officer': {original.Trim()}");
+                    }
+                    else
+                    {
+                        officerTailStated = true;
+                    }
+                }
+
+                foreach (var (phrase, shortForm, needsAntecedent) in HeavyPhrases)
                 {
                     if (!sentence.Contains(phrase, StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    if (phrasesUsed.GetValueOrDefault(phrase) >= MaxHeavyPhraseUses)
+                    if (phrasesUsed.GetValueOrDefault(phrase) >= MaxHeavyPhraseUses
+                        && (!needsAntecedent || fullMentionsInParagraph.Contains(phrase)))
                     {
                         sentence = Regex.Replace(sentence, Regex.Escape(phrase), shortForm, RegexOptions.IgnoreCase);
+                        removed.Add($"shortened repeated '{phrase}': {original.Trim()}");
+                    }
+                    /*  [OWNER, PROD tenant 1008, 2026-09-23] The full phrase appeared in four of six
+                        Overview paragraphs, each one a paragraph's first mention and so untouched
+                        by the rule above. Beyond the allowance, a mention with no antecedent in
+                        its paragraph takes the standalone short form ("personal liability") rather
+                        than "that liability" - it needs nothing to point at, and it is still true. */
+                    else if (phrasesUsed.GetValueOrDefault(phrase) >= MaxHeavyPhraseUses
+                             && StandaloneShortForms.TryGetValue(phrase, out var standalone))
+                    {
+                        sentence = Regex.Replace(sentence, Regex.Escape(phrase), standalone, RegexOptions.IgnoreCase);
                         removed.Add($"shortened repeated '{phrase}': {original.Trim()}");
                     }
                     else
                     {
                         phrasesUsed[phrase] = phrasesUsed.GetValueOrDefault(phrase) + 1;
+                        fullMentionsInParagraph.Add(phrase);
                     }
                 }
 
@@ -306,6 +406,20 @@ public static partial class FreeMonthlyDraftRepair
                 sentence = SamePartAndWhole().Replace(sentence, m =>
                     m.Groups["n"].Value == "1" ? "the only " : m.Groups["n"].Value == "2" ? "both " : $"all {m.Groups["n"].Value} ");
 
+                if (actPlaceholders.Count > 0)
+                    sentence = AtYourName().Replace(sentence, m =>
+                        actPlaceholders.Contains(m.Groups["p"].Value)
+                            ? (char.IsUpper(m.Value[0]) ? "Under " : "under ") + m.Groups["p"].Value
+                            : m.Value);
+
+                /*  [FOUND LIVE on PROD tenant 1008, 2026-09-24] "is one of 18 people sharing this
+                    concentration, with 17 others" - the residual said twice in one sentence, and
+                    the sentence appeared twice in the email. Shared Rule 6 asks for it once; when
+                    the sentence already says "one of N", the "with N others" tail is the same
+                    fact again and goes.                                                        */
+                if (OneOfN().IsMatch(sentence))
+                    sentence = WithNOthers().Replace(sentence, string.Empty);
+
                 sentence = Tidy(sentence, original);
 
                 if (!sentence.Trim().Equals(original.Trim(), StringComparison.Ordinal))
@@ -348,7 +462,8 @@ public static partial class FreeMonthlyDraftRepair
                 /*  \b only works where the phrase ends in a word character. "overall," never
                     matched, so "Overall, the standing position shows areas requiring attention"
                     reached a real email - the boundary is applied per end instead.            */
-                var offender = RemoveTheSentence.FirstOrDefault(p => Regex.IsMatch(sentence, Bounded(p), RegexOptions.IgnoreCase));
+                var offender = RemoveTheSentence.FirstOrDefault(p => Regex.IsMatch(sentence, Bounded(p), RegexOptions.IgnoreCase))
+                               ?? (RecapOpener().IsMatch(sentence) ? "recap opener" : null);
                 if (offender is not null)
                 {
                     removed.Add($"'{offender}': {sentence.Trim()}");
@@ -385,23 +500,28 @@ public static partial class FreeMonthlyDraftRepair
                     one - "Motor Vehicle Pollution under Control has expired... Motor Vehicle
                     Pollution under Control at Khavda remains expired..." - which reads as three
                     problems when there is one. Naming is the email's scarcest currency: it gets
-                    at most two named things, and repeating one crowds out the other.
+                    at most four named things (two at the time), and repeating one crowds out
+                    the others.
 
                     The third sentence to carry a name goes. By then the reader has been told
                     which licence twice; a third mention is restatement, not information.       */
+                /*  AN EXAMPLE IS STATED ONCE. [2026-09-23 aggregate-examples design, Sec.3.5] An
+                    example ({{EG_n}}) illustrates an aggregate finding inside that finding's own
+                    sentence. A second sentence about it is how an example becomes a finding in
+                    prose - its own paragraph, its own argument - which is the Sec.4 inversion the
+                    separate token exists to prevent. So the allowance is one mention, not two.  */
                 var repeatedName = Placeholders().Matches(sentence)
                     .Select(m => m.Value)
-                    .Where(p => p.StartsWith("{{NAME_", StringComparison.Ordinal))
-                    .FirstOrDefault(p => namesStated.TryGetValue(p, out var seen) && seen >= MaxNameMentions);
+                    .FirstOrDefault(p => namesStated.TryGetValue(p, out var seen) && seen >= MaxMentionsFor(p));
 
                 if (repeatedName is not null)
                 {
-                    removed.Add($"names {repeatedName} a third time: {sentence.Trim()}");
+                    removed.Add($"names {repeatedName} again: {sentence.Trim()}");
                     continue;
                 }
 
                 foreach (var placeholder in Placeholders().Matches(sentence).Select(m => m.Value).Distinct())
-                    if (placeholder.StartsWith("{{NAME_", StringComparison.Ordinal))
+                    if (MaxMentionsFor(placeholder) < int.MaxValue)
                         namesStated[placeholder] = namesStated.GetValueOrDefault(placeholder) + 1;
 
                 var consequence = ApprovedConsequences.FirstOrDefault(c => sentence.Contains(c, StringComparison.OrdinalIgnoreCase));
@@ -413,6 +533,33 @@ public static partial class FreeMonthlyDraftRepair
 
                 kept.Add(sentence);
             }
+
+            /*  A PARAGRAPH THAT LOST ITS FIGURE LOSES ITS COMMENTARY TOO. [FOUND LIVE on PROD
+                tenant 1008, 2026-09-23] "Of the 1,005 obligations that fell due ..., 367 are
+                already past due" was deleted (the "1st" defect, since fixed) and its follower
+                "This is broadly the same position as last month rather than a change in
+                direction." shipped alone - a verdict about nothing. A sentence with no figure
+                and no name explains the sentence before it; when that sentence is gone, so is
+                its meaning. Only a paragraph something was removed FROM is judged this way: a
+                paragraph the model wrote without a figure (a quiet month, no licences tracked)
+                is left as written. A sentence REWRITTEN in place ("2 of the 2" to "both") is
+                not a removal, so a paragraph that is whole but figure-less after rewriting
+                stays.                                                                         */
+            var sentencesDropped = sentences.Count(s => HasWords(s)) > kept.Count;
+            if (kept.Count > 0 && sentencesDropped
+                && !kept.Any(s => s.Any(char.IsDigit) || Placeholders().IsMatch(s)))
+            {
+                removed.Add($"orphaned commentary (its figure was removed): {string.Join(" ", kept.Select(s => s.Trim()))}");
+                continue;
+            }
+
+            // A verdict sentence beside a figure sentence goes; see IsCommentaryWithoutAFigure.
+            if (kept.Any(s => s.Any(char.IsDigit) || Placeholders().IsMatch(s)))
+                foreach (var commentary in kept.Where(IsCommentaryWithoutAFigure).ToList())
+                {
+                    removed.Add($"commentary without a figure: {commentary.Trim()}");
+                    kept.Remove(commentary);
+                }
 
             if (kept.Count > 0)
                 paragraphs.Add(string.Join(" ", kept.Select(s => s.Trim())));
@@ -436,12 +583,22 @@ public static partial class FreeMonthlyDraftRepair
     /// </summary>
     private static string CorrectTranscriptionSlips(string sentence, FreeMonthlyDigestPrompt prompt, List<string> log)
     {
-        var stripped = Placeholders().Replace(sentence, "ph");
+        var stripped = FreeMonthlyDigestValidator.WithoutOrdinals(Placeholders().Replace(sentence, "ph"));
 
         foreach (Match m in NumberToken().Matches(stripped))
         {
             var written = m.Value.Replace(",", string.Empty);
             if (!int.TryParse(written, out var value) || prompt.AllowedNumbers.Contains(value))
+                continue;
+
+            /*  [FOUND LIVE on PROD tenant 1008, 2026-09-23] "12 licences with no end date" became
+                "62 licences" - 62 was a real fact one digit away, and 12 was the correct figure
+                the closed set had failed to include. A two-digit number is one digit away from
+                eighteen others, so at that length "exactly one candidate" is chance, not
+                evidence of a slip. The corrector was built for 4-digit transcription errors
+                ("2709" for 3709) and is now confined to figures of three digits or more; a short
+                figure that is not in the data is left for the caller to delete, never rewritten. */
+            if (written.Length < MinDigitsForSlipCorrection)
                 continue;
 
             var candidates = prompt.AllowedNumbers
@@ -462,6 +619,54 @@ public static partial class FreeMonthlyDraftRepair
     [GeneratedRegex(@"\{\{[A-Z0-9_]+\}\}")]
     private static partial Regex Placeholders();
 
+    /// <summary>
+    /// The full liability phrase with its officer tail, singular or plural. The normalizer runs
+    /// BEFORE the repair and bolds the phrase, so the markers are matched and kept: "**personal
+    /// criminal liability** for the responsible officer" -> "**personal criminal liability**".
+    /// [FOUND LIVE on PROD tenant 1008, 2026-09-23] Without this the rule never fired.
+    /// </summary>
+    [GeneratedRegex(@"(\*\*)?personal criminal liability(\*\*)? for the responsible officers?", RegexOptions.IgnoreCase)]
+    private static partial Regex OfficerTail();
+
+    /// <summary>A placeholder that names a thing - a finding, its site, or an example - never a month or a date.</summary>
+    [GeneratedRegex(@"\{\{(NAME|EG)_\d+(_AT)?\}\}")]
+    private static partial Regex NamePlaceholders();
+
+    /// <summary>A recap word that OPENS a sentence ("Overall, the position...") - never the same word inside one.</summary>
+    [GeneratedRegex(@"^\s*overall\s*,", RegexOptions.IgnoreCase)]
+    private static partial Regex RecapOpener();
+
+    /// <summary>A capitalised number word opening the sentence ("Three compliance categories ...").</summary>
+    [GeneratedRegex(@"^\s*([A-Z][a-z]+)\b")]
+    private static partial Regex SentenceInitialNumberWord();
+
+    /// <summary>A bare one- or two-digit figure: not part of a comma-grouped number, not a percentage, not a day ("1st").</summary>
+    [GeneratedRegex(@"(?<![\d,])\b(\d{1,2})\b(?![,.]?\d|\s*%|st|nd|rd|th)")]
+    private static partial Regex SmallBareDigit();
+
+    /// <summary>
+    /// A sentence that carries no figure, no name and no approved consequence, inside a paragraph
+    /// that does carry a figure, is a verdict about the sentence before it. [FOUND LIVE on PROD
+    /// tenant 1008, 2026-09-23] "This is longstanding outstanding work, rather than only a recent
+    /// monthly position." and "These categories contain obligations that remain outstanding across
+    /// the organisation." - each a restatement, each exactly the stock verdict the prompt says to
+    /// fold into the figure's own sentence. Sentences that state a residual or an absence in the
+    /// data's own words are kept; so is any paragraph with no figure at all (a quiet month).
+    /// </summary>
+    private static bool IsCommentaryWithoutAFigure(string sentence) =>
+        !sentence.Any(char.IsDigit)
+        // A month or date token is context, not a figure or a name: "This is the work {{PREV_MONTH}}
+        // left outstanding, including exposure that rests with named individuals" is still a verdict.
+        && !NamePlaceholders().IsMatch(sentence)
+        && !SpelledNumbers.Any(s => Regex.IsMatch(sentence, $@"\b{s.Word}\b", RegexOptions.IgnoreCase))
+        && !ApprovedConsequences.Any(c => sentence.Contains(c, StringComparison.OrdinalIgnoreCase))
+        && !KeptWithoutAFigure.Any(k => sentence.Contains(k, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Figure-less sentences the prompts ask for: the residual at zero, the empty-scope branches.</summary>
+    private static readonly string[] KeptWithoutAFigure =
+        ["no other", "the only", "no licences are tracked", "no open work", "nothing is configured", "cannot be assessed"];
+
+
     [GeneratedRegex(@"\d{1,3}(?:,\d{3})+|\d+")]
     private static partial Regex NumberToken();
 
@@ -477,7 +682,11 @@ public static partial class FreeMonthlyDraftRepair
             a finished email. A cut that removes a trailing clause takes the words but leaves the
             comma that introduced it, and the checks below only tidy a sentence that does NOT
             already end in a terminator - so a stranded comma immediately before one survived.   */
-        var text = Whitespace().Replace(sentence, " ").Replace(" ,", ",").Replace(" .", ".").TrimEnd();
+        var text = Whitespace().Replace(sentence, " ").Replace(" ,", ",").Replace(" ;", ";").Replace(" :", ":").Replace(" .", ".").TrimEnd();
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-09-24] "Across your organisation,, 125 licences"
+            arrived from the model with the comma doubled. A punctuation mark repeated is never
+            meant, so any run of the same mark collapses to one.                              */
+        text = DoubledPunctuation().Replace(text, "$1");
         text = StrandedComma().Replace(text, "$1");
         text = text.TrimStart().TrimStart(',', ';', ':', '-', ' ');
         if (text.Length > 0 && char.IsLower(text[0]) && sentence.TrimStart() is { Length: > 0 } s && !char.IsLower(s[0]))
@@ -549,6 +758,21 @@ public static partial class FreeMonthlyDraftRepair
     /// <summary>How often one name may be stated before a further mention is restatement.</summary>
     private const int MaxNameMentions = 2;
 
+    /// <summary>A figure shorter than this is never rewritten as a typo - see CorrectTranscriptionSlips.</summary>
+    private const int MinDigitsForSlipCorrection = 3;
+
+    /// <summary>An example is an illustration inside its finding's sentence; a second mention makes it a finding.</summary>
+    private const int MaxExampleMentions = 1;
+
+    /// <summary>
+    /// The mention allowance for a placeholder: a named thing twice, an example once, and no limit
+    /// on the tokens that are not names at all ({{AS_AT}}, {{PREV_MONTH}}, {{DATE_n}}, site tokens).
+    /// </summary>
+    private static int MaxMentionsFor(string placeholder) =>
+        placeholder.StartsWith("{{NAME_", StringComparison.Ordinal) && !placeholder.EndsWith("_AT}}", StringComparison.Ordinal) ? MaxNameMentions
+        : placeholder.StartsWith("{{EG_", StringComparison.Ordinal) && !placeholder.EndsWith("_AT}}", StringComparison.Ordinal) ? MaxExampleMentions
+        : int.MaxValue;
+
     /// <summary>
     /// Stock phrases that place a figure in the whole scope. Useful once or twice, a stammer after.
     /// </summary>
@@ -563,11 +787,14 @@ public static partial class FreeMonthlyDraftRepair
     /// Phrases that carry real weight and lose it by repetition. The short form is what a person
     /// would say on the third mention - it refers back rather than restating.
     /// </summary>
-    private static readonly (string Phrase, string ShortForm)[] HeavyPhrases =
+    /// <para><c>NeedsAntecedent</c> marks a short form that points back ("that liability") and so
+    /// is only used inside a paragraph that has already spelled the phrase out. A short form that
+    /// stands on its own ("no renewal", "a larger share than most") may be used anywhere.</para>
+    private static readonly (string Phrase, string ShortForm, bool NeedsAntecedent)[] HeavyPhrases =
     [
-        ("personal criminal liability", "that liability"),
-        ("no renewal in progress", "no renewal"),
-        ("no renewal filed", "no renewal"),
+        ("personal criminal liability", "that liability", true),
+        ("no renewal in progress", "no renewal", false),
+        ("no renewal filed", "no renewal", false),
 
         /*  The procs' own comparison wording. It is accurate and it is also the only phrase they
             give for "worse than the rest", so it arrives on every detector that compares a rate -
@@ -577,11 +804,17 @@ public static partial class FreeMonthlyDraftRepair
             "an unusually large share" -> "an larger share..." is broken English, and listing the
             bare form as well would count the same words twice and shorten on the second mention
             rather than the third.                                                               */
-        ("an unusually large share", "a larger share than most"),
-        ("an unusually high share", "a higher share than most"),
+        ("an unusually large share", "a larger share than most", false),
+        ("an unusually high share", "a higher share than most", false),
     ];
 
     private const int MaxHeavyPhraseUses = 2;
+
+    /// <summary>A short form that stands on its own, for a mention beyond the allowance with no antecedent in its paragraph.</summary>
+    private static readonly Dictionary<string, string> StandaloneShortForms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["personal criminal liability"] = "personal liability",
+    };
 
     private static readonly string[] ApprovedConsequences =
     [
@@ -636,6 +869,22 @@ public static partial class FreeMonthlyDraftRepair
     /// <summary>A comma or semicolon left immediately before a sentence terminator by a cut.</summary>
     [GeneratedRegex(@"\s*[,;:]+\s*([.!?])")]
     private static partial Regex StrandedComma();
+
+    /// <summary>The same mark twice or more in a row (",,", ";;") - never intended.</summary>
+    [GeneratedRegex(@"([,;:])(?:\s*\1)+")]
+    private static partial Regex DoubledPunctuation();
+
+    /// <summary>"At your {{NAME_n}}" - right for a site, wrong for an Act.</summary>
+    [GeneratedRegex(@"\b[Aa]t your (?<p>\{\{NAME_\d+\}\})")]
+    private static partial Regex AtYourName();
+
+    /// <summary>"one of 18 people", "one of the 5 sites" - the residual, stated once.</summary>
+    [GeneratedRegex(@"\bone of (?:the )?\d[\d,]*\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OneOfN();
+
+    /// <summary>", with 17 others", ", with 34 other Acts in the same position" - the residual again.</summary>
+    [GeneratedRegex(@",?\s*(?:and\s+)?with \d[\d,]* others?\b[^,.;]*", RegexOptions.IgnoreCase)]
+    private static partial Regex WithNOthers();
 
     /// <summary>A comma that ends a clause - one followed by whitespace, never a thousands separator.</summary>
     [GeneratedRegex(@",(?=\s)")]

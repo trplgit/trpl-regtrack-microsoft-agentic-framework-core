@@ -8,33 +8,51 @@ namespace Insights.Worker.Integration;
 /// field names, casing and the three distinct response envelope shapes below are copied verbatim
 /// from that document, not invented here. Nothing in this file is domain logic: it exists only so
 /// PostInsightJsonActivity has something to serialize onto (and deserialize off) the wire.
+///
+/// <para>ADR-0004 (revised 2026-09-24): <see cref="Report"/> IS the insight card, in the exact
+/// field list the /insights hub binds. The receiver stores it free-form and renders it as the
+/// current week's hero card and, once later weeks exist, as a compact previous-week card from the
+/// same object. Previous weeks are the receiver's own stored periods, never resent.</para>
 /// </summary>
 public sealed record AiReportWeeklyUpsertRequest(
     [property: JsonPropertyName("customer_id")] int CustomerId,
     [property: JsonPropertyName("user_id")] long UserId,
     [property: JsonPropertyName("period_start_date")] DateOnly PeriodStartDate,
-    [property: JsonPropertyName("report")] AiReportWeeklyReport Report,
+    [property: JsonPropertyName("report")] AiReportWeeklyInsight Report,
     [property: JsonPropertyName("model_version")] string? ModelVersion,
     [property: JsonPropertyName("source_reference")] string? SourceReference);
 
-/// <summary>
-/// The free-form "report" object the spec allows any shape for. ADR-0003 D4: narrative +
-/// provenance + the one data-layer-verified focus figure - deliberately NOT the full internal
-/// aggregate set (that stays a paid-tier boundary, not a wire-format concern).
-/// </summary>
-public sealed record AiReportWeeklyReport(
-    [property: JsonPropertyName("headline")] string Headline,
-    [property: JsonPropertyName("explanation")] string Explanation,
-    [property: JsonPropertyName("severity_band")] string SeverityBand,
-    [property: JsonPropertyName("source")] string Source,
-    [property: JsonPropertyName("focus")] AiReportWeeklyFocus Focus);
+// -- the insight card (the report object) ---------------------------------------------------
 
-public sealed record AiReportWeeklyFocus(
-    [property: JsonPropertyName("metric")] string Metric,
-    [property: JsonPropertyName("value")] int Value,
-    [property: JsonPropertyName("denominator")] int? Denominator,
+/// <summary>
+/// The ten fields the frontend binds. Adding one here without the frontend changing with it is a
+/// silent contract break, so this record stays exactly as wide as that page is.
+/// </summary>
+public sealed record AiReportWeeklyInsight(
+    [property: JsonPropertyName("insight_id")] string InsightId,
+    [property: JsonPropertyName("tier")] string Tier,
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("week_of")] string WeekOf,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("headline")] string Headline,
+    [property: JsonPropertyName("narrative")] string Narrative,
+    [property: JsonPropertyName("primary_metric")] AiReportWeeklyPrimaryMetric PrimaryMetric,
+    [property: JsonPropertyName("supporting_metrics")] IReadOnlyList<AiReportWeeklySupportingMetric> SupportingMetrics);
+
+public sealed record AiReportWeeklyPrimaryMetric(
     [property: JsonPropertyName("label")] string Label,
-    [property: JsonPropertyName("display_text")] string DisplayText);
+    [property: JsonPropertyName("current")] int Current,
+    [property: JsonPropertyName("target")] int Target,
+    [property: JsonPropertyName("unit")] string Unit,
+    [property: JsonPropertyName("direction")] string Direction);
+
+public sealed record AiReportWeeklySupportingMetric(
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("value")] int Value,
+    [property: JsonPropertyName("unit")] string Unit);
+
+// -- responses (unchanged) ------------------------------------------------------------------
 
 /// <summary>The 200 OK body. `result.status` is "Created" on first POST for a key, "Updated" on every re-POST.</summary>
 public sealed record AiReportWeeklyUpsertResult(

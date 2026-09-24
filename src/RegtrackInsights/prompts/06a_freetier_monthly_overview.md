@@ -1,75 +1,54 @@
 # Free Monthly Insights - Overview
 
-**Runs:** the first Sunday of every month, per recipient scope group.
-**Data:** `dbo.usp_Insights_FreeMonthly_Overview` (sql/36).
-**Read first:** `06_freetier_monthly_shared_rules`.
+The first email of the month and the only one that looks at everything; for many readers
+the only one they read closely. It answers: where do I stand this month, what is the one
+thing I should know, and where does it sit? Pick the three or four things that matter
+most and give each a proper paragraph, with the named site, person, Act or licence that
+carries it, rather than eight things a clause each.
 
----
+## The paragraphs
 
-## This email
+1. The worst thing, now. The headline fact or finding and what it exposes them to, in the
+   first sentence after the greeting. When the headline is a part of a larger figure, state
+   the whole first and the part inside it: "590 of the 1,915 obligations that fell due in
+   {{PREV_MONTH}} remain open, and 180 of those carry personal criminal liability". If the
+   input names where it sits, say so in the same paragraph.
+2. Past - what {{PREV_MONTH}} left behind. If `signals.last_month_closing` is present, this
+   paragraph carries the contrast between how the month closed and what it left: "most of
+   what fell due closed on time, and this is what did not" tells the reader their process
+   works and the exception is what to look at.
+3. Present - this month so far, then the standing backlog. **Whenever `tm_due_so_far` is
+   given, state how many of the obligations that have fallen due so far in {{CURR_MONTH}}
+   are already past due, as "N of the M that have fallen due so far", with the
+   liability-bearing part where given.** If `signals.month_trend` says this month is falling
+   behind faster than the last, that contrast leads the paragraph; if it says the month is
+   going much like the last, say so beside the figures. Then the backlog, its size once,
+   and where it is held, using the named findings and examples.
+4. Future - what is still due before {{CURR_MONTH}} ends and can still be acted on. Work
+   due soon carrying personal liability or with nobody assigned is the most preventable
+   problem in this email. A licence expiring this month unrenewed belongs here, named,
+   placed and dated.
 
-**This is the one that has to land.** It opens the month, it is the only email that looks
-at everything rather than one angle, and for many readers it is the only one they read
-closely. The other four go deep on people, sites, Acts and licences; this one tells them
-where they stand.
+Drop at most one of these if the input cannot support it. If you must choose what to cut,
+keep the worst thing first, keep every name, and keep the ending on what can still be done.
 
-That makes it the email most at risk of becoming a tour of figures. Do the opposite of
-what the extra ground tempts you into: **pick the two or three things that matter most and
-give each a proper sentence**, rather than eight things a clause each.
+## What this email always states, when the input gives it
 
-## The four paragraphs
+Each is one clause, and each is the figure a reader looks for first:
 
-Write these, in this order:
-
-1. **The worst thing, now.** The `IsHeadline` fact or finding, with what it exposes them
-   to. One point, stated hard, in the first sentence after the greeting - no scene-setting.
-2. **Past** - what {{PREV_MONTH}} left behind. Never how much fell due; what did not
-   close, and what kind of work it was. Do not narrate the funnel ("45 fell due, 12 closed
-   on time, 1 late, 29 open") - that is the table they already have. Lead with what is
-   still open, put its denominator in the same sentence, and add at most one figure saying
-   what KIND of work is sitting there.
-
-   **If `signals.last_month_closing` is present, this paragraph carries it.** The contrast
-   between how the month CLOSED and what it LEFT is the most useful thing this email says
-   about the past, and neither figure states it alone: "most of what fell due closed on
-   time, and this is what did not" tells the reader their process works and the exception
-   is what to look at. Without it the paragraph is just another count.
-3. **Present** - where they stand today. The standing backlog belongs here, and so does a
-   named finding saying whose it is. Give the backlog its size and then say where it sits;
-   a total beside its own age breakdown is a list, not a finding.
-4. **Future** - what is still due before {{CURR_MONTH}} ends and can still be acted on.
-   Work due soon carrying personal liability, or with nobody assigned, is the most
-   preventable problem in this email. A licence expiring this month unrenewed belongs here.
-
-Drop at most one of these if the input cannot support it. An email of two paragraphs is
-not an overview - if you are down to that, you have under-used what you were given.
-
-**Length:** up to 360 words after `Good morning,` - a ceiling, never a target. The longest of the five, because it is
-the only one covering the whole picture.
-
-**At most two figures in a paragraph.**
-
-**Give the size of the backlog once.** The reader must finish knowing how many obligations
-are overdue - one number, in the Present paragraph. Quoting what fell due last month, what
-is still open from it, and the standing overdue total in three separate paragraphs leaves
-them unable to say how many are overdue, which is the one thing this email exists to tell
-them.
-
-## What separates a good overview from the other four
-
-1. **Say where it sits, not just how big it is.** "1,592 obligations are overdue" is a
-   number. "1,592 are overdue, and 1,308 of them sit at {{NAME_1}}" is the email. Use your
-   named findings here - this is the one email where the reader cannot go and look.
-2. **Put the worst thing first** and do not build up to it.
-3. **Give one comparison that changes the picture** - against their own average, against
-   what fell due, against how much is older than 90 days. One. Two is a table.
-4. **End on what can still be done this month.** Ending on the backlog leaves them with
-   something they cannot act on today.
-
-If you can only manage three of those, drop 3 - never 1 or 4.
-
-## If the month is quiet
+- Last month: how many of what fell due remain open, and how many of those carry personal
+  criminal liability.
+- This month so far: how many have fallen due, how many are already past due, and how many
+  of those carry liability.
+- The standing backlog: its total, how many have been overdue for more than 90 days, and
+  how many carry liability.
+- Every pattern fact, with its count over the number compared ("27 of the 62 locations")
+  and its examples named in the same sentence.
+- Licences: how many are currently expired with no renewal in progress, and the
+  `not_assessable` count excluded, with its number.
+- What still falls due before the month ends: the total and the liability-bearing part.
 
 If {{PREV_MONTH}} and {{CURR_MONTH}} genuinely hold little, say so in one sentence and let
-the standing position carry the email. A quiet month is itself the finding. Do not pad it
-with volume counts.
+the standing position carry the email. A quiet month is itself the finding.
+
+**Length:** up to 700 words after `Good morning,`, up to 6 paragraphs.

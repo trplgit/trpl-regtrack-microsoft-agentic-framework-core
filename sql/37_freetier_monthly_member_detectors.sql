@@ -41,9 +41,20 @@
         MemberId               BIGINT NOT NULL
     );
 
-  Fills  : #mm (per-member metrics), #detector, #cand, and appends to #facts.
-  Exact DDL for #mm below; #detector / #cand / #facts are the shared slot
-  shapes - copy them verbatim from sql/38.
+  Fills  : #mm (per-member metrics), #detector, #cand, #eg (examples for
+           aggregate-mode patterns), and appends to #facts.
+  Exact DDL for #mm below; #detector / #cand / #eg / #facts are the shared
+  slot shapes - copy them verbatim from sql/38.
+
+  -- EXAMPLES (added 2026-09-23, docs/superpowers/specs/2026-09-23-aggregate-mode-examples-design.md)
+  In aggregate mode a detector used to emit a count and no names. It now
+  also fills #eg with the top @MaxExamples members by the SAME measure and
+  order its individual mode ranks on, so the email can say "18 of your 24
+  locations ..., including A, B and C". An example carries identification and
+  scale (its own ItemCount of BaseCount) and NEVER a rate against the scope -
+  the rate comparison is what makes a row a finding, and Sec.4 says an
+  aggregate pattern is ONE finding. Members with a NULL label are never
+  examples (names withheld, unnamed master row).
 
   [MAINTENANCE TRAP] sql/36, 38, 39, 40 and 41 each declare these temp tables
   themselves (T-SQL has no shared type for a temp table). The declarations
@@ -81,6 +92,7 @@
       @ConcentrationFactor  flag at >= this multiple of a fair share
       @MemberFloor          min items for a member to be compared
       @MaxPerDetector       candidates kept per detector (Sec.4: top 5)
+      @MaxExamples          examples kept per aggregate-mode detector (3)
 
   IDEMPOTENT. PURE ASCII (CLAUDE.md Sec.5a). Target: SQL Server (vitComplianceSystem)
 ===========================================================================*/
@@ -97,13 +109,15 @@ CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_MemberDetectors
     @RelativeRiskFactor   DECIMAL(4,2) = 1.50,
     @ConcentrationFactor  DECIMAL(4,2) = 2.00,
     @MemberFloor          INT          = 5,
-    @MaxPerDetector       INT          = 5
+    @MaxPerDetector       INT          = 5,
+    @MaxExamples          INT          = 3
 AS
 BEGIN
     SET NOCOUNT ON;
 
     IF @EntityKind IS NULL OR @EntityPlural IS NULL OR @RelativeRiskFactor IS NULL
        OR @ConcentrationFactor IS NULL OR @MemberFloor IS NULL OR @MaxPerDetector IS NULL
+       OR @MaxExamples IS NULL
         THROW 51265, N'FREE MONTHLY MEMBER DETECTORS - an input parameter is NULL. Refusing to compute.', 1;
 
     /*===================================================================
@@ -381,6 +395,59 @@ BEGIN
         INSERT #facts (FactKey, FactValue, DisplayLabel, Section, DisplayOrder, WindowScope, ImpactClass, SeverityTier, AsAtRequired, HeadlineRank)
         VALUES ('pat_overdue_concentration',    @concF, @EntityPlural + N' each hold a disproportionate share of all overdue work', 'patterns', 730, 'stock', 'operational_continuity', 2, 0, 5),
                ('pat_overdue_concentration_of', @concE, @EntityPlural + N' with overdue work were compared',                         'patterns', 731, 'ctx',   'volume',                 5, 0, NULL);
+
+    /*===================================================================
+      7. EXAMPLES - aggregate mode only, top @MaxExamples by the SAME
+         measure and order the detector ranks on in individual mode.
+         Counts only, never a rate (see header). Members with no label are
+         never examples: the WHERE is explicit, not incidental.
+    ===================================================================*/
+    IF @slipMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples)
+               'last_month_slippage', 'pat_last_month_slippage',
+               ROW_NUMBER() OVER (ORDER BY x.LmOpen DESC, x.MemberId),
+               @EntityKind, x.MemberId, m.MemberLabel, x.LmOpen, x.LmDue,
+               N'of the obligations it had due last month are still open'
+        FROM #mm x JOIN #mem m ON m.MemberId = x.MemberId
+        WHERE x.FlagSlip = 1 AND m.MemberLabel IS NOT NULL
+        ORDER BY x.LmOpen DESC, x.MemberId;
+
+    IF @liabMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples)
+               'liability_share', 'pat_liability_share',
+               ROW_NUMBER() OVER (ORDER BY x.LiabOverdueItems DESC, x.MemberId),
+               @EntityKind, x.MemberId, m.MemberLabel, x.LiabOverdueItems, x.OverdueItems,
+               N'of its overdue obligations carry personal criminal liability'
+        FROM #mm x JOIN #mem m ON m.MemberId = x.MemberId
+        WHERE x.FlagLiab = 1 AND m.MemberLabel IS NOT NULL
+        ORDER BY x.LiabOverdueItems DESC, x.MemberId;
+
+    IF @chronMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples)
+               'chronic_backlog', 'pat_chronic_backlog',
+               ROW_NUMBER() OVER (ORDER BY x.Overdue90Items DESC, x.MemberId),
+               @EntityKind, x.MemberId, m.MemberLabel, x.Overdue90Items, x.OverdueItems,
+               N'of its overdue obligations have been overdue for more than 90 days'
+        FROM #mm x JOIN #mem m ON m.MemberId = x.MemberId
+        WHERE x.FlagChron = 1 AND m.MemberLabel IS NOT NULL
+        ORDER BY x.Overdue90Items DESC, x.MemberId;
+
+    /*  Concentration: BaseCount is the scope's whole overdue total (= the
+        t_od_total fact), so "holds 210 of the 2,853 overdue across your
+        scope" passes the scope-wide check in C#.                            */
+    IF @concMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples)
+               'overdue_concentration', 'pat_overdue_concentration',
+               ROW_NUMBER() OVER (ORDER BY x.OverdueItems DESC, x.MemberId),
+               @EntityKind, x.MemberId, m.MemberLabel, x.OverdueItems, @tOverdue,
+               N'of all the overdue obligations across your scope sit here'
+        FROM #mm x JOIN #mem m ON m.MemberId = x.MemberId
+        WHERE x.FlagConc = 1 AND m.MemberLabel IS NOT NULL
+        ORDER BY x.OverdueItems DESC, x.MemberId;
 END
 GO
 

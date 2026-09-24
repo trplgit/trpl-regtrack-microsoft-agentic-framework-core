@@ -53,7 +53,8 @@ CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Act
     @RelativeRiskFactor  DECIMAL(4,2) = 1.50,
     @ConcentrationFactor DECIMAL(4,2) = 2.00,
     @MemberFloor         INT          = 5,
-    @MaxPerDetector      INT          = 5
+    @MaxPerDetector      INT          = 5,
+    @MaxExamples         INT          = 3      -- examples named inside an aggregate-mode pattern (2026-09-23)
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -108,6 +109,15 @@ BEGIN
         BaseCount INT NULL, EventDate DATE NULL, AsAtRequired BIT NOT NULL DEFAULT 0,
         ProblemCount INT NOT NULL, PopulationCount INT NOT NULL, DefaultSlot TINYINT NULL);
 
+    /*  Examples for aggregate-mode patterns (grid #6). Shared shape - byte-identical in sql/36,
+        38, 39, 40, 41; sql/37 fills it for the four shared detectors.                          */
+    IF OBJECT_ID('tempdb..#eg') IS NOT NULL DROP TABLE #eg;
+    CREATE TABLE #eg (
+        Detector VARCHAR(40) NOT NULL, PatternFactKey VARCHAR(40) NOT NULL, ExampleRank INT NOT NULL,
+        EntityKind VARCHAR(20) NOT NULL, EntityId BIGINT NULL, EntityLabel NVARCHAR(MAX) NOT NULL,
+        ContextKind VARCHAR(20) NULL, ContextLabel NVARCHAR(MAX) NULL,
+        ItemCount INT NULL, BaseCount INT NULL, UnitLabel NVARCHAR(200) NOT NULL);
+
     IF OBJECT_ID('tempdb..#facts') IS NOT NULL DROP TABLE #facts;
     CREATE TABLE #facts (
         FactKey VARCHAR(40) NOT NULL PRIMARY KEY, FactValue INT NOT NULL, DisplayLabel NVARCHAR(MAX) NOT NULL,
@@ -155,7 +165,7 @@ BEGIN
     EXEC dbo.usp_Insights_FreeMonthly_MemberDetectors
          @EntityKind = 'act', @EntityPlural = N'laws',
          @RelativeRiskFactor = @RelativeRiskFactor, @ConcentrationFactor = @ConcentrationFactor,
-         @MemberFloor = @MemberFloor, @MaxPerDetector = @MaxPerDetector;
+         @MemberFloor = @MemberFloor, @MaxPerDetector = @MaxPerDetector, @MaxExamples = @MaxExamples;
 
     /*===================================================================
       3. multi_location_pattern
@@ -266,6 +276,18 @@ BEGIN
         VALUES ('pat_multi_location_pattern',    @mlF, N'laws are overdue across an unusually large share of the locations they apply to - a systemic pattern', 'patterns', 740, 'stock', 'operational_continuity', 2, 0, 3),
                ('pat_multi_location_pattern_of', @mlE, N'laws that apply at two or more locations were compared',                                             'patterns', 741, 'ctx',   'volume',                 5, 0, NULL);
 
+    /*  EXAMPLES - the Acts overdue at the most locations. NOTE the unit: ItemCount and
+        BaseCount count LOCATIONS, never obligations, and the UnitLabel says so.             */
+    IF @mlMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'multi_location_pattern', 'pat_multi_location_pattern',
+               ROW_NUMBER() OVER (ORDER BY al.LocsOverdue DESC, al.ActID),
+               'act', al.ActID, m.MemberLabel, al.LocsOverdue, al.Locations,
+               N'of the locations this Act applies to have it overdue (locations, not obligations)'
+        FROM #actLoc al JOIN #mem m ON m.MemberId = al.ActID
+        WHERE al.IsFlagged = 1 AND m.MemberLabel IS NOT NULL
+        ORDER BY al.LocsOverdue DESC, al.ActID;
+
     /*===================================================================
       5. DEFAULT SLOTS + HEADLINE (identical block in every dimension slot)
     ===================================================================*/
@@ -295,6 +317,13 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM #facts WHERE IsHeadline = 1)
             UPDATE #facts SET IsHeadline = 1 WHERE FactKey = 't_rm_due';
     END
+
+    /*  EXAMPLES CONTRACT (2026-09-23 design, Sec.2.7). An example exists only in aggregate
+        mode, beside the pattern fact it illustrates. Codes from this file's own block.       */
+    IF EXISTS (SELECT 1 FROM #eg e JOIN #cand c ON c.Detector = e.Detector)
+        THROW 51293, N'EXAMPLES CONTRACT VIOLATED - a free monthly act detector emitted both named candidates and examples. Examples exist only in aggregate mode. Refusing to emit.', 1;
+    IF EXISTS (SELECT 1 FROM #eg e LEFT JOIN #facts f ON f.FactKey = e.PatternFactKey WHERE f.FactKey IS NULL)
+        THROW 51295, N'EXAMPLES CONTRACT VIOLATED - a free monthly act example refers to a pattern fact that was not emitted. Refusing to emit.', 1;
 
     /*===================================================================
       6. EMIT
@@ -338,6 +367,13 @@ BEGIN
         ('prev_month_not_settled', (SELECT ISNULL(SUM(LmDue), 0) FROM #mm),
          N'Last-month figures are as at the run date; late closures can still arrive.')
     ) AS dq(Code, ItemCount, Detail);
+
+    /*  Grid #6 - APPENDED LAST, never before data_quality (a reader not yet updated would
+        map example rows onto its data_quality shape). Empty is normal.                     */
+    SELECT 'examples' AS ResultSet, Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel,
+           ContextKind, ContextLabel, ItemCount, BaseCount, UnitLabel
+    FROM #eg
+    ORDER BY PatternFactKey, ExampleRank;
 END
 GO
 

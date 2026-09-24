@@ -73,11 +73,12 @@ since they're lag-immune (age-banded, not ratio-based).
 - **Numbers**: always come from real, reconciled data. Scope/entitlement resolution is
   unchanged from what free tier already does — this design adds no new scope logic and
   narrows nothing there.
-- **Named findings, capped**: each email may name **at most 2 specific findings** total
+- **Named findings, capped**: each email may name **at most 4 specific findings** total
   (e.g. one flagged location, one flagged law category), and only for entities the
   recipient is personally allowed to manage under their existing entitlement scope — never
   a branch or category outside what they oversee. Every named finding states its residual
   ("1 of 23 locations shown") so the reader knows how much more exists.
+  [UPDATED 2026-09-23] raised from 2 to 4 named findings per email.
 - **Broad patterns stay aggregate**: if a pattern applies to more than ~1 in 5 members in
   scope, it's reported as one summary line ("6 of 24 branches show repeated late closures"),
   never as individual named findings — the same emission-policy rule the paid dimensions
@@ -117,7 +118,8 @@ seen running.
   Overview, Users, Location, Act, Licence), reusing the existing detector/emission-policy
   shape from the paid dimensions (`sql/05_dimension_location.sql`'s `#detector` pattern:
   >20% flagged → one aggregate line, ≤20% → named findings capped by materiality — free
-  narrows that further to at most 2 names per email as above).
+  narrows that further to at most 4 names per email as above).
+  [UPDATED 2026-09-23] raised from 2 to 4 named findings per email.
 - These are **new, separate procedures**, not a flag added to the existing paid-tier
   procedures — the paid procedures measure point-in-time snapshots, not calendar months, and
   mixing free-tier's stricter naming limits into the same object as paid's fuller output
@@ -184,12 +186,48 @@ change, not a code deploy or a git revert under time pressure.
   today's `FreeDigestWriter.cs`) — so resolving `{slot}_{version}.md` from config is an
   additive change to that lookup, not a new mechanism.
 
-## 11. Expected impact
+[UPDATED 2026-09-24] The shared rules file (`06_freetier_monthly_shared_rules.md`) was
+consolidated from approximately 3,300 to 2,600 words by moving every rule statement into a
+single canonical location; each of the five slot-specific prompts was reduced from 390–740
+words to 320–590 words, eliminating duplicate rule examples and the "BaseCount", "future only
+if given", and handling-of-existing-markup rules that now live once in the shared file.
+
+## 11. Emphasis: the model marks the insight, the code guards the marking.
+
+Before 2026-09-24, every emphasis marker the model wrote was stripped during normalization,
+and the code itself marked exactly two things per paragraph: the leading figure (or headline
+figure in the first paragraph) with its unit, plus up to two "impact phrases" drawn from a
+closed list of display labels extracted from the detector procedures. Result: bold text was
+mostly numbers; the closed phrase list could only recognize wording the procedures already
+knew.
+
+Starting 2026-09-24, the shared prompt (section 9, "Emphasis") asks the model to mark with
+double asterisks (\*\*) the one or two spans per paragraph a reader must see: what the figure
+means, where it fits, or the state of the work. Each span is 2–8 words, never a complete
+sentence, never a bare number, never a placeholder, never two spans back-to-back, and at most
+one span in a paragraph carrying a {{NAME_n}} or {{EG_n}} placeholder.
+
+`FreeMonthlyDraftNormalizer.KeepTheModelsInsightSpans` enforces these rules in code. It keeps
+at most two model-written spans per paragraph (one if the paragraph contains a placeholder),
+unwraps any span violating the length/content/balance rules, and unwraps all markers if they
+become unbalanced. Unwrapping never rejects the draft. The code still emphasizes the leading
+figure of each paragraph unless the model already marked a span containing it, and the
+impact-phrase list now fills only the budget the model left unused. A paragraph therefore never
+carries more emphasis than before: at most the figure plus two spans, worst case identical to
+previous behaviour.
+
+Names are bound bold after validation by `FreeMonthlyPlaceholderBinder` under its run rule (a
+name fewer than three words after the previous name binds plain; at most three bold names per
+paragraph). The validator's ceiling remains six markers (three spans) per paragraph before
+binding.
+
+## 12. Expected impact
 
 **What changes for the reader:** one email a week instead of a wall of raw counts — each one
 answers "what happened, what's the situation now, what's coming, and what should I actually
-worry about," with up to two concrete, named things to act on (never more), always saying how
+worry about," with up to four concrete, named things to act on (never more), always saying how
 much more exists behind them ("1 of 23 locations shown").
+[UPDATED 2026-09-23] raised from 2 to 4 named findings per email.
 
 **Illustrative before/after** (numbers are examples, not real tenant data):
 
@@ -258,7 +296,7 @@ much more exists behind them ("1 of 23 locations shown").
 - **Nothing breaks today's product while this is being built** — old and new run side by side
   behind a config flag (section 8) until every tenant has been moved over deliberately.
 
-## 12. Out of scope
+## 13. Out of scope
 
 - Any change to entitlement/scope resolution logic.
 - Paid-tier reports (`fixed_holistic`, `dimension_selection`).

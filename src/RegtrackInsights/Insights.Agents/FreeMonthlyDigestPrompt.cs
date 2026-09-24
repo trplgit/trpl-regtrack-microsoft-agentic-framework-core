@@ -7,9 +7,10 @@ using Insights.Domain;
 namespace Insights.Agents;
 
 /// <summary>
-/// One of the (at most two) candidates the email may point to - the SQL marks them with DefaultSlot
-/// 1 / 2. The model only ever sees <see cref="NamePlaceholder"/>; the real label is bound after
-/// validation (spec Sec.4: "a wrong or invented name is structurally impossible").
+/// One of the (at most <see cref="FreeMonthlyDigestPrompt.MaxNamedFindings"/>) candidates the email
+/// may point to - the SQL marks the first two with DefaultSlot 1 / 2 and C# fills the rest from its
+/// ranked candidates. The model only ever sees <see cref="NamePlaceholder"/>; the real label is bound
+/// after validation (spec Sec.4: "a wrong or invented name is structurally impossible").
 /// </summary>
 public sealed record MonthlyNamedFinding(int Slot, MonthlyCandidate Candidate)
 {
@@ -22,6 +23,21 @@ public sealed record MonthlyNamedFinding(int Slot, MonthlyCandidate Candidate)
         label is not null && FreeMonthlyDigestPrompt.CleanLabel(label).Length > 0;
 
     public string? DatePlaceholder => Candidate.EventDate is null ? null : $"{{{{DATE_{Slot}}}}}";
+}
+
+/// <summary>
+/// An example the email may attach to an aggregate-mode pattern fact - "18 of your 24 locations ...,
+/// including {{EG_1}}, {{EG_2}} and {{EG_3}}". A DIFFERENT token from <c>{{NAME_n}}</c> on purpose:
+/// the validator derives "which findings were named" from the <c>{{NAME_</c> prefix, so an email that
+/// named three examples and no finding would otherwise pass the naming gate; and the binder bolds
+/// only <c>{{NAME_</c>, so examples bind plain - emphasis would visually promote them to findings.
+/// </summary>
+public sealed record MonthlyBoundExample(int Number, MonthlyExample Example)
+{
+    public string Placeholder => $"{{{{EG_{Number}}}}}";
+
+    public string? AtPlaceholder =>
+        Example.ContextLabel is { } at && FreeMonthlyDigestPrompt.CleanLabel(at).Length > 0 ? $"{{{{EG_{Number}_AT}}}}" : null;
 }
 
 /// <summary>
@@ -115,6 +131,10 @@ file static partial class FactLabels
             Overrides.TryGetValue(factKey, out var better) ? better : label,
             m => m.Value.EndsWith('s') ? "obligations" : "obligation");
 
+    /// <summary>An example's unit label, under the same "item" discipline - it is prose the model may copy.</summary>
+    public static string Unit(string label) =>
+        ItemWord.Replace(label, m => m.Value.EndsWith('s') ? "obligations" : "obligation");
+
     /// <summary>The bare noun only - never "itemised", never inside a longer word.</summary>
     private static readonly Regex ItemWord = new(@"\bitems?\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 }
@@ -143,6 +163,10 @@ public sealed partial class FreeMonthlyDigestPrompt
     public required string UserMessage { get; init; }
     public required IReadOnlyDictionary<string, string> Bindings { get; init; }
     public required IReadOnlyList<MonthlyNamedFinding> NamedFindings { get; init; }
+
+    /// <summary>The examples attached to aggregate pattern facts, in placeholder order. Never findings.</summary>
+    public required IReadOnlyList<MonthlyBoundExample> Examples { get; init; }
+
     public required IReadOnlySet<int> AllowedNumbers { get; init; }
     public required IReadOnlySet<int> AllowedPercentages { get; init; }
 
@@ -170,13 +194,106 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// prompt can require the COUNT to lead and the percentage to appear only beside the scope's
     /// own rate, where it is a comparison rather than a number standing on its own.</para>
     /// </summary>
-    private static bool RatioWorthStating(int? baseCount) => baseCount is >= MinBaseForPercentage;
+    /// <para>[FOUND LIVE on tenant 1082, 2026-09-23] A null base is NOT a small base. The Overview's
+    /// <c>category_overdue_skew</c> arrives with MetricPct 32 against TenantPct 14 and no BaseCount
+    /// at all (the proc measures a rate, not a count), and this guard stripped both - so the model
+    /// was handed a named category with no figure of any kind, and wrote "overdue work is far more
+    /// common in Finance &amp; Taxation" with nothing to back it. A rate the proc computed on its own
+    /// full population is sound; only a rate on a KNOWN small base is withheld.</para>
+    private static bool RatioWorthStating(int? baseCount) => baseCount is null or >= MinBaseForPercentage;
 
     private const int MinBaseForPercentage = 20;
 
     /// <summary>
-    /// Two findings are OFFERED; two are not always worth naming. The second is withheld when it is
-    /// trivially small next to the first, so the email cannot spend a paragraph on it.
+    /// How many things one email may name. Slots 1 and 2 are the proc's own <c>DefaultSlot</c>
+    /// choices; slots 3 and 4 are filled here from the rest of its ranked candidates.
+    ///
+    /// <para>[DECIDED 2026-09-23] Two was the spec's original cap, and on tenant 1082 it produced
+    /// emails the reader described as "only numbers being sent" - a Location email with 24 sites
+    /// could point at two of them and had to describe the rest as counts. The procs already return
+    /// up to five candidates per detector (top-5 by materiality, CLAUDE.md Sec.4); naming four of
+    /// them lets a site, a person, an Act or a licence each carry its own sentence, which is what
+    /// makes the email read as a briefing rather than a table. The paid report still names all of
+    /// them - the residual line says how many more there are.</para>
+    /// </summary>
+    public const int MaxNamedFindings = 4;
+
+    /// <summary>
+    /// The candidates the email will name, in slot order: the proc's DefaultSlot 1 and 2 first,
+    /// then the next-ranked candidates that name a DIFFERENT thing, up to <see cref="MaxNamedFindings"/>.
+    ///
+    /// <para>An extra candidate must be nameable (a withheld or blank label has nothing to bind), and
+    /// must not be an entity already holding a slot - the same site flagged by two detectors is one
+    /// site, and the model would otherwise be handed two placeholders for it. Ordering is the proc's
+    /// own: priority, then rank within the detector, so every detector's best member comes before
+    /// any detector's second.</para>
+    /// </summary>
+    /// <summary>
+    /// [OWNER, PROD tenant 1008, 2026-09-23] "1 of 1" is never a finding and never an example. A
+    /// site holding one licence that is expired, or a person with one obligation that is open, is
+    /// a member with nothing to compare; "with 1 of 1" in a management email reads as a misprint.
+    /// A member whose base is one is dropped here, before the model sees it - a null base (a rate
+    /// the proc computed on its own population, or a plain count) is not a base of one.
+    /// </summary>
+    private static bool HasAMeaningfulBase(int? baseCount) => baseCount is null or >= MinBaseForAMember;
+
+    private const int MinBaseForAMember = 2;
+
+    private static List<MonthlyNamedFinding> ChooseNamedFindings(IReadOnlyList<MonthlyCandidate> candidates)
+    {
+        /*  The proc's DefaultSlot 1/2 are re-issued after the base-of-one filter, so a dropped
+            slot 1 promotes the next ranked candidate rather than leaving a hole. The candidate
+            headline still points at whatever now holds slot 1; if nothing does, Build falls back
+            to a fact headline (WithPeriodHeadline).                                             */
+        var eligible = candidates.Where(c => HasAMeaningfulBase(c.BaseCount)).ToList();
+
+        var named = eligible
+            .Where(c => c.DefaultSlot is 1 or 2)
+            .OrderBy(c => c.DefaultSlot)
+            .Select((c, i) => new MonthlyNamedFinding(i + 1, c))
+            .ToList();
+
+        var extras = eligible
+            .Where(c => c.DefaultSlot is null && c.EntityLabel is { } label && CleanLabel(label).Length > 0)
+            .OrderBy(c => c.Priority).ThenBy(c => c.RankInDetector).ThenBy(c => c.Detector, StringComparer.Ordinal);
+
+        foreach (var extra in extras)
+        {
+            if (named.Count >= MaxNamedFindings)
+                break;
+
+            if (named.Any(n => SameEntity(n.Candidate, extra) || ReadsTheSame(n.Candidate, extra)))
+                continue;
+
+            named.Add(new MonthlyNamedFinding(named.Count + 1, extra));
+        }
+
+        return DropWhatIsNotWorthNaming(named);
+    }
+
+    private static bool SameEntity(MonthlyCandidate a, MonthlyCandidate b) =>
+        string.Equals(a.EntityKind, b.EntityKind, StringComparison.Ordinal)
+        && (a.EntityId is { } id && b.EntityId == id
+            || a.EntityId is null && b.EntityId is null && string.Equals(a.EntityLabel, b.EntityLabel, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Two different rows the READER cannot tell apart. [FOUND LIVE on UAT tenant 5, 2026-09-23]
+    /// Two licence rows, both "Transport" at "Rudra Customer" expiring 9 Sep 2026, took slots 1
+    /// and 3 and the Overview said "including Transport at Rudra Customer on 9 Sep 2026,
+    /// Transport at Rudra Customer on 9 Sep 2026, and Boiler ..." - true, and it reads as a
+    /// misprint. Same kind, same label, same site, same date is one name in the reader's world.
+    /// </summary>
+    private static bool ReadsTheSame(MonthlyCandidate a, MonthlyCandidate b) =>
+        string.Equals(a.EntityKind, b.EntityKind, StringComparison.Ordinal)
+        && a.EntityLabel is { } la && b.EntityLabel is { } lb
+        && string.Equals(CleanLabel(la), CleanLabel(lb), StringComparison.OrdinalIgnoreCase)
+        && string.Equals(a.ContextLabel is null ? null : CleanLabel(a.ContextLabel), b.ContextLabel is null ? null : CleanLabel(b.ContextLabel), StringComparison.OrdinalIgnoreCase)
+        && a.EventDate == b.EventDate;
+
+    /// <summary>
+    /// Up to four findings are OFFERED; not every one is worth naming. A finding is withheld when it
+    /// is trivially small next to the first, so the email cannot spend a paragraph on it. Slot
+    /// numbers are then re-issued so the placeholders stay contiguous (<c>{{NAME_1}}</c>..<c>{{NAME_n}}</c>).
     ///
     /// <para>[FOUND LIVE on tenant 1082, 2026-09-22] The Users email named a person holding 579 of
     /// 2,852 overdue obligations, and then named a second person for "1 of that person's 1 open
@@ -188,25 +305,86 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// significant on a small estate and noise on a large one, so an absolute floor would be wrong.
     /// The headline finding is never dropped, however small: the data layer chose it.</para>
     /// </summary>
-    private static List<MonthlyNamedFinding> DropTheSecondIfItIsNotWorthNaming(List<MonthlyNamedFinding> named)
+    private static List<MonthlyNamedFinding> DropWhatIsNotWorthNaming(List<MonthlyNamedFinding> named)
     {
         if (named.Count < 2)
             return named;
 
         var first = named[0].Candidate.ItemCount;
-        var second = named[1].Candidate.ItemCount;
 
-        // Both must be countable to compare them; a finding with no ItemCount is judged on its own.
-        if (first is not > 0 || second is not > 0)
+        // The first must be countable to compare against; a finding with no ItemCount is judged on its own.
+        if (first is not > 0)
             return named;
 
-        return second.Value * 100 < first.Value * MinSecondFindingPercentOfFirst
-            ? named.Take(1).ToList()
-            : named;
+        var kept = named
+            .Where((n, i) => i == 0 || n.Candidate.ItemCount is not > 0
+                             || n.Candidate.ItemCount.Value * 100 >= first.Value * MinFindingPercentOfFirst)
+            .ToList();
+
+        return kept.Count == named.Count
+            ? named
+            : kept.Select((n, i) => n.Slot == i + 1 ? n : new MonthlyNamedFinding(i + 1, n.Candidate)).ToList();
     }
 
-    /// <summary>The second finding must cover at least this share of the first to earn a paragraph.</summary>
-    private const int MinSecondFindingPercentOfFirst = 5;
+    /// <summary>Every finding after the first must cover at least this share of the first to earn a paragraph.</summary>
+    private const int MinFindingPercentOfFirst = 5;
+
+    /// <summary>
+    /// The most examples one email carries, across every aggregate pattern. The proc already caps
+    /// each pattern at 3 (<c>@MaxExamples</c>); this bounds the whole so the closed number set the
+    /// validator checks against does not grow without limit (each example adds up to two numbers).
+    /// </summary>
+    public const int MaxExamplesPerEmail = 6;
+
+    /// <summary>
+    /// The examples the email may attach, numbered in reading order.
+    ///
+    /// <para>An example exists only beside its finding: its <see cref="MonthlyExample.PatternFactKey"/>
+    /// must be among the facts the model is sent, or the example is dropped with it. It must be
+    /// nameable (a blank label binds to nothing), and must not be a thing that already holds a
+    /// <c>{{NAME_n}}</c> slot - one thing, one token, or the same site is bolded under one token
+    /// and plain under another.</para>
+    ///
+    /// <para>The per-email cap is allocated ROUND-ROBIN by pattern - rank 1 of every pattern before
+    /// rank 2 of any - so a tenant with three aggregate patterns gets breadth rather than three
+    /// examples of the first and none of the rest. Numbering then follows (pattern fact
+    /// DisplayOrder, ExampleRank), so <c>{{EG_1}}</c> is the first example the reader meets.</para>
+    /// </summary>
+    private static List<MonthlyBoundExample> ChooseExamples(
+        IReadOnlyList<MonthlyExample> examples, IReadOnlyList<MonthlyFact> sentFacts, IReadOnlyList<MonthlyNamedFinding> named)
+    {
+        // FactKey is a primary key in every proc; grouping rather than ToDictionary only so a
+        // hand-built fixture with a repeated key cannot throw from inside the example chooser.
+        var factOrder = sentFacts
+            .GroupBy(f => f.FactKey, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Min(f => f.DisplayOrder), StringComparer.Ordinal);
+
+        var usable = examples
+            .Where(e => factOrder.ContainsKey(e.PatternFactKey))
+            .Where(e => CleanLabel(e.EntityLabel).Length > 0)
+            .Where(e => HasAMeaningfulBase(e.BaseCount))
+            .Where(e => !named.Any(n => SameEntity(n.Candidate, e)))
+            .GroupBy(e => e.PatternFactKey, StringComparer.Ordinal)
+            .OrderBy(g => factOrder[g.Key])
+            .Select(g => g.OrderBy(e => e.ExampleRank).ToList())
+            .ToList();
+
+        var chosen = new List<MonthlyExample>();
+        for (var rank = 0; chosen.Count < MaxExamplesPerEmail && usable.Any(g => g.Count > rank); rank++)
+            foreach (var group in usable)
+                if (rank < group.Count && chosen.Count < MaxExamplesPerEmail)
+                    chosen.Add(group[rank]);
+
+        return chosen
+            .OrderBy(e => factOrder[e.PatternFactKey]).ThenBy(e => e.ExampleRank)
+            .Select((e, i) => new MonthlyBoundExample(i + 1, e))
+            .ToList();
+    }
+
+    private static bool SameEntity(MonthlyCandidate a, MonthlyExample b) =>
+        string.Equals(a.EntityKind, b.EntityKind, StringComparison.Ordinal)
+        && (a.EntityId is { } id && b.EntityId == id
+            || a.EntityId is null && b.EntityId is null && string.Equals(a.EntityLabel, b.EntityLabel, StringComparison.Ordinal));
 
     /// <summary>
     /// How big the organisation is, so a figure can be judged against it.
@@ -248,29 +426,103 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// <para>These are LABELS, never new numbers. Nothing here is quotable, so nothing widens the
     /// closed set the validator checks against - the model uses a signal to choose what to lead
     /// with and which figures belong together, then states the figures it was already given.</para>
+    ///
+    /// <para>[EXTENDED 2026-09-23] The first version read only the Overview's fact keys, so the
+    /// Users, Location, Act and Licence emails were handed a block of nulls - and those four were
+    /// exactly the emails that still read as figure lists. Each slot's own keys are read here: the
+    /// shared <c>t_od_*</c> backlog facts (sql/37), the <c>*_top3_overdue_share_pct</c>
+    /// concentration facts, members-with-overdue over members-in-scope, and the licence renewal
+    /// split. The slots emit disjoint keys, so the first key present is the slot's own.</para>
     /// </summary>
-    private static object SignalsFrom(IReadOnlyList<MonthlyFact> facts)
+    internal static object SignalsFrom(IReadOnlyList<MonthlyFact> facts)
     {
-        int? Value(string key) => facts.FirstOrDefault(f => f.FactKey == key)?.FactValue;
+        int? Value(params string[] keys) =>
+            keys.Select(k => facts.FirstOrDefault(f => f.FactKey == k)?.FactValue).FirstOrDefault(v => v is not null);
 
-        var overdue = Value("od_total");
-        var over90 = Value("od_over_90_days");
+        // The standing backlog: od_* in the Overview, t_od_* in every dimension email.
+        var overdue = Value("od_total", "t_od_total");
+        var over90 = Value("od_over_90_days", "t_od_over_90_days");
+        var liability = Value("od_liability", "t_od_liability");
+
+        // Last month and this month, as the Overview sees them.
         var onTimePct = Value("lm_on_time_pct");
-        var liability = Value("od_liability");
-        var noOwner = Value("od_no_owner");
-        var neverTouched = Value("od_never_touched");
+        var lastMonthDue = Value("lm_due");
+        var lastMonthOnTime = Value("lm_on_time");
+        var lastMonthOpen = Value("lm_still_open");
+        var thisMonthDue = Value("tm_due_so_far");
+        var thisMonthPastDue = Value("tm_open_past_due");
 
-        string? Share(int? part, int? whole, string mostly, string some, string little) =>
-            part is null || whole is not > 0 ? null
-                : (part.Value * 100 / whole.Value) switch { >= 75 => mostly, >= 25 => some, _ => little };
+        // Ownership and progress.
+        var noOwner = Value("od_no_owner", "u_open_no_owner");
+        var neverTouched = Value("od_never_touched");
+        var inactiveOwners = Value("u_inactive_people_with_work");
+        var selfReviewed = Value("u_open_self_reviewed");
+        var singlePerformerSites = Value("loc_single_performer");
+
+        // How the backlog is distributed across this email's members.
+        var topThreeSharePct = Value("u_top3_overdue_share_pct", "loc_top3_overdue_share_pct", "law_top3_overdue_share_pct");
+        var membersWithOverdue = Value("u_people_with_overdue", "loc_with_overdue", "law_with_overdue");
+        var membersInScope = Value("u_people_with_open_work", "loc_with_obligations", "law_in_scope");
+        var membersWithLastMonthOpen = Value("loc_with_last_month_open", "law_with_last_month_open");
+
+        // Licences: filed, or nothing filed.
+        var expired = Value("lic_expired_total");
+        var expiredUnrenewed = Value("lic_expired_unrenewed");
+        var expiring = Value("lic_expiring_rest_of_month");
+        var expiringUnrenewed = Value("lic_expiring_unrenewed");
+
+        int? Pct(int? part, int? whole) => part is null || whole is not > 0 ? null : part.Value * 100 / whole.Value;
+
+        string? Share(int? part, int? whole, string mostly, string some, string little, int mostlyAt = 75, int someAt = 25) =>
+            Pct(part, whole) switch { null => null, var p when p >= mostlyAt => mostly, var p when p >= someAt => some, _ => little };
+
+        /*  [FOUND LIVE on tenant 1082, 2026-09-23] lm_on_time_pct is the on-time share of what
+            COMPLETED, so a month where 47 of 194 never closed at all still read 99% and was
+            labelled "on_time_almost_always". Measured against everything that fell due (139 of
+            194 closed on time, 72%) the month was mixed, which is what the reader would say.
+            The completed-only figure is used only when the due count is absent.               */
+        var onTimeOfDue = Pct(lastMonthOnTime, lastMonthDue) ?? onTimePct;
+
+        /*  The story of the month is the CONTRAST between periods. 24% of August's work was left
+            open; 72% of September's work due so far was already past due on the 22nd - that is
+            the month getting worse, and neither figure says it alone. Same-month, same-basis
+            shares from the facts, never a new number.                                          */
+        var lastMonthOpenPct = Pct(lastMonthOpen, lastMonthDue);
+        var thisMonthPastDuePct = Pct(thisMonthPastDue, thisMonthDue);
+        var monthTrend = lastMonthOpenPct is null || thisMonthPastDuePct is null ? null
+            : thisMonthPastDuePct - lastMonthOpenPct >= 15 ? "this_month_is_slipping_more_than_last_month_did"
+            : lastMonthOpenPct - thisMonthPastDuePct >= 15 ? "this_month_is_slipping_less_than_last_month_did"
+            : "this_month_is_going_much_like_last_month";
 
         return new
         {
             backlog_age = Share(over90, overdue, "almost_all_older_than_90_days", "mixed_ages", "mostly_recent"),
-            last_month_closing = onTimePct switch { null => null, >= 90 => "on_time_almost_always", >= 60 => "mixed", _ => "often_late" },
-            liability_in_backlog = Share(liability, overdue, "most_of_it", "a_meaningful_share", "a_small_share"),
-            ownership = noOwner is > 0 ? "some_overdue_work_has_nobody_assigned" : null,
+            /*  [2026-09-23] 587 of 2,853 (20%) was labelled "a_small_share" and the model took the
+                hint - liability got one clause. One in five items carrying personal criminal
+                liability is not small for the officer it lands on; the band is set accordingly. */
+            liability_in_backlog = Share(liability, overdue, "most_of_it", "a_meaningful_share", "a_small_share", mostlyAt: 50, someAt: 15),
+            last_month_closing = onTimeOfDue switch { null => null, >= 90 => "on_time_almost_always", >= 60 => "mixed", _ => "often_late" },
+            last_month_left_open = Share(lastMonthOpen, lastMonthDue, "most_of_it_still_open", "a_meaningful_share_still_open", "little_still_open", mostlyAt: 50, someAt: 15),
+            this_month_so_far = Share(thisMonthPastDue, thisMonthDue, "most_of_it_already_past_due", "a_meaningful_share_already_past_due", "little_past_due_yet", mostlyAt: 50, someAt: 15),
+            month_trend = monthTrend,
+            /*  [2026-09-23] 49% with three people was "spread_widely". Half the backlog on three
+                desks is concentration by any reader's standard; the bands were too generous.   */
+            backlog_concentration = topThreeSharePct switch
+            {
+                null => null,
+                >= 60 => "most_of_it_sits_with_the_three_holding_the_most",
+                >= 35 => "a_large_part_sits_with_the_three_holding_the_most",
+                _ => "spread_widely",
+            },
+            overdue_spread = Share(membersWithOverdue, membersInScope, "most_carry_overdue_work", "some_carry_overdue_work", "a_few_carry_overdue_work"),
+            last_month_slippage_spread = Share(membersWithLastMonthOpen, membersInScope, "most_left_last_month_open", "some_left_last_month_open", "a_few_left_last_month_open"),
+            ownership = noOwner is > 0 ? "some_open_work_has_nobody_assigned" : null,
             never_started = neverTouched is > 0 ? "some_overdue_work_was_never_started" : null,
+            deactivated_owners = inactiveOwners is > 0 ? "some_open_work_is_held_by_people_no_longer_active" : null,
+            self_review = selfReviewed is > 0 ? "some_work_is_performed_and_approved_by_the_same_person" : null,
+            single_person_sites = singlePerformerSites is > 0 ? "some_sites_have_all_open_work_on_one_person" : null,
+            expired_licences = Share(expiredUnrenewed, expired, "most_have_no_renewal_in_progress", "some_have_no_renewal_in_progress", "most_are_being_renewed"),
+            expiring_this_month = Share(expiringUnrenewed, expiring, "most_have_nothing_filed", "some_have_nothing_filed", "most_have_a_renewal_filed"),
         };
     }
 
@@ -344,9 +596,9 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// What a detector actually found, in plain words - sent WITH the finding that uses it.
     ///
     /// <para>[MEASURED 2026-09-22] This was an 18-row table in the shared rules, sent on every call
-    /// whatever the email contained. An email carries at most two findings, so sixteen of those
-    /// rows were always waste - and the static prompt was 82% of the input while the tenant's own
-    /// data was 18%. Moving the glossary here sends one or two rows instead of eighteen, and sends
+    /// whatever the email contained. An email carried at most two findings (four since 2026-09-23),
+    /// so most of those rows were always waste - and the static prompt was 82% of the input while
+    /// the tenant's own data was 18%. Moving the glossary here sends a few rows instead of eighteen, and sends
     /// them attached to the thing they describe rather than in a lookup table the model has to
     /// resolve. Same information, targeted, and the shared rules get shorter.</para>
     /// </summary>
@@ -376,12 +628,7 @@ public sealed partial class FreeMonthlyDigestPrompt
     {
         var edition = data.Edition;
 
-        var named = DropTheSecondIfItIsNotWorthNaming(
-            data.Candidates
-                .Where(c => c.DefaultSlot is 1 or 2)
-                .OrderBy(c => c.DefaultSlot)
-                .Select(c => new MonthlyNamedFinding(c.DefaultSlot!.Value, c))
-                .ToList());
+        var named = ChooseNamedFindings(data.Candidates);
 
         data = WithPeriodHeadline(data, named);
 
@@ -479,6 +726,39 @@ public sealed partial class FreeMonthlyDigestPrompt
                 percentages.Add(tp);
         }
 
+        /*  WHAT THE EMAIL CANNOT ASSESS is a number the model is TOLD to state. [FOUND LIVE on
+            PROD tenant 1008, 2026-09-23] not_assessable said 12 licences have no end date; the
+            prompt says "if a count you state excludes a material number of things, say so"; the
+            model wrote 12; 12 was in no fact, so the typo-corrector turned it into 62 - a real
+            fact value one digit away - and the email said 62. Every number handed to the model
+            as data belongs in the closed set, or the guard against invention invents.         */
+        foreach (var dq in data.DataQuality.Where(d => d.ItemCount > 0 && BoundsAFigure.Contains(d.Code)))
+            numbers.Add(dq.ItemCount);
+
+        /*  HOW MANY THINGS THE EMAIL NAMES is a number the data fixed before the model ran.
+            [FOUND LIVE on UAT tenant 5, 2026-09-23] "the 4 named sites are among 12 locations in
+            this situation, and the other 11 are not named" - 4 was the count of {{NAME_n}}
+            placeholders handed over, true by construction, and the sentence was deleted as
+            invention. Allowed exactly when that many were named.                             */
+        if (named.Count > 1)
+            numbers.Add(named.Count);
+
+        /*  EXAMPLES widen the number set by their own counts and nothing else - never the
+            percentage set. An example may say "210 of its 300"; it may not carry a rate against
+            the scope, because that comparison is what makes a row an individual finding.       */
+        var examples = ChooseExamples(data.Examples, sentFacts, named);
+        foreach (var e in examples)
+        {
+            bindings[e.Placeholder] = CleanLabel(e.Example.EntityLabel);
+            if (e.AtPlaceholder is { } at)
+                bindings[at] = CleanLabel(e.Example.ContextLabel!);
+
+            if (e.Example.ItemCount is { } item)
+                numbers.Add(item);
+            if (e.Example.BaseCount is { } baseCount)
+                numbers.Add(baseCount);
+        }
+
         /*  [MEASURED 2026-09-21] must_use repeats the placeholders as a bare list, right at the top
             of the input. The rule is already in the shared prompt, but with two findings the model
             routinely named only the first: three of five emails in one run failed on "never uses
@@ -488,7 +768,13 @@ public sealed partial class FreeMonthlyDigestPrompt
         {
             slot = SlotName(edition.Slot),
             headline = candidateLeads ? "named_finding" : "fact",
-            must_use = named.Select(n => n.NamePlaceholder).Where(p => p is not null).ToList(),
+            /*  [FOUND LIVE on UAT tenant 5, 2026-09-23] Examples listed only in their own block
+                were ignored: the Location email was handed five and used none, stating the
+                single-person-site pattern as a bare count. The same lesson as the names - a
+                requirement stated in the data is followed - so they are listed here too. The
+                validator still never counts an example as a finding.                          */
+            must_use = named.Select(n => n.NamePlaceholder).Where(p => p is not null)
+                .Concat(examples.Select(e => e.Placeholder)).ToList(),
             /*  [2026-09-21] Section and SeverityTier are NOT sent. Both appeared only in the
                 prompt's "what you are given" list and were never referenced by any instruction -
                 the data layer has already used severity to choose the headline and to decide what
@@ -537,6 +823,19 @@ public sealed partial class FreeMonthlyDigestPrompt
                 Backlog = IsBacklogDetector(n.Candidate.Detector),
                 IsHeadline = ReferenceEquals(n, headlineFinding),
             }),
+            /*  Examples travel keyed to the fact they illustrate. No Means, no MetricPct, no
+                TenantPct, no ProblemCount: those belong to the pattern fact, and giving an example
+                its own argument is how it becomes a finding in prose.                          */
+            examples = examples.Select(e => new
+            {
+                e.Placeholder,
+                e.AtPlaceholder,
+                e.Example.PatternFactKey,
+                e.Example.EntityKind,
+                e.Example.ItemCount,
+                e.Example.BaseCount,
+                Counts = FactLabels.Unit(e.Example.UnitLabel),
+            }),
         };
 
         return new FreeMonthlyDigestPrompt
@@ -545,6 +844,7 @@ public sealed partial class FreeMonthlyDigestPrompt
             UserMessage = JsonSerializer.Serialize(message, JsonOptions),
             Bindings = bindings,
             NamedFindings = named,
+            Examples = examples,
             AllowedNumbers = numbers,
             AllowedPercentages = percentages,
             HeadlineMarker = headlineFact is not null
@@ -619,10 +919,15 @@ public sealed partial class FreeMonthlyDigestPrompt
     {
         if (string.Equals(data.HeadlineSource, "candidate", StringComparison.Ordinal))
         {
-            // No Slot 1 candidate = a broken proc contract: return unchanged so Build fails closed,
-            // never paper over it by picking a fact.
+            /*  No Slot 1 candidate used to mean a broken proc contract and failed closed. [2026-09-23]
+                It can now also mean the proc's slot-1 row was dropped as a base-of-one member
+                (ChooseNamedFindings) - and the proc DID honour its contract. Distinguish the two:
+                a candidate row with DefaultSlot 1 in the raw data means the lead was filtered, so
+                the headline is re-decided from the facts; no such row is still the broken contract. */
             var lead = named.FirstOrDefault(n => n.Slot == 1);
-            if (lead is null || !IsBacklogDetector(lead.Candidate.Detector))
+            if (lead is null && !data.Candidates.Any(c => c.DefaultSlot == 1))
+                return data;
+            if (lead is not null && !IsBacklogDetector(lead.Candidate.Detector))
                 return data;
         }
         /*  A zero cannot lead an email. [FOUND LIVE on tenant 5, 2026-09-21] sql/40 marked
@@ -691,7 +996,16 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// </summary>
     private static readonly HashSet<string> AlwaysSent = new(StringComparer.Ordinal)
     {
-        "lm_due",                    // 06a: the only denominator in the last-month section
+        "lm_due",                    // 06a: the denominator of the last-month section
+
+        /*  [FOUND LIVE on tenant 1082, 2026-09-23] The two OTHER period denominators were not
+            sent. tm_open_past_due arrived as "116 of those are already past their due date" with
+            no "those" (tm_due_so_far, 162, is tier-4 volume and was filtered), and rm_liability
+            as "13 of those" with rm_due (60) missing likewise. The strongest finding of that
+            month - most of September's work was already late by the 22nd - was therefore
+            unwritable, and the email said nothing about the current month at all.            */
+        "tm_due_so_far",             // 06a: the denominator of the this-month section
+        "rm_due",                    // 06a: the denominator of the rest-of-month section
         "law_in_scope",              // 06d
         "loc_in_scope",              // 06c
         "u_people_with_open_work",   // 06b
@@ -799,8 +1113,14 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// <para>What actually made the writing better was `signals` - the judgements handed over
     /// ready-made. With those in place the extra facts are paying for weighing that has already
     /// been done, so the cap goes back.</para>
+    ///
+    /// <para>[RAISED TO 24/18, 2026-09-23] Raised again, and deliberately less far than the 30/22
+    /// experiment: the email now names up to four things (<see cref="MaxNamedFindings"/>) and
+    /// runs to 620-700 words, and at 14 facts a four-name email was naming things it had no
+    /// figure to put beside. The extra output cost is accepted - the reader's verdict on the
+    /// shorter emails was that they were not worth reading, which is the more expensive outcome.</para>
     private static int MaxFactsFor(MonthlyDigestSlot slot) =>
-        slot == MonthlyDigestSlot.Overview ? 20 : 14;
+        slot == MonthlyDigestSlot.Overview ? 24 : 18;
 
     public static string SlotName(MonthlyDigestSlot slot) => slot switch
     {
@@ -837,10 +1157,15 @@ public sealed partial class FreeMonthlyDigestPrompt
 
             A cut is only safe where the brackets before it are balanced, which is exactly the
             test for "am I between two names rather than inside one".                           */
+        /*  [FOUND LIVE on UAT tenant 1285, 2026-09-23] "Companies Act, 2013 & Companies (Management
+            and Administration) Rules, 2014" reached the email whole: the join sits at character 19
+            and the guard below required more than 20. The guard exists so a joiner INSIDE a short
+            title ("Health & Safety Act") is never taken for a join between statutes; "Companies
+            Act, 2013" is a complete, searchable name, and 14 still protects the short titles.    */
         foreach (var joiner in JoinedNames)
         {
             for (var at = clean.IndexOf(joiner, StringComparison.OrdinalIgnoreCase);
-                 at > 20;
+                 at > MinStatuteNameBeforeJoin;
                  at = clean.IndexOf(joiner, at + joiner.Length, StringComparison.OrdinalIgnoreCase))
             {
                 if (!BracketsBalanced(clean[..at]))
@@ -888,6 +1213,9 @@ public sealed partial class FreeMonthlyDigestPrompt
         new(StringComparer.Ordinal) { "of", "and", "the", "at", "in", "on", "for", "to", "by", "with" };
 
     private static readonly string[] JoinedNames = [" & ", " read with ", " along with "];
+
+    /// <summary>A joiner this early is part of a title ("Health &amp; Safety Act"), never a join between two statutes.</summary>
+    private const int MinStatuteNameBeforeJoin = 14;
 
     /// <summary>True when every bracket opened has been closed - so a cut here is between names, not inside one.</summary>
     private static bool BracketsBalanced(string text)

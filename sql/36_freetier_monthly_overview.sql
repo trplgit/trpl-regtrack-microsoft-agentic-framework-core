@@ -84,6 +84,13 @@
   wider sample when fewer than 2 members meet it (degraded_peer_sample).
 
   -- NAMED FINDINGS - the free-tier disclosure cap ----------------------------
+  [2026-09-23] C# now names up to FOUR (DefaultSlot 1-2 here, 3-4 from the
+  remaining ranked rows), and an aggregate-mode detector additionally emits
+  up to @MaxExamples EXAMPLE members in grid #6 (counts only, never a rate) -
+  see docs/superpowers/specs/2026-09-23-aggregate-mode-examples-design.md.
+  Error codes 51255/51256 (examples contract) sit outside the x1-x4
+  reconciliation range because that range was already full in this file.
+  Original design, still how DefaultSlot is assigned:
   At most TWO per email, chosen deterministically:
       priority 1  licence_expiring_unrenewed  - the soonest licence expiring
                   before month end with no renewal filed. A DATED EVENT, not a
@@ -120,7 +127,8 @@ CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Overview
     @CurrMonthStart      DATE,
     @AsOf                DATETIME,
     @RelativeRiskFactor  DECIMAL(4,2) = 1.50,   -- flagged at >= this multiple of the tenant's own rate
-    @CategoryFloor       INT          = 10      -- min obligations for a category to be ranked
+    @CategoryFloor       INT          = 10,     -- min obligations for a category to be ranked
+    @MaxExamples         INT          = 3       -- examples named inside an aggregate-mode pattern (2026-09-23)
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -631,6 +639,38 @@ BEGIN
         DefaultSlot     TINYINT       NULL        -- 1 / 2 = named by default; NULL = available, not shown
     );
 
+    /*  Examples for aggregate-mode patterns (grid #6). Shared shape - byte-identical in sql/36,
+        38, 39, 40, 41; sql/37 fills it for the four shared detectors.                          */
+    IF OBJECT_ID('tempdb..#eg') IS NOT NULL DROP TABLE #eg;
+    CREATE TABLE #eg (
+        Detector VARCHAR(40) NOT NULL, PatternFactKey VARCHAR(40) NOT NULL, ExampleRank INT NOT NULL,
+        EntityKind VARCHAR(20) NOT NULL, EntityId BIGINT NULL, EntityLabel NVARCHAR(MAX) NOT NULL,
+        ContextKind VARCHAR(20) NULL, ContextLabel NVARCHAR(MAX) NULL,
+        ItemCount INT NULL, BaseCount INT NULL, UnitLabel NVARCHAR(200) NOT NULL);
+
+    /*  EXAMPLES for the two overview patterns (2026-09-23 design). Same order as individual
+        mode, counts only. category figures count OBLIGATIONS (each once), never due dates -
+        the UnitLabel says so. An unnamed category is never an example.                     */
+    IF @liabMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'liability_overdue_location', 'pattern_liability_locations',
+               ROW_NUMBER() OVER (ORDER BY ll.LiabOverdueItems DESC, ll.LiabOverdueRate DESC, ll.BranchID ASC),
+               'location', ll.BranchID, ll.BranchName, ll.LiabOverdueItems, NULL,
+               N'overdue obligations at this location carry personal criminal liability'
+        FROM #liabLoc ll
+        WHERE ll.IsFlagged = 1 AND ll.BranchName IS NOT NULL
+        ORDER BY ll.LiabOverdueItems DESC, ll.LiabOverdueRate DESC, ll.BranchID ASC;
+
+    IF @catMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'category_overdue_skew', 'pattern_categories',
+               ROW_NUMBER() OVER (ORDER BY c.OverdueInst DESC, c.OverdueRate DESC, c.CategoryId ASC),
+               'category', c.CategoryId, c.CategoryName, c.OverdueInst, c.Inst,
+               N'of the obligations in this category are overdue (obligations, each counted once)'
+        FROM #cat c
+        WHERE c.IsFlagged = 1 AND c.CategoryName IS NOT NULL
+        ORDER BY c.OverdueInst DESC, c.OverdueRate DESC, c.CategoryId ASC;
+
     /*  P1 - licences expiring before month end with no renewal filed, soonest
         first. A DATED EVENT, not a pattern: the 2-name cap bounds it, the
         emission policy does not apply. Unnamed types are left to the count. */
@@ -701,8 +741,16 @@ BEGIN
     )
     UPDATE s2 SET DefaultSlot = 2;
 
+    /*  EXAMPLES CONTRACT (2026-09-23 design, Sec.2.7). An example exists only in aggregate
+        mode, beside the pattern fact it illustrates. This file's x1-x4 codes are taken, so
+        the next free ones in its block are used - the header records the deviation.      */
+    IF EXISTS (SELECT 1 FROM #eg e JOIN #cand c ON c.Detector = e.Detector)
+        THROW 51255, N'EXAMPLES CONTRACT VIOLATED - a free monthly overview detector emitted both named candidates and examples. Examples exist only in aggregate mode. Refusing to emit.', 1;
+    IF EXISTS (SELECT 1 FROM #eg e LEFT JOIN #facts f ON f.FactKey = e.PatternFactKey WHERE f.FactKey IS NULL)
+        THROW 51256, N'EXAMPLES CONTRACT VIOLATED - a free monthly overview example refers to a pattern fact that was not emitted. Refusing to emit.', 1;
+
     /*===================================================================
-      8. EMIT - five result sets, in contract order
+      8. EMIT - six result sets, in contract order (examples last, 2026-09-23)
     ===================================================================*/
     SELECT
         'control_totals'                          AS ResultSet,
@@ -763,6 +811,13 @@ BEGIN
         ('unnamed_category', (SELECT COUNT(*) FROM #cat WHERE CategoryName IS NULL),
          N'Categories with no name in ComplianceCategory. Never named in the email; counted only.')
     ) AS dq(Code, ItemCount, Detail);
+
+    /*  Grid #6 - APPENDED LAST, never before data_quality (a reader not yet updated would
+        map example rows onto its data_quality shape). Empty is normal.                     */
+    SELECT 'examples' AS ResultSet, Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel,
+           ContextKind, ContextLabel, ItemCount, BaseCount, UnitLabel
+    FROM #eg
+    ORDER BY PatternFactKey, ExampleRank;
 END
 GO
 

@@ -1,40 +1,34 @@
 # Free Monthly Insights - Location
 
-**Runs:** the third Sunday of every month, per recipient scope group.
-**Data:** `dbo.usp_Insights_FreeMonthly_Location` (sql/39).
-**Read first:** `06_freetier_monthly_shared_rules`.
+About the reader's sites. It answers: is my problem spread across my sites, or does it have
+an address, and which addresses are they?
 
----
+- Past - which sites left {{PREV_MONTH}}'s work outstanding, and how many sites still carry
+  something from it against the number in scope. Name the site that left the most, with its
+  own count against its own total and the organisation's rate beside it.
+- Present - which sites are fragile now: a site whose open work all rests on one person; a
+  site with nothing configured; sites carrying liability-bearing or long-overdue work; the
+  share of everything overdue sitting at the few sites holding the most. Name every site
+  the input gives you, each with the figure that put it in the email and what kind of work
+  it is holding.
+- Future - only what the input gives you.
 
-## This email
+A site where every open obligation rests on one person gets its own paragraph. It is the
+strongest finding this email can carry; how big the backlog is and who it depends on are
+two different subjects.
 
-About **the reader's sites**. The question it answers is: *is my problem spread across
-my sites, or does it have an address?*
+**Narrow the organisation's figure to its sites.** When the input gives the whole
+organisation's overdue total, the share held by the 3 sites holding the most, and named
+sites with their own counts, write them in that order in one place, so the reader sees the
+backlog narrow from everywhere to a few sites to an address.
 
-Write it as past, present, future:
+## Units
 
-- **Past** - which sites let {{PREV_MONTH}} slip, and how many sites still carry
-  something from it against the number in scope.
-- **Present** - which sites are fragile now. A site whose open work all rests on one
-  person; a site in scope with nothing configured at all; sites carrying liability-bearing
-  or long-overdue work; the share of everything overdue sitting at the few sites holding
-  the most. Name the worst one the input gives you.
-- **Future** - only if the input gives you something still to come; otherwise leave it out.
+This email mixes obligations and sites: "overdue at 9 of its 12 sites" and "104 overdue
+obligations" cannot share a clause.
 
-**Length:** up to 320 words after `Good morning,`, in at most 4 short paragraphs. Fewer is better if the input is thin.
+A site with no obligations configured is not a clean site. It cannot be assessed; never
+describe it as performing well. If such a site is named, say that nothing is configured
+there and that it therefore cannot be assessed for overdue work.
 
-## Care with the numbers
-
-This email mixes two units - **obligations** and **locations**. The label says which.
-"overdue at 9 of its 12 locations" and "104 overdue obligations" cannot share a clause.
-
-A finding's `BaseCount` belongs to **that site**, not the scope - never attach "across
-your scope" to one site's number.
-
-A location with no obligations configured is **not** a clean location. It has nothing to
-be overdue on, so it cannot be assessed at all - never describe it as performing well.
-
-**A site where every open obligation rests on one person gets its own paragraph.** It is
-the strongest finding this email can carry and it keeps being buried at the end of a
-paragraph about the overdue total. How big the backlog is and who it depends on are two
-different subjects.
+**Length:** up to 620 words after `Good morning,`, up to 6 paragraphs, up to 10 figures.

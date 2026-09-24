@@ -66,7 +66,8 @@ CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Users
     @RelativeRiskFactor  DECIMAL(4,2) = 1.50,
     @ConcentrationFactor DECIMAL(4,2) = 2.00,
     @MemberFloor         INT          = 5,
-    @MaxPerDetector      INT          = 5
+    @MaxPerDetector      INT          = 5,
+    @MaxExamples         INT          = 3      -- examples named inside an aggregate-mode pattern (2026-09-23)
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -120,6 +121,15 @@ BEGIN
         Metric VARCHAR(40) NOT NULL, MetricPct INT NULL, TenantPct INT NULL, ItemCount INT NULL,
         BaseCount INT NULL, EventDate DATE NULL, AsAtRequired BIT NOT NULL DEFAULT 0,
         ProblemCount INT NOT NULL, PopulationCount INT NOT NULL, DefaultSlot TINYINT NULL);
+
+    /*  Examples for aggregate-mode patterns (grid #6). Shared shape - byte-identical in sql/36,
+        38, 39, 40, 41; sql/37 fills it for the four shared detectors.                          */
+    IF OBJECT_ID('tempdb..#eg') IS NOT NULL DROP TABLE #eg;
+    CREATE TABLE #eg (
+        Detector VARCHAR(40) NOT NULL, PatternFactKey VARCHAR(40) NOT NULL, ExampleRank INT NOT NULL,
+        EntityKind VARCHAR(20) NOT NULL, EntityId BIGINT NULL, EntityLabel NVARCHAR(MAX) NOT NULL,
+        ContextKind VARCHAR(20) NULL, ContextLabel NVARCHAR(MAX) NULL,
+        ItemCount INT NULL, BaseCount INT NULL, UnitLabel NVARCHAR(200) NOT NULL);
 
     IF OBJECT_ID('tempdb..#facts') IS NOT NULL DROP TABLE #facts;
     CREATE TABLE #facts (
@@ -191,7 +201,7 @@ BEGIN
     EXEC dbo.usp_Insights_FreeMonthly_MemberDetectors
          @EntityKind = 'person', @EntityPlural = N'people',
          @RelativeRiskFactor = @RelativeRiskFactor, @ConcentrationFactor = @ConcentrationFactor,
-         @MemberFloor = @MemberFloor, @MaxPerDetector = @MaxPerDetector;
+         @MemberFloor = @MemberFloor, @MaxPerDetector = @MaxPerDetector, @MaxExamples = @MaxExamples;
 
     /*  Owned + unowned = all open work holds by construction (#smap maps exactly
         the schedules with a performer), so it is REPORTED in control_totals,
@@ -296,13 +306,45 @@ BEGIN
                 N'per cent of all overdue items sit with the 3 people holding the most (rounded down)',
                 'people', 180, 'stock', 'operational_continuity', 3, 0, 8);
 
+    /*  [2026-09-23] Each pattern now carries its _of partner - the population it was measured
+        against. Without it "N of your M people" was unwritable, and worse, a model reaching for
+        a denominator took u_people_with_open_work and produced a fraction nobody computed.     */
     IF @deactMode = 'aggregate'
         INSERT #facts (FactKey, FactValue, DisplayLabel, Section, DisplayOrder, WindowScope, ImpactClass, SeverityTier, AsAtRequired, HeadlineRank)
-        VALUES ('pat_deactivated_owner', @deactHold, N'people holding open work are no longer active users - a pattern across your scope', 'patterns', 690, 'stock', 'operational_continuity', 1, 0, 1);
+        VALUES ('pat_deactivated_owner',    @deactHold, N'people holding open work are no longer active users - a pattern across your scope', 'patterns', 690, 'stock', 'operational_continuity', 1, 0, 1),
+               ('pat_deactivated_owner_of', @holders,   N'people holding open work were compared',                                            'patterns', 691, 'ctx',   'volume',                 5, 0, NULL);
 
     IF @selfMode = 'aggregate'
         INSERT #facts (FactKey, FactValue, DisplayLabel, Section, DisplayOrder, WindowScope, ImpactClass, SeverityTier, AsAtRequired, HeadlineRank)
-        VALUES ('pat_self_review', @selfRevPeople, N'people review their own work on open items - a pattern across your scope', 'patterns', 740, 'stock', 'operational_continuity', 2, 0, 6);
+        VALUES ('pat_self_review',    @selfRevPeople, N'people review their own work on open items - a pattern across your scope', 'patterns', 740, 'stock', 'operational_continuity', 2, 0, 6),
+               ('pat_self_review_of', @holders,       N'people holding open work were compared',                                   'patterns', 741, 'ctx',   'volume',                 5, 0, NULL);
+
+    /*  EXAMPLES for the users-only patterns - same order as individual mode, counts only, and
+        only when names are allowed: with @AllowPersonNames = 0 every label is NULL and the
+        WHERE keeps every person out. Explicit, not incidental.                                */
+    IF @deactMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'deactivated_owner', 'pat_deactivated_owner',
+               ROW_NUMBER() OVER (ORDER BY m.OpenItems DESC, m.MemberId),
+               'person', m.MemberId, p.FullName, m.OpenItems, NULL,
+               N'open obligations are held by this person, who is no longer an active user'
+        FROM #mm m
+        JOIN #people p ON p.UserID = m.MemberId
+        WHERE m.OpenItems >= 1 AND p.IsInactive = 1
+          AND @AllowPersonNames = 1 AND p.FullName IS NOT NULL
+        ORDER BY m.OpenItems DESC, m.MemberId;
+
+    IF @selfMode = 'aggregate'
+        INSERT #eg (Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ItemCount, BaseCount, UnitLabel)
+        SELECT TOP (@MaxExamples) 'self_review', 'pat_self_review',
+               ROW_NUMBER() OVER (ORDER BY r.Items DESC, r.UserID),
+               'person', r.UserID, p.FullName, r.Items, m.OpenItems,
+               N'of the open obligations this person holds are also reviewed by the same person'
+        FROM #selfRev r
+        JOIN #people p ON p.UserID = r.UserID
+        JOIN #mm m     ON m.MemberId = r.UserID
+        WHERE @AllowPersonNames = 1 AND p.FullName IS NOT NULL
+        ORDER BY r.Items DESC, r.UserID;
 
     /*===================================================================
       5. DEFAULT SLOTS + HEADLINE (identical block in every dimension slot)
@@ -335,6 +377,13 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM #facts WHERE IsHeadline = 1)
             UPDATE #facts SET IsHeadline = 1 WHERE FactKey = 't_rm_due';
     END
+
+    /*  EXAMPLES CONTRACT (2026-09-23 design, Sec.2.7). An example exists only in aggregate
+        mode, beside the pattern fact it illustrates. Codes from this file's own block.       */
+    IF EXISTS (SELECT 1 FROM #eg e JOIN #cand c ON c.Detector = e.Detector)
+        THROW 51271, N'EXAMPLES CONTRACT VIOLATED - a free monthly users detector emitted both named candidates and examples. Examples exist only in aggregate mode. Refusing to emit.', 1;
+    IF EXISTS (SELECT 1 FROM #eg e LEFT JOIN #facts f ON f.FactKey = e.PatternFactKey WHERE f.FactKey IS NULL)
+        THROW 51272, N'EXAMPLES CONTRACT VIOLATED - a free monthly users example refers to a pattern fact that was not emitted. Refusing to emit.', 1;
 
     /*===================================================================
       6. EMIT
@@ -384,6 +433,13 @@ BEGIN
         ('prev_month_not_settled', (SELECT ISNULL(SUM(LmDue), 0) FROM #mm),
          N'Last-month figures are as at the run date; late closures can still arrive.')
     ) AS dq(Code, ItemCount, Detail);
+
+    /*  Grid #6 - APPENDED LAST, never before data_quality (a reader not yet updated would
+        map example rows onto its data_quality shape). Empty is normal.                     */
+    SELECT 'examples' AS ResultSet, Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel,
+           ContextKind, ContextLabel, ItemCount, BaseCount, UnitLabel
+    FROM #eg
+    ORDER BY PatternFactKey, ExampleRank;
 END
 GO
 

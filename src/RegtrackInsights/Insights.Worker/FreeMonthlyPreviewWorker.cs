@@ -493,6 +493,10 @@ public sealed class FreeMonthlyPreviewWorker(
         foreach (var c in d.Candidates)
             sb.AppendLine($"slot {c.DefaultSlot?.ToString() ?? "-"} | {c.Detector,-32} #{c.RankInDetector} | {c.EntityKind} '{c.EntityLabel}'{(c.ContextLabel is null ? "" : $" at '{c.ContextLabel}'")} | item {c.ItemCount} of {c.BaseCount} | pct {c.MetricPct} vs {c.TenantPct} | {c.ProblemCount} of {c.PopulationCount} {(c.EventDate is { } e ? $"| {e:yyyy-MM-dd}" : "")}");
 
+        sb.AppendLine().AppendLine("== EXAMPLES (grid #6 - members illustrating an aggregate-mode pattern; empty unless a detector is in aggregate mode) ==");
+        foreach (var x in d.Examples)
+            sb.AppendLine($"{x.PatternFactKey,-32} #{x.ExampleRank} | {x.EntityKind} '{x.EntityLabel}'{(x.ContextLabel is null ? "" : $" at '{x.ContextLabel}'")} | {x.ItemCount} of {x.BaseCount} {x.UnitLabel}");
+
         sb.AppendLine().AppendLine("== DATA QUALITY ==");
         foreach (var q in d.DataQuality)
             sb.AppendLine($"{q.Code,-34} {q.ItemCount,7}  {q.Detail}");

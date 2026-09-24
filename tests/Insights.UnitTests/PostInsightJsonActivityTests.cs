@@ -16,13 +16,18 @@ namespace Insights.UnitTests;
 /// </summary>
 public sealed class PostInsightJsonActivityTests
 {
-    private static FreeDigestAggregates Aggregates() =>
-        new(1008, DateTime.UtcNow, 1893, 24, 3, 1, 9, 78, 5, 2, 12, 12, 40, 4, 6);
-
-    private static InsightNarrative Narrative() => new("High impact", "headline", "explanation", "Llm");
+    /// <summary>A real card from the Users fixture - the activity only needs a well-formed one.</summary>
+    private static InsightCard Card()
+    {
+        var data = MonthlyExamples.Users();
+        var input = Insights.Agents.InsightCardInput.Build(data);
+        var (headline, narrative) = Insights.Agents.InsightCardFallback.Build(input.Guardrails);
+        return Insights.Agents.InsightCardBuilder.Build(input, 1008, 12345, data.Edition.Sunday,
+            new Insights.Agents.InsightCardText(headline, narrative, "llm", null, true, 0, 0, string.Empty));
+    }
 
     private static PostInsightJsonInput Input() =>
-        new(1008, 12345, "2026-09-13", Aggregates(), Narrative());
+        new(1008, 12345, "2026-09-13", Card());
 
     private static FreeDigestSettings Settings(bool enabled = true, HttpStatusCode? statusCode = null) => new()
     {
@@ -205,14 +210,13 @@ public sealed class PostInsightJsonActivityTests
         var client = new HttpClient(handler) { BaseAddress = new Uri("https://example.com/") };
         var activity = new PostInsightJsonActivity(repo.Object, client, Settings(), NullLogger<PostInsightJsonActivity>.Instance, FastRetryDelays);
 
-        var input = new PostInsightJsonInput(
-            1008, 12345, "2026-09-13", Aggregates(),
-            new InsightNarrative("High impact", "1 of the estate's 24 obligations carry personal liability", "Clearing it leaves the officer's exposure at zero.", "Llm"));
+        var card = Card() with { Headline = "1 of the organisation's 24 obligations carry personal liability" };
+        var input = new PostInsightJsonInput(1008, 12345, "2026-09-13", card);
 
         await activity.RunAsync(input);
 
         Assert.NotNull(handler.LastRequestBody);
-        Assert.Contains("estate's", handler.LastRequestBody);
+        Assert.Contains("organisation's", handler.LastRequestBody);
         Assert.DoesNotContain("\\u0027", handler.LastRequestBody);
     }
 

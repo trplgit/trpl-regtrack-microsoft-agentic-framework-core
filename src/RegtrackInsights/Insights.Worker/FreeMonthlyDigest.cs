@@ -53,7 +53,15 @@ public sealed class FreeMonthlySettings
     {
         var slots = Enum.GetValues<MonthlyDigestSlot>();
 
-        var caps = slots.ToDictionary(s => s, s => RequiredPositiveInt(configuration, $"Budget:FreeMonthlyTokenCap:{s}"));
+        /*  [2026-09-23] The configured cap is a FLOOR-ADJUSTED value: an environment may raise
+            it, never starve the email below what its own prompts need. The 4-name, 6-example,
+            700-word email measured 6-7.5k input and 1-2.5k output tokens per slot on the
+            reasoning deployment; a stale 12,000/9,000 cap from before that change would send the
+            deterministic fallback on every call, silently, in whichever environment forgot to
+            update appsettings. The key stays required so a missing one still fails at startup. */
+        var caps = slots.ToDictionary(
+            s => s,
+            s => Math.Max(RequiredPositiveInt(configuration, $"Budget:FreeMonthlyTokenCap:{s}"), MinimumTokenCapFor(s)));
 
         var settings = new FreeMonthlySettings
         {
@@ -77,6 +85,13 @@ public sealed class FreeMonthlySettings
         configuration[key] is { Length: > 0 } value
             ? value
             : throw new InvalidOperationException($"{key} is not configured. It has no default in code - add it to appsettings.json.");
+
+    /// <summary>
+    /// The least a slot needs for the current prompts: ~7.5k input plus reasoning and a 700-word
+    /// body for the Overview, ~7k plus a 620-word body for the rest, with headroom for a redraft.
+    /// </summary>
+    public static int MinimumTokenCapFor(MonthlyDigestSlot slot) =>
+        slot == MonthlyDigestSlot.Overview ? 16_000 : 14_000;
 
     private static int RequiredPositiveInt(IConfiguration configuration, string key) =>
         int.TryParse(Required(configuration, key), out var value) && value > 0
@@ -160,8 +175,14 @@ public sealed class FreeMonthlyDigestComposer(
             /*  Presentation is fixed, never rejected: normalise emphasis, then delete the sentences
                 that comment on the figures instead of stating them. Only then is what remains
                 checked for truth. Deleting can never add a claim, so the order is safe.        */
-            var normalized = FreeMonthlyDraftNormalizer.Normalize(draft.Body);
+            var headlineFigure = prompt.HeadlineMarker is { } marker && !marker.StartsWith("{{", StringComparison.Ordinal) ? marker : null;
+            var normalized = FreeMonthlyDraftNormalizer.Normalize(draft.Body, headlineFigure);
             var repaired = FreeMonthlyDraftRepair.Apply(normalized, prompt);
+
+            /*  [OWNER, 2026-09-24] Paragraphs of the same period sit together: lead, then last
+                month, this month so far, the standing position, what is still to come. Only the
+                order of whole paragraphs changes, so what was true before is true after.      */
+            repaired = repaired with { Body = FreeMonthlyParagraphOrder.Arrange(repaired.Body) };
 
             if (repaired.Removed.Count > 0)
                 logger.LogInformation(

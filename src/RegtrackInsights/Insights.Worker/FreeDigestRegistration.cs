@@ -41,6 +41,16 @@ public static class FreeDigestRegistration
         var promptDirectory = Require(configuration, "Agents:PromptDirectory");
         var templateDirectory = Require(configuration, "Email:TemplatePath");
         var chatClientFactory = BuildChatClientFactory(configuration);
+
+        /*  [MEASURED on tenant 1082, 2026-09-24] The card is two sentences chosen from a closed set
+            of numbers, not analysis, and it does not need the email's thinking budget: at medium
+            effort the same card cost 1,664 output tokens, at low 927, and the text that shipped
+            passed the same validator either way. Reasoning tokens are billed as output, so this is
+            the whole saving. It gets its own knob rather than sharing the email's, so raising the
+            email's effort later cannot quietly re-inflate a call that never needed it.          */
+        var cardChatClientFactory = BuildChatClientFactory(
+            configuration, configuration["Llm:AzureOpenAi:InsightCardReasoningEffort"] ?? "low");
+
         var emailSenderFactory = BuildEmailSenderFactory(configuration);
 
         /*  Named HttpClients via the factory, never `new HttpClient()`. A long-lived host that
@@ -71,12 +81,30 @@ public static class FreeDigestRegistration
 
         services.AddSingleton<InsightNarrativeWriter>();
 
+        // ADR-0004 (2026-09-23) - the insight card lane: the two lines of card text from the
+        // monthly slot input, and the composer that turns slot data into the full card.
+        services.AddSingleton(sp => new InsightCardWriter(
+            cardChatClientFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(LlmClientName)),
+            sp.GetRequiredService<IPromptLoader>()));
+        services.AddTransient<InsightCardComposer>();
+
         /*  The digest email content (spec 2026-09-18) - ComposeDigestActivity always uses these.
             Settings are read and validated HERE, eagerly - including that every configured prompt
             version exists on disk - for the same reason as BuildSettings above.                  */
         var monthlySettings = FreeMonthlySettings.Build(configuration, promptDirectory);
         services.AddSingleton(monthlySettings);
-        services.AddSingleton<FreeMonthlyDigestWriter>();
+
+        /*  FreeDigest:Preview:DraftsDir re-runs the deterministic layers over drafts the model
+            already wrote (see RecordedDraftClient) - no billed call. Development only, like
+            ReplayDir below: ignored unless the preview is enabled.                            */
+        var draftsDir = configuration.GetValue("FreeDigest:Preview:Enabled", false)
+            ? configuration["FreeDigest:Preview:DraftsDir"]
+            : null;
+
+        if (draftsDir is { Length: > 0 })
+            services.AddSingleton(sp => new FreeMonthlyDigestWriter(new RecordedDraftClient(Path.GetFullPath(draftsDir)), sp.GetRequiredService<IPromptLoader>()));
+        else
+            services.AddSingleton<FreeMonthlyDigestWriter>();
         /*  FreeDigest:Preview:ReplayDir replaces SQL with slot data captured earlier to disk, so
             prompt and model tuning can continue when the UAT database is unavailable. Development
             only: it is ignored unless FreeDigest:Preview:Enabled is also true, which no deployed
@@ -193,7 +221,13 @@ public static class FreeDigestRegistration
         Both FAIL CLOSED on an unrecognised name. Falling back to a default would mean shipping
         mail, or spending LLM budget, through something nobody selected - the same silent-default
         failure the dictionary's coverage check exists to prevent elsewhere.                    */
-    private static Func<HttpClient, IClaudeClient> BuildChatClientFactory(IConfiguration configuration)
+    /// <param name="reasoningEffortOverride">
+    /// A lane that needs less thinking than the deployment's default (the insight card, ADR-0004).
+    /// Applied ONLY when the deployment is already a reasoning one: setting an effort on a
+    /// non-reasoning deployment switches the request to <c>max_completion_tokens</c> and it would
+    /// reject the call outright.
+    /// </param>
+    private static Func<HttpClient, IClaudeClient> BuildChatClientFactory(IConfiguration configuration, string? reasoningEffortOverride = null)
     {
         var provider = Require(configuration, "Llm:Provider");
 
@@ -242,6 +276,17 @@ public static class FreeDigestRegistration
                     throw new InvalidOperationException(
                         "Llm:AzureOpenAi:MaxOutputTokens must be at least 1000 when ReasoningEffort is set. "
                         + "Reasoning tokens come out of it, so a small budget returns an empty body. 8000 is a sensible start.");
+
+                /*  A lane may think less than the deployment's default, never more cheaply than it
+                    can: an override on a deployment with no reasoning effort at all is ignored,
+                    because turning reasoning ON for one lane would change the request shape.    */
+                if (reasoningEffortOverride is { Length: > 0 } && effort is { Length: > 0 })
+                {
+                    effort = reasoningEffortOverride.Trim().ToLowerInvariant();
+                    if (effort is not ("none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max"))
+                        throw new InvalidOperationException(
+                            $"Llm:AzureOpenAi:InsightCardReasoningEffort '{effort}' is not a known level (none|minimal|low|medium|high|xhigh|max).");
+                }
 
                 return http => new AzureOpenAiChatClient(
                     http, endpoint, deployment, azureKey, temperature, effort, verbosity, maxOutputTokens);

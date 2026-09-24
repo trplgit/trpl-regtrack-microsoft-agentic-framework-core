@@ -38,7 +38,7 @@ public sealed class FreeMonthlyDigestWriter(IClaudeClient client, IPromptLoader 
 {
     private const double CharsPerToken = 4.0;
     private const int MinCompletionTokens = 400;   // the shortest real monthly email (a no-licence Licence week) plus markdown.
-    private const int MaxCompletionTokens = 1100;  // the overview's 360-word ceiling is ~500-600 tokens; the rest is variance headroom.
+    private const int MaxCompletionTokens = 1900;  // the overview's 700-word ceiling is ~950-1,050 tokens; the rest is variance headroom. (Ignored on a reasoning deployment, which uses Llm:AzureOpenAi:MaxOutputTokens.)
 
     public async Task<string> LoadSystemPromptAsync(
         MonthlyDigestSlot slot, CancellationToken cancellationToken = default)

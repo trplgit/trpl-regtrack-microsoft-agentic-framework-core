@@ -124,7 +124,7 @@ public static partial class FreeMonthlyDigestValidator
     public static IReadOnlyList<string> SentenceProblems(string sentence, FreeMonthlyDigestPrompt prompt)
     {
         var problems = new List<string>();
-        var stripped = Placeholder().Replace(sentence, "ph");
+        var stripped = WithoutOrdinals(Placeholder().Replace(sentence, "ph"));
 
         foreach (Match m in NumberToken().Matches(stripped))
         {
@@ -172,11 +172,58 @@ public static partial class FreeMonthlyDigestValidator
         return problems;
     }
 
+    /// <summary>
+    /// A ceiling against padding, never a target. [RAISED 2026-09-23] 360/300/280 was tight enough
+    /// that the model compressed sentences to fit - dropping the period a count belonged to, or
+    /// folding two claims into one clause - which is the opposite of what a one-skim reader needs.
+    /// A plain sentence is longer than a dense one, and the extra words are cheap next to a
+    /// reader who has to stop and work out where a number came from.
+    ///
+    /// <para>[RAISED AGAIN 2026-09-23, to 700/620/560] The email now names up to four things
+    /// (<see cref="FreeMonthlyDigestPrompt.MaxNamedFindings"/>), each with its own sentence saying
+    /// where it is, what it holds and what that means. At 420 words four named paragraphs left no
+    /// room for the month's own story. The reader's instruction was explicit: the email may be
+    /// longer, provided every sentence is understood in one read - so the ceiling is generous and
+    /// the prompts spend the room on plain sentences, never on more figures.</para>
+    /// </summary>
+    /// <summary>
+    /// The truth checks for a piece of prose that is NOT a whole email - the insight card's
+    /// headline and narrative (ADR-0004). Same closed number set, same placeholder rules, same
+    /// banned phrases as <see cref="Validate"/>, without the greeting, length and paragraph rules
+    /// that only a full email carries. Empty means the text may be sent.
+    /// </summary>
+    public static IReadOnlyList<string> ProseProblems(string text, FreeMonthlyDigestPrompt prompt)
+    {
+        var problems = new List<string>();
+
+        foreach (Match m in Placeholder().Matches(text))
+            if (!prompt.Bindings.ContainsKey(m.Value))
+                problems.Add($"uses the placeholder {m.Value}, which this insight was not given");
+
+        var stripped = WithoutOrdinals(Placeholder().Replace(text, "ph"));
+        if (stripped.Contains("{{", StringComparison.Ordinal) || stripped.Contains("}}", StringComparison.Ordinal))
+            problems.Add("contains a malformed placeholder");
+
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+"))
+            if (sentence.Trim().Length > 0)
+                problems.AddRange(SentenceProblems(sentence, prompt));
+
+        foreach (var phrase in BannedPhrases)
+            if (Regex.IsMatch(stripped, $@"\b{Regex.Escape(phrase)}\b", RegexOptions.IgnoreCase))
+                problems.Add($"contains the banned word '{phrase}'");
+
+        foreach (Match m in NumberWord().Matches(stripped))
+            if (!(m.Value.Equals("three", StringComparison.OrdinalIgnoreCase) && prompt.AllowedNumbers.Contains(3)))
+                problems.Add($"spells the number '{m.Value}' as a word - figures must be digits");
+
+        return problems.Distinct().ToList();
+    }
+
     public static int MaxWordsFor(MonthlyDigestSlot slot) => slot switch
     {
-        MonthlyDigestSlot.Overview => 360,
-        MonthlyDigestSlot.Licence => 280,
-        _ => 300,
+        MonthlyDigestSlot.Overview => 700,
+        MonthlyDigestSlot.Licence => 560,
+        _ => 620,
     };
 
     /// <summary>
@@ -241,8 +288,18 @@ public static partial class FreeMonthlyDigestValidator
             advisories.Add($"names {namesUsed} of {findingNames.Count} findings - "
                            + string.Join(", ", findingNames.Where(p => !placeholderCounts.ContainsKey(p))) + " went unused");
 
+        /*  Examples are colour, never a gate - but an email handed five and using none is the
+            "18 locations" count the owner asked to see names beside, so it is logged for tuning. */
+        var exampleNames = prompt.Bindings.Keys
+            .Where(p => p.StartsWith("{{EG_", StringComparison.Ordinal) && !p.EndsWith("_AT}}", StringComparison.Ordinal))
+            .ToList();
+        var examplesUsed = exampleNames.Count(placeholderCounts.ContainsKey);
+        if (examplesUsed < exampleNames.Count)
+            advisories.Add($"uses {examplesUsed} of {exampleNames.Count} examples - "
+                           + string.Join(", ", exampleNames.Where(p => !placeholderCounts.ContainsKey(p))) + " went unused");
+
         // Placeholders become a lowercase neutral word: no digits, no capital, no sentence boundary.
-        var stripped = Placeholder().Replace(text, "ph");
+        var stripped = WithoutOrdinals(Placeholder().Replace(text, "ph"));
 
         if (stripped.Contains("{{", StringComparison.Ordinal) || stripped.Contains("}}", StringComparison.Ordinal))
             failures.Add("contains a malformed placeholder");
@@ -269,6 +326,14 @@ public static partial class FreeMonthlyDigestValidator
             var word = m.Value.ToLowerInvariant();
             if (word == "three" && prompt.AllowedNumbers.Contains(3))
                 continue;
+
+            /*  [2026-09-23] A sentence that OPENS with a number word - "Three of the eight
+                compliance categories ..." - keeps every number word in it as a word, because a
+                sentence never opens with a digit and "Three of the 8" is worse than either. Each
+                is still checked: its value must be in the closed set exactly as a digit would. */
+            if (SentenceOpensWithNumberWord(stripped, m.Index) && NumberWordValues.TryGetValue(word, out var value) && prompt.AllowedNumbers.Contains(value))
+                continue;
+
             failures.Add($"spells the number '{m.Value}' as a word - figures must be digits, or they cannot be checked against the data");
         }
 
@@ -331,12 +396,14 @@ public static partial class FreeMonthlyDigestValidator
                 criminal liability", "rated critical"). [2026-09-22] The reader needs to see what
                 kind of problem it is as much as how big - so 4 markers is the ceiling, not 2.
 
-                The model still writes no markers at all; both spans are added in code, so this
-                only ever has to catch a draft that arrived with its own.                       */
+                [2026-09-24] The model now marks the insight spans itself and the normalizer
+                keeps at most two of them (one beside a name), unwrapping anything long, bare or
+                unbalanced, then adds the lead figure. Three spans is still the ceiling, so this
+                only ever catches a draft that reached here without the normalizer.           */
             var bold = CountOccurrences(paragraph, "**");
             if (bold % 2 != 0)
                 failures.Add("has an unclosed ** bold marker");
-            else if (bold > 4)
+            else if (bold > 6)   // the lead figure and up to two insight spans (2026-09-24)
                 failures.Add("bolds more than a figure and its impact in one paragraph");
 
             foreach (var line in paragraph.Split('\n'))
@@ -394,6 +461,24 @@ public static partial class FreeMonthlyDigestValidator
         return i < 0 || text[i] is '\n' or '.' or '!' or '?' or ':';
     }
 
+    /// <summary>True when the sentence containing <paramref name="index"/> opens with a number word.</summary>
+    private static bool SentenceOpensWithNumberWord(string text, int index)
+    {
+        var start = index;
+        while (start > 0 && text[start - 1] is not ('\n' or '.' or '!' or '?' or ':'))
+            start--;
+
+        var first = FirstWord().Match(text[start..]);
+        return first.Success && NumberWordValues.ContainsKey(first.Groups[1].Value.ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// An ordinal is a date or a position, never a quantity. [FOUND LIVE on PROD tenant 1008,
+    /// 2026-09-23] The model quoted the label "between the 1st of this month and today"; "1st" was
+    /// read as the number 1, which was in no fact, and the whole this-month paragraph was deleted.
+    /// </summary>
+    internal static string WithoutOrdinals(string text) => OrdinalToken().Replace(text, "nth");
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;
@@ -429,6 +514,21 @@ public static partial class FreeMonthlyDigestValidator
 
     [GeneratedRegex(@"\d{1,3}(?:,\d{3})+|\d+")]
     private static partial Regex NumberToken();
+
+    [GeneratedRegex(@"\b\d{1,2}(st|nd|rd|th)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OrdinalToken();
+
+    [GeneratedRegex(@"^[\s""'(]*([A-Za-z]+)\b")]
+    private static partial Regex FirstWord();
+
+    /// <summary>The value of a number word that may open a sentence. Compounds ("thirty-two") are not here and still reject.</summary>
+    private static readonly Dictionary<string, int> NumberWordValues = new(StringComparer.Ordinal)
+    {
+        ["two"] = 2, ["three"] = 3, ["four"] = 4, ["five"] = 5, ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9,
+        ["ten"] = 10, ["eleven"] = 11, ["twelve"] = 12, ["thirteen"] = 13, ["fourteen"] = 14, ["fifteen"] = 15,
+        ["sixteen"] = 16, ["seventeen"] = 17, ["eighteen"] = 18, ["nineteen"] = 19, ["twenty"] = 20,
+        ["thirty"] = 30, ["forty"] = 40, ["fifty"] = 50, ["sixty"] = 60, ["seventy"] = 70, ["eighty"] = 80, ["ninety"] = 90,
+    };
 
     [GeneratedRegex(@"\*\*(.+?)\*\*", RegexOptions.Singleline)]
     private static partial Regex FirstBold();

@@ -64,14 +64,14 @@ public sealed class FreeDigestInsightJsonOrchestrator : TaskOrchestration<FreeDi
             totalInputTokens += composed.InputTokens;
             totalOutputTokens += composed.OutputTokens;
 
-            // Fan the SAME group-level aggregates + narrative out to every recipient sharing this
-            // scope - identical numbers, identical narrative, differing only by UserId. No further
-            // LLM spend per recipient, matching the email digest's own cost architecture.
+            // Fan the SAME group-level card out to every recipient sharing this scope - identical
+            // numbers, identical text, differing only by UserId (the mapper re-stamps insight_id).
+            // No further LLM spend per recipient, matching the email digest's own cost architecture.
             foreach (var recipient in group.Recipients)
             {
                 var result = await context.ScheduleWithRetry<PostInsightJsonOutput>(
                     typeof(PostInsightJsonActivity).Name, "1.0", retry,
-                    new PostInsightJsonInput(input.TenantId, recipient.UserId, resolved.WeekEnding, composed.Aggregates, composed.Narrative));
+                    new PostInsightJsonInput(input.TenantId, recipient.UserId, resolved.WeekEnding, composed.Card));
 
                 if (result.Posted)
                     posted++;

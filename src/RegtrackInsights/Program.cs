@@ -142,6 +142,12 @@ builder.Services.AddHostedService<FreeDigestArtifactDumpWorker>();
 //   dotnet run -- --FreeDigest:Preview:Enabled=true --FreeDigest:CustomerId=1490 --Insights:ClientOnly=true --FreeDigest:Schedule:Enabled=false
 builder.Services.AddHostedService<FreeMonthlyPreviewWorker>();
 
+// PREVIEW ONLY - the weekly insight JSON (the /insights hub card) for one tenant, to local
+// .insight.json + .insight.debug.txt files: five subject procs read, one LLM call, nothing
+// posted. Does nothing unless FreeDigest:InsightPreview:Enabled=true - see InsightJsonPreviewWorker:
+//   dotnet run -- --FreeDigest:InsightPreview:Enabled=true --FreeDigest:CustomerId=1082 --Insights:ClientOnly=true --FreeDigest:Schedule:Enabled=false
+builder.Services.AddHostedService<InsightJsonPreviewWorker>();
+
 // One-shot runner for the paid orchestrator. Does nothing unless Insights:RunOnce=true:
 //   dotnet run -- --Insights:RunOnce=true --Insights:TenantId=29 --Insights:UserId=38
 builder.Services.AddHostedService<InsightsRunOnceWorker>();

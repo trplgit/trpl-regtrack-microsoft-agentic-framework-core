@@ -195,10 +195,17 @@ BEGIN
         INSERT #report VALUES (@c, @u, 'load_facts', 'ERROR', @err);
     END CATCH
 
-    /*-- 2b. Every slot proc end to end - each must return 5 result sets:
-           control_totals, facts, detector_policy, candidates, data_quality.
+    /*-- 2b. Every slot proc end to end - each must return 6 result sets:
+           control_totals, facts, detector_policy, candidates, data_quality,
+           examples (added 2026-09-23, always LAST; empty is normal).
            What to eyeball in the grids above:
              - at most 2 candidate rows carry a DefaultSlot (1 and 2)
+             - examples: every row's Detector shows EmitMode = 'aggregate' in
+               detector_policy; no Detector appears in BOTH candidates and
+               examples; at most 3 rows per Detector; no NULL or blank
+               EntityLabel; NEVER a ghost_location row; no person rows when
+               @AllowPersonNames = 0; ItemCount <= BaseCount where both set;
+               every PatternFactKey exists in facts with its _of partner
              - Overview: exactly one fact with IsHeadline = 1
              - other slots: HeadlineSource = candidate, or exactly one
                IsHeadline fact

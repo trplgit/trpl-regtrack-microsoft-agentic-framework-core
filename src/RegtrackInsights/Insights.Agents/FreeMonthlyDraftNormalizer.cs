@@ -32,19 +32,134 @@ public static partial class FreeMonthlyDraftNormalizer
         its first one, because the prompts already require the point to lead - so that is what gets
         emphasised, with the unit that follows it and nothing else. The model cannot get this wrong
         any more, because it is no longer being asked.                                            */
-    public static string Normalize(string body)
+    /// <param name="headlineFigure">
+    /// The headline fact's value as digits, if the headline is a fact. [FOUND LIVE on PROD tenant
+    /// 1008, 2026-09-23] The lead paragraph read "Of the 1,915 obligations that fell due in August,
+    /// 590 remained open, including 180 that carry personal criminal liability" and emphasised
+    /// 1,915 - the denominator - while 180, the headline the data layer chose, sat plain. In the
+    /// first paragraph the headline figure is emphasised wherever it appears; elsewhere the first
+    /// figure still leads.
+    /// </param>
+    public static string Normalize(string body, string? headlineFigure = null)
     {
         var text = body.Replace("\r\n", "\n").Trim();
 
-        var paragraphs = text.Split("\n\n", StringSplitOptions.None)
-            .SelectMany(p => p.StartsWith("Good morning,", StringComparison.Ordinal) ? [p] : SplitByPoint(StripEmphasis(p)))
-            .Select(p => p.StartsWith("Good morning,", StringComparison.Ordinal) ? p : EmphasiseLeadFigure(p));
+        var isFirstProse = true;
+        var paragraphs = new List<string>();
+        foreach (var p in text.Split("\n\n", StringSplitOptions.None)
+                     .SelectMany(p => p.StartsWith("Good morning,", StringComparison.Ordinal) ? [p] : SplitByPoint(KeepTheModelsInsightSpans(p))))
+        {
+            if (p.StartsWith("Good morning,", StringComparison.Ordinal))
+            {
+                paragraphs.Add(p);
+                continue;
+            }
+
+            paragraphs.Add(EmphasiseLeadFigure(p, isFirstProse ? headlineFigure : null));
+            isFirstProse = false;
+        }
 
         return string.Join("\n\n", paragraphs);
     }
 
-    /// <summary>Removes every marker the model wrote, keeping its words untouched.</summary>
-    private static string StripEmphasis(string paragraph) => paragraph.Replace("**", string.Empty);
+    /*  [OWNER, 2026-09-24] The model marks the insight; the code guards the marking.
+
+        The 2026-09-21 decision above stripped every marker the model wrote, because asked to
+        "bold what matters" it bolded whole sentences and invented noun phrases to fill a span.
+        The code then emphasised the lead figure and looked for known impact phrases - a closed
+        list that could only ever find wording it already knew. Read back over the PROD 1008
+        emails, that produced paragraphs whose bold was the figure and nothing else, and the
+        owner's brief is that the bold should carry the insight - what the figure means, where
+        it sits, the state of the work - which is exactly the judgement the model has and the
+        phrase list does not.
+
+        So the model is asked again, but the interpretation drift is closed in code rather than
+        in the prompt: a span is kept only if it is short (MaxModelSpanWords), says something
+        (not a bare figure, which the code marks anyway), contains no placeholder (names are
+        bound bold by FreeMonthlyPlaceholderBinder under its own run rule) and does not swallow
+        a sentence. Anything else is unwrapped - never rejected - and the paragraph falls back to
+        exactly what the code did before. The worst case is therefore yesterday's email.       */
+    /// <summary>
+    /// Keeps up to <see cref="MaxModelSpans"/> well-formed insight spans the model marked in a
+    /// paragraph and unwraps the rest; an unbalanced marker unwraps them all.
+    /// </summary>
+    private static string KeepTheModelsInsightSpans(string paragraph)
+    {
+        if (CountOccurrences(paragraph, "**") % 2 != 0)
+            return paragraph.Replace("**", string.Empty);
+
+        var budget = ModelSpanBudget(paragraph);
+        var kept = 0;
+        return ModelSpan().Replace(paragraph, m =>
+        {
+            var inner = m.Groups[1].Value;
+            if (kept < budget && IsAnInsightSpan(inner))
+            {
+                kept++;
+                return m.Value;
+            }
+
+            return inner;
+        });
+    }
+
+    /// <summary>
+    /// A span worth keeping: two to <see cref="MaxModelSpanWords"/> words, at least one word that
+    /// is neither a figure nor a unit noun, no placeholder, no sentence boundary inside it.
+    /// </summary>
+    private static bool IsAnInsightSpan(string inner)
+    {
+        var trimmed = inner.Trim();
+        if (trimmed.Length == 0 || trimmed.Contains("{{", StringComparison.Ordinal) || trimmed.Contains('\n'))
+            return false;
+
+        // A span that runs past a full stop is a sentence someone shouted, not an emphasis.
+        if (trimmed.TrimEnd('.', '!', '?').IndexOfAny(['.', '!', '?']) >= 0)
+            return false;
+
+        var words = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length is < 2 or > MaxModelSpanWords)
+            return false;
+
+        // "12 items", "41 of 46 obligations" - a bare figure; the code marks the lead figure itself.
+        return words.Any(w =>
+        {
+            var word = w.Trim(',', '.', ';', ':', '%');
+            return word.Length > 0 && !word.All(c => char.IsDigit(c) || c == ',') && !UnitNouns.Contains(word) && word != "of" && word != "all";
+        });
+    }
+
+    /// <summary>
+    /// How many of the model's spans a paragraph keeps: one when a name will be bound bold in it,
+    /// otherwise <see cref="MaxModelSpans"/> - the same budget the code's own impact phrases use,
+    /// so a paragraph never carries more emphasis than it did before the model was asked.
+    /// </summary>
+    private static int ModelSpanBudget(string paragraph) =>
+        Placeholder().Matches(paragraph).Any(m => m.Value.StartsWith("{{NAME_", StringComparison.Ordinal) || m.Value.StartsWith("{{EG_", StringComparison.Ordinal))
+            ? 1
+            : MaxModelSpans;
+
+    /// <summary>The most spans of the model's own a paragraph keeps; the same as <see cref="MaxImpactSpans"/>.</summary>
+    private const int MaxModelSpans = 2;
+
+    /// <summary>
+    /// The longest span the model may mark. Eight words holds "already past their due date and
+    /// still open" and "no renewal in progress at that site"; a clause longer than that is the
+    /// sentence itself.
+    /// </summary>
+    private const int MaxModelSpanWords = 8;
+
+    private static int CountOccurrences(string text, string token)
+    {
+        var count = 0;
+        for (var at = text.IndexOf(token, StringComparison.Ordinal); at >= 0; at = text.IndexOf(token, at + token.Length, StringComparison.Ordinal))
+            count++;
+        return count;
+    }
+
+    /// <summary>True when a position sits inside an existing emphasised span.</summary>
+    private static bool IsInsideASpan(string paragraph, int index) =>
+        paragraph[..index].Count(c => c == '*') % 4 != 0;
 
     /// <summary>
     /// Breaks a paragraph that makes several points into one paragraph per point. Nothing is added,
@@ -120,18 +235,33 @@ public static partial class FreeMonthlyDraftNormalizer
     /// "41 of 46 items", "89% of all overdue items". A paragraph with no figure gets no emphasis,
     /// which is correct - there is nothing in it to stress.
     /// </summary>
-    private static string EmphasiseLeadFigure(string paragraph)
+    private static string EmphasiseLeadFigure(string paragraph, string? preferredFigure = null)
     {
         /*  A placeholder carries a digit - {{NAME_1}}, {{DATE_2}} - so the first "figure" in a
             paragraph can be inside one. Emphasising there would split the braces and the draft
             would fail as a malformed placeholder. Only figures outside them count.            */
         var placeholders = Placeholder().Matches(paragraph);
-        var start = FirstFigure().Matches(paragraph)
-            .FirstOrDefault(m => !placeholders.Any(p => m.Index >= p.Index && m.Index < p.Index + p.Length)
-                                 && !IsAgeBand(paragraph, m));
+        var figures = FirstFigure().Matches(paragraph)
+            .Where(m => !placeholders.Any(p => m.Index >= p.Index && m.Index < p.Index + p.Length)
+                        && !IsAgeBand(paragraph, m))
+            .ToList();
+
+        // The headline figure, when this is the lead paragraph and it is there; otherwise the first.
+        var start = (preferredFigure is null ? null
+                        : figures.FirstOrDefault(m => m.Value.TrimEnd('%').Replace(",", string.Empty) == preferredFigure))
+                    ?? figures.FirstOrDefault();
+
+        // The model's own spans survive KeepTheModelsInsightSpans; they take part of the budget.
+        var modelSpans = ModelSpan().Matches(paragraph).Count;
 
         if (start is null)
             return paragraph;
+
+        /*  [2026-09-24] The model may have marked the lead figure inside a span of its own
+            ("**367 are already past their due date**"). That span already carries the figure,
+            so the code adds nothing there - wrapping again would nest the markers.            */
+        if (IsInsideASpan(paragraph, start.Index))
+            return EmphasiseImpact(paragraph, 0, Math.Max(0, ImpactBudget(paragraph) - modelSpans));
 
         /*  Walk forward from the figure and END AT THE THING IT COUNTS.
 
@@ -149,7 +279,9 @@ public static partial class FreeMonthlyDraftNormalizer
         var end = start.Index + start.Length;
         var unitEnd = start.Index + start.Length;
 
-        for (var taken = 0; taken < 4; taken++)
+        /*  Five words, not four. [FOUND LIVE on PROD tenant 1008, 2026-09-23] "286 of those 590
+            open obligations" needed five steps to reach its unit and got "**286**" alone.       */
+        for (var taken = 0; taken < 5; taken++)
         {
             var next = NextWord().Match(paragraph[end..]);
             if (!next.Success)
@@ -177,8 +309,29 @@ public static partial class FreeMonthlyDraftNormalizer
             span = span[..span.LastIndexOf(' ')];
 
         var emphasised = paragraph[..start.Index] + $"**{span}**" + paragraph[(start.Index + span.Length)..];
-        return EmphasiseImpact(emphasised);
+
+        /*  Meaning phrases are looked for AFTER the lead span, so the lead figure is always the
+            paragraph's first emphasis - the one the validator checks against the headline.
+
+            [OWNER, 2026-09-23] A budget per paragraph, so emphasis stays emphasis. Names bind bold
+            after this runs (FreeMonthlyPlaceholderBinder), and a pattern sentence can carry three
+            sites and three categories. With the figure, two phrases and six names, that paragraph
+            was more bold than plain. So the phrases yield to the names: three or more names in the
+            paragraph leaves no room for a phrase, one or two names leaves room for one, and a
+            paragraph with no name gets the figure and two phrases - the names ARE the insight in
+            the first case, and the phrases are in the last.                                     */
+        /*  [REVISED SAME DAY] With three or more names the binder now bolds only the first, so
+            one phrase fits again: the figure, the top name, and what it means.                */
+        /*  [2026-09-24] The model's own kept spans come out of the same budget, so the code's
+            phrase list only fills what the model left empty. A paragraph the model marked well
+            gets nothing added; one it left plain reads exactly as it did before.             */
+        var phraseBudget = Math.Max(0, ImpactBudget(paragraph) - modelSpans);
+
+        return EmphasiseImpact(emphasised, start.Index + span.Length + 4, phraseBudget);
     }
+
+    /// <summary>Impact spans a paragraph may carry besides its figure: one beside a name, else two.</summary>
+    private static int ImpactBudget(string paragraph) => ModelSpanBudget(paragraph);
 
     /// <summary>
     /// Also emphasises WHAT KIND of exposure a paragraph describes, not only how much of it there
@@ -193,11 +346,20 @@ public static partial class FreeMonthlyDraftNormalizer
     /// <para>The phrases are a closed set taken from the procs' own <c>DisplayLabel</c>s - this
     /// never emphasises wording the model invented, and it adds no text.</para>
     /// </summary>
-    private static string EmphasiseImpact(string paragraph)
+    private static string EmphasiseImpact(string paragraph, int from = 0, int budget = MaxImpactSpans)
     {
+        /*  [OWNER, 2026-09-23] Up to TWO meaning phrases per paragraph, not one. With only the
+            figure and one phrase emphasised, a six-sentence paragraph read as a block of text
+            with two dark spots in it. The second span is what the figure MEANS - "already past
+            their due date", "above your organisation's average", "rest with one person" - so a
+            reader scanning the bold alone gets the insight, not only the count.               */
+        var spans = 0;
         foreach (var phrase in ImpactPhrases)
         {
-            var at = paragraph.IndexOf(phrase, StringComparison.OrdinalIgnoreCase);
+            if (spans >= budget)
+                break;
+
+            var at = paragraph.IndexOf(phrase, Math.Min(from, paragraph.Length), StringComparison.OrdinalIgnoreCase);
             if (at < 0)
                 continue;
 
@@ -205,19 +367,28 @@ public static partial class FreeMonthlyDraftNormalizer
             if (paragraph[..at].Count(c => c == '*') % 4 != 0)
                 continue;
 
-            return paragraph[..at] + $"**{paragraph.Substring(at, phrase.Length)}**" + paragraph[(at + phrase.Length)..];
+            paragraph = paragraph[..at] + $"**{paragraph.Substring(at, phrase.Length)}**" + paragraph[(at + phrase.Length)..];
+            spans++;
         }
 
         return paragraph;
     }
 
+    private const int MaxImpactSpans = 2;
+
     /// <summary>
-    /// What makes a figure matter, most severe first - only one is emphasised per paragraph.
-    /// Every phrase is wording the procs themselves produce.
+    /// What makes a figure matter, most severe first - at most <see cref="MaxImpactSpans"/> are
+    /// emphasised per paragraph, in this order. Every phrase is wording the procs or the prompts
+    /// themselves produce; the plain state phrases at the end are a fallback so a paragraph with
+    /// no stronger meaning still shows what its figure IS.
     /// </summary>
     private static readonly string[] ImpactPhrases =
     [
         "personal criminal liability",
+        "personal liability",
+        "liability-bearing",
+        "that liability",
+        "personally liable",
         "no renewal in progress",
         "no renewal filed",
         "no action recorded",
@@ -226,6 +397,28 @@ public static partial class FreeMonthlyDraftNormalizer
         "no one else is assigned",
         "never been started",
         "no longer an active user",
+        "no person assigned",
+        "no reviewer assigned",
+        "rest with one person",
+        "rests with one person",
+        "all assigned to one person",
+        "already past their due date",
+        "overdue for more than 90 days",
+        "higher overdue rate than your organisation",
+        "above your organisation",
+        "above your average overdue rate",
+        "no end date",
+        "still open",
+        "remain open",
+        "currently expired",
+
+        /*  [OWNER, 2026-09-23] Every paragraph shows its impact, whatever it is. These plain
+            states are the last resort, so a paragraph with none of the stronger phrases above
+            still has the word that says what its figure IS.                                */
+        "overdue",
+        "expired",
+        "fall due",
+        "past due",
     ];
 
     /// <summary>
@@ -272,6 +465,10 @@ public static partial class FreeMonthlyDraftNormalizer
 
     [GeneratedRegex(@"\{\{[A-Z0-9_]+\}\}")]
     private static partial Regex Placeholder();
+
+    /// <summary>One emphasised span, markers included; the model's or the code's.</summary>
+    [GeneratedRegex(@"\*\*(.+?)\*\*", RegexOptions.Singleline)]
+    private static partial Regex ModelSpan();
 
     /// <summary>One sentence, terminator included; a trailing fragment counts as one too.</summary>
     [GeneratedRegex(@"[^.!?]+(?:[.!?]+|$)")]

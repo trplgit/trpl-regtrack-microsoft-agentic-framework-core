@@ -61,11 +61,21 @@ public sealed class SqlFreeMonthlyDigestRepository(string connectionString) : IF
             var candidates = (await multi.ReadAsync<CandidateRow>()).Select(r => r.ToDomain()).ToList();
             var quality = (await multi.ReadAsync<QualityRow>()).Select(r => r.ToDomain()).ToList();
 
+            /*  Grid #6, examples - APPENDED LAST and read guarded (2026-09-23 aggregate-examples
+                design, Sec.2.1). Last, because a grid inserted before data_quality would have
+                Dapper silently map example rows onto QualityRow. Guarded, because a proc not yet
+                redeployed returns five grids and must degrade to "no examples", never throw:
+                missing optional colour is not a refusal condition - nothing unverified ships by
+                omitting it.                                                                     */
+            var examples = multi.IsConsumed
+                ? []
+                : (await multi.ReadAsync<ExampleRow>()).Select(r => r.ToDomain()).ToList();
+
             var headlineSource = control.TryGetValue("HeadlineSource", out var hs) ? hs as string : null;
             if (headlineSource is not ("fact" or "candidate"))
                 throw new InvalidOperationException($"{ProcFor(edition.Slot)} returned HeadlineSource '{headlineSource}' - expected 'fact' or 'candidate'.");
 
-            return new MonthlyDigestData(edition, asOf, headlineSource, facts, policy, candidates, quality);
+            return new MonthlyDigestData(edition, asOf, headlineSource, facts, policy, candidates, quality) { Examples = examples };
         }
         catch (SqlException ex) when (FreeMonthlyDigestRefusedException.IsMonthlyErrorNumber(ex.Number))
         {
@@ -157,5 +167,24 @@ public sealed class SqlFreeMonthlyDigestRepository(string connectionString) : IF
         public string Detail { get; set; } = "";
 
         public MonthlyDataQuality ToDomain() => new(Code, ItemCount, Detail);
+    }
+
+    private sealed class ExampleRow
+    {
+        public string Detector { get; set; } = "";
+        public string PatternFactKey { get; set; } = "";
+        public int ExampleRank { get; set; }
+        public string EntityKind { get; set; } = "";
+        public long? EntityId { get; set; }
+        public string EntityLabel { get; set; } = "";
+        public string? ContextKind { get; set; }
+        public string? ContextLabel { get; set; }
+        public int? ItemCount { get; set; }
+        public int? BaseCount { get; set; }
+        public string UnitLabel { get; set; } = "";
+
+        public MonthlyExample ToDomain() => new(
+            Detector, PatternFactKey, ExampleRank, EntityKind, EntityId, EntityLabel, ContextKind, ContextLabel,
+            ItemCount, BaseCount, UnitLabel);
     }
 }
