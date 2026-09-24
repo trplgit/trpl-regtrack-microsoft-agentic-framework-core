@@ -5,12 +5,18 @@ using Insights.Domain;
 
 namespace Insights.Worker.Orchestration.Activities;
 
+/// <param name="UserId">[ADDED 2026-09-22] Threaded to IAnalystNarrativeAgent so it can attach
+/// ReadOnlySqlFetchTool for this call, when that agent was built with a real read-only connection
+/// string. Trailing optional - every existing construction site keeps compiling unchanged.</param>
+/// <param name="CustomerId">Pairs with <paramref name="UserId"/> - same reasoning.</param>
 public sealed record AnalyzeAndNarrateInput(
     CompositionPlan Plan, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings,
     string DimensionName, string DimensionRowsJson, string? DimensionControlTotalsJson,
     NarrativeResult? PreviousNarrative, IReadOnlyList<NarrativeReflectionIssue>? Issues,
     LlmCallPriority Priority = LlmCallPriority.Interactive,
-    string? ReqId = null);
+    string? ReqId = null,
+    int? UserId = null,
+    int? CustomerId = null);
 
 public sealed record AnalyzeAndNarrateOutput(NarrativeResult Narrative, long TotalTokens);
 
@@ -37,7 +43,7 @@ public sealed class AnalyzeAndNarrateActivity(IAnalystNarrativeAgent analystAgen
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await analystAgent.AnalyzeAndNarrateAsync(
             input.Plan, input.Assertions, input.Findings, input.DimensionName, input.DimensionRowsJson,
-            input.DimensionControlTotalsJson, revision, CancellationToken.None);
+            input.DimensionControlTotalsJson, revision, input.UserId, input.CustomerId, runId, CancellationToken.None);
 
         // Same best-effort stance as NarrateActivity/ReflectOnNarrativeActivity's own recorder call.
         if (runId is not null)

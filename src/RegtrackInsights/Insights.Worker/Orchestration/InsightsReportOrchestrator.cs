@@ -328,8 +328,21 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         UseAnalystNarrative=false (the old default) would replay against a DIFFERENT call sequence
         under this version - check for in-flight instances of that shape specifically before this
         deploys; a 3.7 instance that had UseAnalystNarrative=true already matches 3.8's sequence
-        exactly and needs no check. */
-    public const string Version = "3.8";
+        exactly and needs no check.
+
+        Bumped 3.8 -> 3.9: ValidateUserDimensionStructureActivity's ScheduleTask call removed from
+        the dimension_selection render-retry loop entirely - a real call-sequence change, same
+        class as 3.7->3.8's removal. Users joined FreehandDimensions.Names 2026-09-23 (agent-decided
+        structure now, like every other freehand dimension), so the fixed-template structural
+        invariants that activity checked (4 named tabs, donut, role strip, lens toggle) no longer
+        describe what this dimension ever renders - keeping the call would refuse every real
+        freehand Users render. [VERIFY BEFORE DEPLOY] any in-flight 3.8 dimension_selection:Users
+        instance expects this ScheduleTask call in its history; replaying it under 3.9 (which never
+        schedules it) is a real non-determinism mismatch - check for in-flight instances of that
+        exact shape before this deploys. Every other ReportType/dimension combination never took
+        this branch at all (guarded internally on ReportType+RequestedDimensions), so is completely
+        unaffected. */
+    public const string Version = "3.9";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
     // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
@@ -555,17 +568,33 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 // deployment 404 and a since-unreproduced ~9min stall); proven instead via 5 clean
                 // direct-agent runs (local lab, now removed). Flagged here, not silently shipped as
                 // if fully proven.
+                // UserId/CustomerId [ADDED 2026-09-22] - harmless to thread through unconditionally:
+                // IAnalystNarrativeAgent only attaches ReadOnlySqlFetchTool when the SINGLETON agent
+                // was ALSO built with a real read-only connection string (PaidReportAgentsRegistration),
+                // which it is not yet - see ReadOnlySqlFetchTool's own doc comment. This wiring is
+                // inert until that separate, deliberate activation step happens.
                 var analystResult = await context.ScheduleTask<AnalyzeAndNarrateOutput>(typeof(AnalyzeAndNarrateActivity).Name, "1.0",
                     new AnalyzeAndNarrateInput(
                         plan, dimensions.Assertions, dimensions.Findings, freehandDimensionName,
-                        freehandRowsJson!, freehandControlTotalsJson, null, null, input.Priority, input.ReqId));
+                        freehandRowsJson!, freehandControlTotalsJson, null, null, input.Priority, input.ReqId,
+                        input.UserId, input.TenantId));
                 ChargeAndCheck(analystResult.TotalTokens);
                 narrative = analystResult.Narrative;
             }
             else
             {
+                // [ADDED 2026-09-22] Tenant memory scope for v1 - every dimension THIS call's plan
+                // actually narrates. fixed_holistic has no RequestedDimensions (redirected from an
+                // Entity-alone request, per ReportTypeRouter) - uses FixedHolisticComposition's own
+                // fixed real-data-backed set instead. See
+                // docs/superpowers/specs/2026-09-22-tenant-memory-blob-design.md.
+                var narrateDimensionNames = input.ReportType == FixedHolisticComposition.ReportType
+                    ? FixedHolisticComposition.Dimensions
+                    : input.RequestedDimensions;
+
                 var narrateResult = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority, input.ReqId));
+                    new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, null, null, input.Priority, input.ReqId,
+                        narrateDimensionNames, input.TenantId));
                 ChargeAndCheck(narrateResult.TotalTokens);
                 narrative = narrateResult.Narrative;
 
@@ -578,7 +607,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         break;
 
                     var revised = await context.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0",
-                        new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority, input.ReqId));
+                        new NarrateInput(plan, dimensions.Assertions, dimensions.Findings, narrative, reflection.Result.Issues, input.Priority, input.ReqId,
+                            narrateDimensionNames, input.TenantId));
                     ChargeAndCheck(revised.TotalTokens);
                     narrative = revised.Narrative;
                 }
@@ -852,20 +882,17 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
                         typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html, input.ReportType));
 
-                    // [ADDED 2026-09-12] Same retry-on-refusal treatment as the fixed_holistic gate
-                    // just above - a real render for dimension_selection:Users ignored the rewritten
-                    // 4-tab/donut/role-strip template entirely (see UserDimensionStructureGate's own
-                    // doc comment). No-op for every other report shape (guarded on ReportType +
-                    // RequestedDimensions inside the activity itself).
-                    // [ADDED 2026-09-15] UsersRowsJson - lets the activity tell the gate whether a
-                    // real qualifying row exists (TimingSampleSize >= 5) for the completion-timing
-                    // info line check. Same dimensionRowsJson already built above for RenderHtmlInput -
-                    // no new fetch, just threaded one hop further.
-                    var usersRowsJson = dimensionRowsJson?.GetValueOrDefault("Users");
-                    var userStructureChecked = await context.ScheduleTask<ValidateUserDimensionStructureOutput>(
-                        typeof(ValidateUserDimensionStructureActivity).Name, "1.0",
-                        new ValidateUserDimensionStructureInput(structureChecked.Html, input.ReportType, input.RequestedDimensions, usersRowsJson));
-                    structureChecked = new ValidateFixedHolisticStructureOutput(userStructureChecked.Html);
+                    // [REMOVED 2026-09-23, bump 3.8 -> 3.9] ValidateUserDimensionStructureActivity/
+                    // UserDimensionStructureGate enforced Sambram's FIXED Users template shape (4
+                    // named tabs, a donut, a role strip, a lens toggle) - real gate-worthy while
+                    // Users had a fixed template to enforce. Users joined FreehandDimensions.Names
+                    // this same day (see that class's own doc comment): the render agent now decides
+                    // structure per tenant, same as every other freehand dimension, none of which
+                    // has - or needs - its own bespoke structure gate. Keeping this gate would have
+                    // refused every real freehand Users render on sight, since none of those five
+                    // fixed invariants describe agent-decided markup. Deleted along with its class
+                    // (UserDimensionStructureGate.cs), its activity (ValidateUserDimensionStructure
+                    // Activity.cs) and their tests - dead code for every real dimension now.
 
                     // [ADDED 2026-09-14] Real vision-model gate - runs inside this SAME
                     // render-retry loop, same "structural defect the render agent can plausibly

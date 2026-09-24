@@ -91,6 +91,11 @@ public static class WorkerRegistration
         services.AddSingleton<Insights.Data.IInsightsRunEnqueuer>(sp =>
             new DurableTaskRunEnqueuer(sp.GetRequiredService<TaskHubClient>(), runVisionQa));
 
+        // [ADDED 2026-09-23] Hard-terminate for RunEndpoints' new POST .../cancel - same
+        // reasoning as IRunStatusReader/IInsightsRunEnqueuer above, needs TaskHubClient only.
+        services.AddSingleton<Insights.Data.IInsightsRunCanceller>(sp =>
+            new DurableTaskRunCanceller(sp.GetRequiredService<TaskHubClient>()));
+
         return services;
     }
 
@@ -136,7 +141,6 @@ public static class WorkerRegistration
             configuration["Reports:LocalFallbackDirectory"], sp.GetRequiredService<ILogger<NormalizeActivity>>()));
         services.AddTransient<SanitizeActivity>();
         services.AddTransient<ValidateFixedHolisticStructureActivity>();
-        services.AddTransient<ValidateUserDimensionStructureActivity>();
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
@@ -212,7 +216,6 @@ public static class WorkerRegistration
                 ActivityCreator<InjectForwardLookActivity>(sp), ActivityCreator<InjectForwardLookCssActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
-                ActivityCreator<ValidateUserDimensionStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),

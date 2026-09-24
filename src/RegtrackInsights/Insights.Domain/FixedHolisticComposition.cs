@@ -25,6 +25,28 @@ public static class FixedHolisticComposition
     /// </summary>
     public const string ReportType = "fixed_holistic";
 
+    /// <summary>
+    /// [CORRECTED 2026-09-23, was wrong since 2026-09-22] Used to scope tenant-memory read/write
+    /// for this ReportType (docs/superpowers/specs/2026-09-22-tenant-memory-blob-design.md).
+    ///
+    /// The original list here (["Risk","Licence","Location","Users"]) was a GUESS about which
+    /// tabs have real data backing, made without checking FetchDimensionsActivity's actual source.
+    /// It was wrong on both ends: FetchDimensionsActivity attempts ALL FIFTEEN real dimensions for
+    /// this ReportType (RequestedDimensions null -> every one, see that activity's own doc
+    /// comment) - not a curated subset - and any of them can end up backing render content, not
+    /// just the four guessed here. Confirmed live 2026-09-23: tenant 1285's real Location fetch
+    /// failed (a genuine SQL bug, see the location-caveat-truncation-bug memory) and silently
+    /// degraded into FetchDimensionsOutput.FailedDimensions rather than DimensionResults - the
+    /// Coverage tab then had no real Location data to render from and the structure gate correctly
+    /// refused the resulting placeholder-ish render. This list now matches that real fetch set
+    /// exactly, in the same order FetchDimensionsActivity calls them.
+    /// </summary>
+    public static readonly IReadOnlyList<string> Dimensions =
+    [
+        "Location", "Entity", "Risk", "Nature", "Departments", "Act", "Users", "Internal",
+        "Event", "Licence", "BacklogAging", "TimelinessFY", "ForwardPipeline", "EvidenceIntegrity", "ForwardRisk",
+    ];
+
     public static CompositionPlan Build()
     {
         var hero = new CompositionHero("snapshot", "Fixed template - Snapshot is always the landing view, matching the real product UI.");

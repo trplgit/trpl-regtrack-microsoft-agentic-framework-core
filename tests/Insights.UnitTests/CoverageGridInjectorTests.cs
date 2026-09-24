@@ -204,6 +204,23 @@ public sealed class CoverageGridInjectorTests
         Assert.DoesNotContain("Peer-coverage gaps", result, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// [BUG FOUND LIVE, 2026-09-23] .di-kpi__pairs is a fixed 2-column CSS grid
+    /// (05_report_html_fixed_holistic.md's own consolidated declaration). With Peer-coverage gaps
+    /// omitted (UnderConfigured == 0, the common case - see the test above), exactly 3 pairs land
+    /// in that grid, leaving its 4th cell a real blank box - confirmed live on tenant 1008's real
+    /// report. Spanning the last pair (Unmapped locations) full-width closes the gap.
+    /// </summary>
+    [Fact]
+    public void Inject_KpiCard_WithThreePairs_UnmappedLocationsSpansFullWidth_NoDanglingBlankCell()
+    {
+        var rows = new List<LocationRow> { Leaf(1, "A", "Haryana", 10, 0, 0, 1) };
+
+        var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
+
+        Assert.Contains("""<div class="di-kpi__pair di-kpi__pair--full"><div class="di-kpi__pair-lbl">Unmapped locations</div>""", result, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Inject_KpiCard_IncludesDescriptionParagraph_MentioningRollupOwnerlessWhenPresent()
     {

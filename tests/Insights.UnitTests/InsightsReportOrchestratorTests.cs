@@ -69,8 +69,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -144,8 +142,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
 
         // First attempt: a real defect. Second attempt: clean.
         context.SetupSequence(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -224,11 +220,18 @@ public class InsightsReportOrchestratorTests
     }
 
     /// <summary>
-    /// Regression guard - Location (not in FreehandDimensions.Names) must keep using the
-    /// deterministic DimensionSelectionComposition.Build path, never the LLM one.
+    /// [UPDATED 2026-09-23] Was a single-dimension "Users" regression guard, back when Users was
+    /// the one real dimension deliberately NOT in FreehandDimensions.Names. Users joined the set
+    /// 2026-09-23 (see FreehandDimensions.cs's own doc comment) - EVERY real single-selectable
+    /// dimension is freehand-eligible now, so there is no longer a single dimension name that
+    /// proves this branch. The real, still-permanent regression guard this test protects is
+    /// different: `RequestedDimensions is [var soleDimension]` only matches a SINGLE-dimension
+    /// list (AnalyzeAndNarrateAsync's own payload shape is single-dimension by design - see its own
+    /// doc comment) - a caller naming MORE than one dimension must never take the freehand path,
+    /// regardless of whether every individual dimension named is itself freehand-eligible.
     /// </summary>
     [Fact]
-    public async Task RunTask_DimensionSelectionWithNonFreehandDimension_NeverCallsComposeFreehandDimensionActivity()
+    public async Task RunTask_DimensionSelectionWithMultipleDimensions_NeverCallsComposeFreehandDimensionActivity()
     {
         var context = new Mock<OrchestrationContext>();
         context.SetupGet(c => c.CurrentUtcDateTime).Returns(DateTime.UtcNow);
@@ -245,10 +248,10 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 300_000));
 
         var orchestrator = new InsightsReportOrchestrator();
-        // Nature - deliberately a dimension NOT in FreehandDimensions.Names (Location joined it
-        // 2026-09-14; Nature/Risk/Internal/Event still use the deterministic path).
+        // Two real freehand-eligible dimensions named TOGETHER - the multi-dimension shape itself,
+        // not either dimension's own status, is what must keep this off the freehand path.
         var input = new InsightsReportOrchestrationInput(
-            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Nature"]);
+            29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Users", "Location"]);
 
         await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
 
@@ -444,8 +447,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -537,8 +538,6 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .Callback<string, string, object[]>((_, _, args) => capturedStructureInput = (ValidateFixedHolisticStructureInput)args[0])
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<ValidateUserDimensionStructureOutput>(typeof(ValidateUserDimensionStructureActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ValidateUserDimensionStructureOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))

@@ -30,6 +30,36 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
         Environment.GetEnvironmentVariable("ConnectionStrings__RegTrack")
         ?? throw new InvalidOperationException("Set ConnectionStrings__RegTrack before running this manual test.");
 
+    /// <summary>
+    /// [DIAGNOSTIC, 2026-09-22, READ-ONLY - purely introspective, HAS_PERMS_BY_NAME performs no
+    /// DML] Real permission check for whichever login ConnectionStrings__RegTrack points at right
+    /// now - answers "is this login actually write-blocked at the SQL Server level, or just
+    /// named readonly" before trusting it for the new SQL tool's read-only login.
+    /// </summary>
+    [Fact]
+    public async Task CheckCurrentLoginRealPermissions()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            """
+            SELECT SUSER_SNAME() AS LoginName, CURRENT_USER AS DbUser,
+                HAS_PERMS_BY_NAME('dbo.ComplianceInstance', 'OBJECT', 'SELECT') AS CanSelectComplianceInstance,
+                HAS_PERMS_BY_NAME('dbo.ComplianceInstance', 'OBJECT', 'INSERT') AS CanInsertComplianceInstance,
+                HAS_PERMS_BY_NAME('dbo.ComplianceInstance', 'OBJECT', 'UPDATE') AS CanUpdateComplianceInstance,
+                HAS_PERMS_BY_NAME('dbo.ComplianceInstance', 'OBJECT', 'DELETE') AS CanDeleteComplianceInstance,
+                HAS_PERMS_BY_NAME('dbo', 'SCHEMA', 'ALTER') AS CanAlterDboSchema,
+                HAS_PERMS_BY_NAME(NULL, 'DATABASE', 'CREATE TABLE') AS CanCreateTable,
+                IS_SRVROLEMEMBER('sysadmin') AS IsSysAdmin;
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            for (var i = 0; i < reader.FieldCount; i++)
+                output.WriteLine($"{reader.GetName(i)}={reader.GetValue(i)}");
+        }
+    }
+
     [Fact]
     public async Task InsertFreeTierMappingForTenant1490()
     {

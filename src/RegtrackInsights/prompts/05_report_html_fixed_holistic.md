@@ -406,7 +406,9 @@ element or the strip itself becomes sticky and content slides past beside it.
 in that pane this run** - never a fixed slot count, never a fabricated number. Because a card
 with no real assertion is OMITTED (not muted), that count varies: Risk & licences 0-3,
 Coverage always 1 (the injected coverage pane always has real Location data), Operations 0-3,
-Forward look 0 or 1, Actions 0-6. Snapshot (tab 1) has no badge. No pane carries
+Forward look 0 or 1, Actions 0-12 **[RAISED from 0-6, 2026-09-23 - see Tab 6's own note: removing
+the static caveats footer freed real space this tab now uses for more of your own ranked
+findings]**. Snapshot (tab 1) has no badge. No pane carries
 `data-blocked="true"` any more; `FixedHolisticStructureGate` no longer enforces any fixed badge.
 CLAUDE.md non-negotiable #2 is why the count must be real: a live render once shipped "Actions"
 badged **6** over an empty pane - a fabricated number one line from its own admission nothing
@@ -709,7 +711,7 @@ card (gauge centre, stackbar, fybars, byprod rows - each declared where first us
 had real CSS. Every KPI card across 3 of the 6 tabs was being rendered from guesswork. Declare
 once here (copied verbatim from the real product's `detailed-insights.component.css`, using this
 document's token names):
-`.di-kpigrid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--gap-md);margin-top:var(--gap-lg)}` `.di-kpi{grid-column:span 12;display:flex;flex-direction:column;gap:var(--gap-md);min-width:0;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);padding:var(--gap-lg) calc(var(--gap-lg) + 2px);box-shadow:0 1px 3px rgba(20,28,48,.05)}` `.di-kpi--span3{grid-column:span 3}` `.di-kpi--span4{grid-column:span 4}` `.di-kpi--span6{grid-column:span 6}` `.di-kpi--span8{grid-column:span 8}` `.di-kpi--span12{grid-column:span 12}` `.di-kpi__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}` `.di-kpi__headtext{min-width:0}` `.di-kpi__eyebrow{font-size:var(--fs-di-eyebrow);text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:var(--c-grey)}` `.di-kpi__title{font-size:var(--fs-di-snaphead);font-weight:600;letter-spacing:-.01em;line-height:1.3;margin:3px 0 0;color:var(--c-text)}` `.di-kpi__tag{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-di-chip);font-weight:500;padding:3px 9px;border-radius:999px;white-space:nowrap;letter-spacing:.02em;border:1px solid transparent}` `.di-kpi__dot{width:6px;height:6px;border-radius:999px;flex-shrink:0}` `.di-kpi__tag--bad{background:#fcebea;color:#b3261e;border-color:#f3cfca}` `.di-kpi__tag--bad .di-kpi__dot{background:#b3261e}` `.di-kpi__tag--warn{background:#fdf3e2;color:#b45708;border-color:#f0dcb4}` `.di-kpi__tag--warn .di-kpi__dot{background:#b45708}` `.di-kpi__tag--ok{background:#e9f6ee;color:#1e8a4a;border-color:#c4e6d0}` `.di-kpi__tag--ok .di-kpi__dot{background:#1e8a4a}` `.di-kpi__big{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}` `.di-kpi__num{font-size:calc(var(--fs-di-snap-num) * 1.35);font-weight:600;letter-spacing:-.02em;line-height:1;color:var(--c-text)}` `.di-kpi__num--bad{color:#b3261e}` `.di-kpi__num--warn{color:#b45708}` `.di-kpi__num--ok{color:#1e8a4a}` `.di-kpi__unit{font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.4}` `.di-kpi__pairs{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--c-border);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-kpi__pairs--4{grid-template-columns:repeat(4,minmax(0,1fr))}` `.di-kpi__pair{background:var(--c-surface);padding:11px 13px;min-width:0}` `.di-kpi__pair-lbl{font-size:var(--fs-di-chip);color:var(--c-grey);text-transform:uppercase;letter-spacing:.06em;font-weight:500;margin-bottom:6px}` `.di-kpi__pair-val{font-size:var(--fs-di-snap-num);font-weight:600;letter-spacing:-.02em;line-height:1;color:var(--c-text)}` `.di-kpi__pair-sub{font-size:var(--fs-meta);color:var(--c-text-3);margin-top:4px;line-height:1.4}` `.di-kpi__pair--bad .di-kpi__pair-val{color:#b3261e}` `.di-kpi__pair--warn .di-kpi__pair-val{color:#b45708}` `.di-kpi__pair--ok .di-kpi__pair-val{color:#1e8a4a}` `.di-kpi__narr{font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.55;margin:0}`.
+`.di-kpigrid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--gap-md);margin-top:var(--gap-lg)}` `.di-kpi{grid-column:span 12;display:flex;flex-direction:column;gap:var(--gap-md);min-width:0;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);padding:var(--gap-lg) calc(var(--gap-lg) + 2px);box-shadow:0 1px 3px rgba(20,28,48,.05)}` `.di-kpi--span3{grid-column:span 3}` `.di-kpi--span4{grid-column:span 4}` `.di-kpi--span6{grid-column:span 6}` `.di-kpi--span8{grid-column:span 8}` `.di-kpi--span12{grid-column:span 12}` `.di-kpi__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}` `.di-kpi__headtext{min-width:0}` `.di-kpi__eyebrow{font-size:var(--fs-di-eyebrow);text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:var(--c-grey)}` `.di-kpi__title{font-size:var(--fs-di-snaphead);font-weight:600;letter-spacing:-.01em;line-height:1.3;margin:3px 0 0;color:var(--c-text)}` `.di-kpi__tag{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-di-chip);font-weight:500;padding:3px 9px;border-radius:999px;white-space:nowrap;letter-spacing:.02em;border:1px solid transparent}` `.di-kpi__dot{width:6px;height:6px;border-radius:999px;flex-shrink:0}` `.di-kpi__tag--bad{background:#fcebea;color:#b3261e;border-color:#f3cfca}` `.di-kpi__tag--bad .di-kpi__dot{background:#b3261e}` `.di-kpi__tag--warn{background:#fdf3e2;color:#b45708;border-color:#f0dcb4}` `.di-kpi__tag--warn .di-kpi__dot{background:#b45708}` `.di-kpi__tag--ok{background:#e9f6ee;color:#1e8a4a;border-color:#c4e6d0}` `.di-kpi__tag--ok .di-kpi__dot{background:#1e8a4a}` `.di-kpi__big{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}` `.di-kpi__num{font-size:calc(var(--fs-di-snap-num) * 1.35);font-weight:600;letter-spacing:-.02em;line-height:1;color:var(--c-text)}` `.di-kpi__num--bad{color:#b3261e}` `.di-kpi__num--warn{color:#b45708}` `.di-kpi__num--ok{color:#1e8a4a}` `.di-kpi__unit{font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.4}` `.di-kpi__pairs{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--c-border);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-kpi__pairs--4{grid-template-columns:repeat(4,minmax(0,1fr))}` `.di-kpi__pair{background:var(--c-surface);padding:11px 13px;min-width:0}` `.di-kpi__pair--full{grid-column:1/-1}` `.di-kpi__pair-lbl{font-size:var(--fs-di-chip);color:var(--c-grey);text-transform:uppercase;letter-spacing:.06em;font-weight:500;margin-bottom:6px}` `.di-kpi__pair-val{font-size:var(--fs-di-snap-num);font-weight:600;letter-spacing:-.02em;line-height:1;color:var(--c-text)}` `.di-kpi__pair-sub{font-size:var(--fs-meta);color:var(--c-text-3);margin-top:4px;line-height:1.4}` `.di-kpi__pair--bad .di-kpi__pair-val{color:#b3261e}` `.di-kpi__pair--warn .di-kpi__pair-val{color:#b45708}` `.di-kpi__pair--ok .di-kpi__pair-val{color:#1e8a4a}` `.di-kpi__narr{font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.55;margin:0}`.
 Use `.di-kpi__pairs--4` (added alongside `.di-kpi__pairs`, not instead of it) only on a card with
 exactly 4 real pairs - the default 2-column grid otherwise.
 
@@ -916,15 +918,19 @@ the Coverage pane and the age bar.
 
 ## Tab 6 — Actions (UNBLOCKED - ranked from real assertions, never invented)
 
-**[UNBLOCKED 2026-09-02]** This tab does NOT need a new data source to go live - every dimension's
-real findings already exist in your `assertions` array (Risk, Coverage, Licence, People/SPOF,
-Timeliness). What was missing was never data, it was a RANKING step - and ranking/prioritising is
-explicitly agent territory (CLAUDE.md non-negotiable #1: the agent decides *what matters, in what
-order* - never *what a number is*). So: **you** do the ranking here, same as Narrate already
-composes prose from real assertions - but every stat, count and pct on every card must still trace
-to a real assertion id, exactly like everywhere else in this document. **Never invent a problem to
-fill a sixth card.** If real assertions across all dimensions only support 3 qualifying findings
-this run, ship 3 cards - not 6, not a padded 4th with a softened, made-up finding.
+**[UNBLOCKED 2026-09-02, WIDENED 2026-09-23]** This tab does NOT need a new data source to go live -
+every dimension's real findings already exist in your `assertions` array. Read across ALL of them,
+not just the handful that already back Tabs 1-5 (Risk/Coverage/Licence/People/Timeliness) - Nature,
+Departments, Act, Internal, Event, Entity, BacklogAging, ForwardRisk and any other real dimension
+you were given can just as legitimately surface a top-ranked finding here; this is the one tab in
+the whole template that was never limited to a fixed reference-product set of dimensions. What was
+missing was never data, it was a RANKING step - and ranking/prioritising is explicitly agent
+territory (CLAUDE.md non-negotiable #1: the agent decides *what matters, in what order* - never
+*what a number is*). So: **you** do the ranking here, same as Narrate already composes prose from
+real assertions - but every stat, count and pct on every card must still trace to a real assertion
+id, exactly like everywhere else in this document. **Never invent a problem to fill a card.** If
+real assertions across all dimensions only support 3 qualifying findings this run, ship 3 cards -
+never a padded 4th with a softened, made-up finding, and never fewer than the real count either.
 
 **What makes a finding "qualifying"**: it has a real assertion behind it AND it represents a real,
 actionable gap (not merely a dimension that computed successfully) - e.g. an overdue rate well
@@ -950,7 +956,10 @@ cite a real value.
     <span class="di-pane__hint">Ranked by real exposure - expand a card for evidence and recommended steps</span>
   </div>
   <div class="di-actions">
-    <!-- ONE di-action per qualifying real finding, most-severe first, capped at 6.
+    <!-- ONE di-action per qualifying real finding, most-severe first, capped at 12
+         [RAISED from 6, 2026-09-23 - see Tab 6's own note above: more real cross-dimension
+         findings now qualify, and .di-actions scrolls instead of forcing the page to grow
+         unbounded, so a fuller list stays usable rather than pushing the rest of the tab down].
          [COLLAPSIBLE - TENANT OVERRIDE 2026-09-10, deliberately deviates from the handoff's
          "static document / no <details>" rule.] Action cards ARE expand/collapse now:
          `<details class="di-action">` + `<summary class="di-action__summary">` + a chevron.
@@ -1049,15 +1058,15 @@ cite a real value.
 </section>
 ```
 The tab-nav badge for Actions (in the tab-nav markup near the top of this document) must equal the
-REAL number of cards you actually rendered (0-6) - never the literal 6 from the reference product's
-own mock data, and never hand-set independent of what's in the pane. **If zero real findings
+REAL number of cards you actually rendered (0-12) - never the literal 6 from the reference
+product's own mock data, and never hand-set independent of what's in the pane. **If zero real findings
 qualify this run** (a clean tenant), render the pane with ONLY its `di-pane__head` and nothing
 else - no `di-blocked-note`, no "no priority actions" sentence - and set the badge to 0. An empty
 Actions pane is a good outcome, and it needs no explanation.
 
 Declare once (based on `holistic-insights-tenant1300.html`, with the collapsible `<details>` /
 `[open]` / chevron chrome restored per the 2026-09-10 tenant override):
-`.di-actions{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap-md);align-items:start;margin-top:var(--gap-lg)}` `.di-action{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);overflow:hidden}` `.di-action[open]{box-shadow:0 6px 20px rgba(20,28,48,.10)}` `.di-action__summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:flex-start;padding:14px 16px}` `.di-action__summary::-webkit-details-marker{display:none}` `.di-action[open] .di-action__summary{border-bottom:1px solid var(--c-border)}` `.di-action__rank{width:2rem;height:2rem;border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.8rem;color:#fff;background:#b3261e;font-variant-numeric:tabular-nums;flex-shrink:0}` `.di-action__main{display:flex;flex-direction:column;gap:6px;min-width:0}` `.di-action__top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}` `.di-action__domain{font-size:var(--fs-di-chip);text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);font-weight:600}` `.di-effort{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-di-chip);font-weight:600;padding:3px 10px;border-radius:999px}` `.di-effort--low{color:#1e8a4a;background:rgba(30,138,74,.12)}` `.di-effort--med{color:#b45708;background:rgba(180,87,8,.12)}` `.di-effort--high{color:#b3261e;background:rgba(179,38,30,.12)}` `.di-effort__bars{display:inline-flex;gap:2px}` `.di-effort__bars i{width:3px;height:10px;border-radius:1px;background:#d4d4d4;display:block}` `.di-effort--low .di-effort__bars i:nth-child(1){background:#1e8a4a}` `.di-effort--med .di-effort__bars i:nth-child(1),.di-effort--med .di-effort__bars i:nth-child(2){background:#b45708}` `.di-effort--high .di-effort__bars i{background:#b3261e}` `.di-action__what{font-size:var(--fs-di-headline);font-weight:500;color:var(--c-text)}` `.di-action__stats{display:flex;flex-wrap:wrap;gap:8px}` `.di-action__k{font-size:var(--fs-di-chip);color:var(--c-text-3);background:var(--c-content-mist);border:1px solid var(--c-border);border-radius:999px;padding:3px 10px}` `.di-action__k b{color:var(--c-text);font-weight:600}` `.di-action__outcome{display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-meta);color:var(--c-text-3)}` `.di-action__outcome svg{width:14px;height:14px;flex-shrink:0;margin-top:2px;color:#1e8a4a}` `.di-action__outcome b{color:#1e8a4a;font-weight:600}` `.di-action__chev{width:22px;height:22px;border-radius:50%;background:var(--c-bg);border:1px solid var(--c-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--c-text-3)}` `.di-action__chev svg{width:11px;height:11px}` `.di-action[open] .di-action__chev{background:var(--c-brand);border-color:var(--c-brand);color:#fff;transform:rotate(180deg)}` `.di-action__detail{border-top:1px solid var(--c-border);padding:14px 16px;display:flex;flex-direction:column;gap:12px}` `.di-action__dtitle{font-size:var(--fs-di-headline);font-weight:600;margin:0;color:var(--c-text)}` `.di-action__dsummary{margin:0;font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.55}` `.di-action__sech{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--c-grey);font-weight:600;margin:0 0 6px}` `.di-evidence{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--c-border);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-ev{background:var(--c-surface);padding:8px 11px}` `.di-ev__lbl{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);margin-bottom:3px}` `.di-ev__val{font-size:var(--fs-di-headline);font-weight:600;color:var(--c-text)}` `.di-ev__val small{font-weight:500;color:var(--c-text-3);margin-left:2px}` `.di-steps{counter-reset:di-step;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}` `.di-steps li{position:relative;padding:9px 11px 9px 36px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-md);font-size:var(--fs-meta);color:var(--c-text);line-height:1.5;counter-increment:di-step}` `.di-steps li::before{content:counter(di-step);position:absolute;left:9px;top:8px;width:19px;height:19px;background:var(--c-brand);color:#fff;border-radius:999px;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}`
+`.di-actions{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap-md);align-items:start;margin-top:var(--gap-lg);max-height:calc(100vh - 260px);overflow-y:auto;padding-right:4px;scrollbar-gutter:stable}` `.di-action{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);overflow:hidden}` `.di-action[open]{box-shadow:0 6px 20px rgba(20,28,48,.10)}` `.di-action__summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:flex-start;padding:14px 16px}` `.di-action__summary::-webkit-details-marker{display:none}` `.di-action[open] .di-action__summary{border-bottom:1px solid var(--c-border)}` `.di-action__rank{width:2rem;height:2rem;border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.8rem;color:#fff;background:#b3261e;font-variant-numeric:tabular-nums;flex-shrink:0}` `.di-action__main{display:flex;flex-direction:column;gap:6px;min-width:0}` `.di-action__top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}` `.di-action__domain{font-size:var(--fs-di-chip);text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);font-weight:600}` `.di-effort{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-di-chip);font-weight:600;padding:3px 10px;border-radius:999px}` `.di-effort--low{color:#1e8a4a;background:rgba(30,138,74,.12)}` `.di-effort--med{color:#b45708;background:rgba(180,87,8,.12)}` `.di-effort--high{color:#b3261e;background:rgba(179,38,30,.12)}` `.di-effort__bars{display:inline-flex;gap:2px}` `.di-effort__bars i{width:3px;height:10px;border-radius:1px;background:#d4d4d4;display:block}` `.di-effort--low .di-effort__bars i:nth-child(1){background:#1e8a4a}` `.di-effort--med .di-effort__bars i:nth-child(1),.di-effort--med .di-effort__bars i:nth-child(2){background:#b45708}` `.di-effort--high .di-effort__bars i{background:#b3261e}` `.di-action__what{font-size:var(--fs-di-headline);font-weight:500;color:var(--c-text)}` `.di-action__stats{display:flex;flex-wrap:wrap;gap:8px}` `.di-action__k{font-size:var(--fs-di-chip);color:var(--c-text-3);background:var(--c-content-mist);border:1px solid var(--c-border);border-radius:999px;padding:3px 10px}` `.di-action__k b{color:var(--c-text);font-weight:600}` `.di-action__outcome{display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-meta);color:var(--c-text-3)}` `.di-action__outcome svg{width:14px;height:14px;flex-shrink:0;margin-top:2px;color:#1e8a4a}` `.di-action__outcome b{color:#1e8a4a;font-weight:600}` `.di-action__chev{width:22px;height:22px;border-radius:50%;background:var(--c-bg);border:1px solid var(--c-border);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--c-text-3)}` `.di-action__chev svg{width:11px;height:11px}` `.di-action[open] .di-action__chev{background:var(--c-brand);border-color:var(--c-brand);color:#fff;transform:rotate(180deg)}` `.di-action__detail{border-top:1px solid var(--c-border);padding:14px 16px;display:flex;flex-direction:column;gap:12px}` `.di-action__dtitle{font-size:var(--fs-di-headline);font-weight:600;margin:0;color:var(--c-text)}` `.di-action__dsummary{margin:0;font-size:var(--fs-meta);color:var(--c-text-3);line-height:1.55}` `.di-action__sech{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--c-grey);font-weight:600;margin:0 0 6px}` `.di-evidence{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--c-border);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-ev{background:var(--c-surface);padding:8px 11px}` `.di-ev__lbl{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-grey);margin-bottom:3px}` `.di-ev__val{font-size:var(--fs-di-headline);font-weight:600;color:var(--c-text)}` `.di-ev__val small{font-weight:500;color:var(--c-text-3);margin-left:2px}` `.di-steps{counter-reset:di-step;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}` `.di-steps li{position:relative;padding:9px 11px 9px 36px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-md);font-size:var(--fs-meta);color:var(--c-text);line-height:1.5;counter-increment:di-step}` `.di-steps li::before{content:counter(di-step);position:absolute;left:9px;top:8px;width:19px;height:19px;background:var(--c-brand);color:#fff;border-radius:999px;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}`
 
 **[FIX - dangling reference, found live, 2026-09-09]** The block above never covered `di-atable`/
 `di-apills`/`di-apill`/`di-anote` even though they were named as legitimate optional markup just
@@ -1067,52 +1076,21 @@ document's own existing bad-tone border shade, reused rather than the real produ
 undeclared `--c-red-stroke` token):
 `.di-atable{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden}` `.di-atable__h,.di-atable__row{display:grid;align-items:center;gap:12px;padding:8px 12px;border-top:1px solid var(--c-border)}` `.di-atable__h{border-top:0;background:var(--c-bg);font-size:var(--fs-di-snap-label);color:var(--c-grey);text-transform:uppercase;letter-spacing:.07em;font-weight:600}` `.di-atable__end{text-align:right}` `.di-atable__name{font-size:var(--fs-di-snap-desc);color:var(--c-text)}` `.di-atable__name small{display:block;font-size:.86em;color:var(--c-grey);margin-top:1px}` `.di-atable__meter{height:6px;border-radius:999px;background:var(--c-bg);border:1px solid var(--c-border);position:relative;overflow:hidden}` `.di-atable__meter i{position:absolute;inset:0 auto 0 0;border-radius:999px;display:block}` `.di-atable__meter--bad i{background:#b3261e}` `.di-atable__meter--warn i{background:#b45708}` `.di-atable__meter--neutral i{background:var(--c-grey)}` `.di-atable__v{font-size:var(--fs-di-snap-desc);color:var(--c-text-3);text-align:right}` `.di-atable__v b{color:var(--c-text);font-weight:600}` `.di-apills{display:flex;flex-wrap:wrap;gap:6px}` `.di-apill{display:inline-flex;align-items:center;background:var(--c-surface);border:1px solid var(--c-border);border-radius:999px;padding:4px 11px;font-size:var(--fs-di-snap-desc);font-weight:500;color:var(--c-text)}` `.di-apill--bad{background:#fceae8;border-color:#f3cfca;color:#b3261e}` `.di-anote{background:#fcf0de;border:1px solid #e8c79c;border-radius:var(--r-md);padding:9px 11px;font-size:var(--fs-di-snap-desc);color:#7a4a08;line-height:1.5;display:flex;gap:8px;align-items:flex-start}` `.di-anote svg{width:14px;height:14px;flex-shrink:0;margin-top:1px;color:#b45708}`
 
-## Persistent caveats footer
+## No persistent caveats footer (REMOVED 2026-09-23, TENANT DECISION)
 
-**[FIX - dangling reference, found live]** This section used to say "reuse verbatim from
-`05_report_html_holistic.md`'s pattern" - that file has no such pattern to reuse. Written out in
-full here instead.
+**[REMOVED, was "Persistent caveats footer"]** A real, board-relevant caveat (e.g. "reviewer
+dependency is counted at instance level") is worth more inside the sentence that needs it than
+listed generically at the bottom of the document - and a static 5-11 item dump ate real vertical
+space that could hold more of your own actual analysis instead. Do not write a `<footer
+class="di-caveats">` or any equivalent standalone caveats section anywhere in this document.
 
-**[BRAND HANDOFF §6, settled rule] Caveats scale with their count - two different treatments,
-never mixed.** A SHORT note (1-2 lines - a single methodology aside) gets the blue informational
-wash. A LIST of caveats (this report type routinely has 5-11 real `data_quality` notes) becomes a
-WHITE card - never a blue slab. *"An 11-item blue slab is colour-as-field - rejected on sight."*
-Blue means status/information; a list that long reads as one giant status flag if it's blue, which
-is not what it is.
-
-Blue wash, for a single short note only (declare `.di-note{background:#e8f2fd;border-left:3px
-solid #125aab;border-radius:var(--r-sm);padding:10px 14px;font-size:var(--fs-di-comp-meta);
-color:var(--c-text-2)}` `.di-note b,.di-note strong{color:#125aab;font-weight:600}` once):
-```html
-<p class="di-note"><strong>{bold lead phrase}</strong> {plain explanation, one sentence}</p>
-```
-
-White card, for the real caveat list (one `<li>` per real `data_quality` note actually present in
-the dimension data you were given - never invented, never trimmed to make the list shorter):
-```html
-<footer class="di-caveats" aria-label="Data-quality caveats">
-  <div class="di-caveats__eyebrow">Data-quality caveats</div>
-  <ul class="di-caveats__list">
-    <li class="di-caveats__item">
-      <span class="di-caveats__ico" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.35" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="10.6" r="0.15" stroke="currentColor" stroke-width="1.3"/></svg></span>
-      <span class="di-caveats__text"><b>{bold lead phrase, e.g. "Reviewer dependency is counted at instance level"}</b>{plain explanation of what that means, e.g. ", so it is not double-counted across users."}</span>
-    </li>
-    <!-- one .di-caveats__item per real data_quality note -->
-  </ul>
-</footer>
-```
-Declare once (copied verbatim from the real product's `detailed-insights.component.css`, using this
-document's own token names):
-```css
-.di-caveats{margin-top:var(--gap-lg);background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);padding:var(--gap-lg) calc(var(--gap-lg) + 3px)}
-.di-caveats__eyebrow{font-size:var(--fs-di-eyebrow);font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--c-grey)}
-.di-caveats__list{list-style:none;margin:8px 0 0;padding:0}
-.di-caveats__item{display:grid;grid-template-columns:18px 1fr;gap:10px;padding:9px 0;font-size:calc(var(--fs-di-headline) - 1px);line-height:1.55;color:var(--c-text-3);border-top:1px solid var(--c-border)}
-.di-caveats__item:first-child{border-top:0}
-.di-caveats__ico{margin-top:2px;color:var(--c-grey);display:inline-flex}
-.di-caveats__ico svg{width:14px;height:14px}
-.di-caveats__text b{color:var(--c-text);font-weight:600}
-```
+**This does NOT mean caveats disappear - it means they move to where they are ALREADY required to
+live.** Every `data_quality` note you were given still applies exactly as before: hard rule 4
+("caveats are inseparable from their values") is unchanged, and the narrative you were handed
+already wove the load-bearing ones into its own prose (`data_quality_applied` on each block) - cite
+that prose, including its caveats, in the block it belongs to. A caveat that qualifies a number you
+are rendering must still travel with that number, in the same sentence or the one after it; it
+simply never gets a second, separate, generic listing of its own.
 
 ## Section-number chips (`di-secnum`) — one per tab heading, `01`–`06`
 

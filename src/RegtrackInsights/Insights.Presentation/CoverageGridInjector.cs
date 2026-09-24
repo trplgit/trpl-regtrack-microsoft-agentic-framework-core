@@ -109,9 +109,20 @@ public static partial class CoverageGridInjector
         // Peer-coverage gaps pair - OMITTED, not shown as a fake 0. UnderConfigured is always 0
         // today: no procedure computes a real obligation-COUNT peer norm yet (see
         // LocationCoverageClassifier's own doc comment). Render it the moment that ever changes.
+        //
+        // [BUG FOUND LIVE, 2026-09-23] .di-kpi__pairs is a fixed 2-column CSS grid
+        // (05_report_html_fixed_holistic.md's own consolidated CSS declaration). With
+        // UnderConfigured omitted, exactly 3 pairs are ever emitted (never any other count - see
+        // this method's own two `sb.Append` calls above/below), which always leaves the grid's 4th
+        // cell empty - a real blank box, the exact "tile that doesn't have anything" this whole
+        // system's own honesty rule (CLAUDE.md/the render prompt's own tab-0 rule) exists to
+        // forbid. The 3-pairs case is the only one that can ever dangle; spanning the last pair
+        // (Unmapped locations) full-width closes it by construction rather than leaving a gap.
+        var pairCount = counts.UnderConfigured > 0 ? 4 : 3;
         if (counts.UnderConfigured > 0)
             sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Peer-coverage gaps</div><div class="di-kpi__pair-val tnum">{counts.UnderConfigured}</div></div>""");
-        sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped locations</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
+        var unmappedFullSpan = pairCount == 3 ? " di-kpi__pair--full" : "";
+        sb.Append($"""<div class="di-kpi__pair{unmappedFullSpan}"><div class="di-kpi__pair-lbl">Unmapped locations</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
           .Append("</div>")
           .Append($"""<p class="di-kpi__narr">Each box is one leaf location, coloured by status. Click a box to open its detail panel. Use the status chips to focus the grid.{(rollupOwnerless > 0 ? $" The corporate-entity rollup node (which holds {rollupOwnerless} ownerless obligations) is not a leaf location and so is not shown as a tile." : "")}</p>""")
           .Append("</article></div>");
