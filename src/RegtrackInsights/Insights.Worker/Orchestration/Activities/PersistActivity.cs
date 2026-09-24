@@ -50,7 +50,7 @@ public sealed record PersistOutput(string ReportId, string? LocalFilePath = null
 /// </summary>
 public sealed class PersistActivity(
     IReportEncryptor encryptor, IReportBlobWriter blobWriter, IServiceScopeFactory serviceScopeFactory,
-    ILogger<PersistActivity> logger, string? localFallbackDirectory = null)
+    ILogger<PersistActivity> logger, ITenantReportLock tenantReportLock, string? localFallbackDirectory = null)
     : AsyncTaskActivity<PersistInput, PersistOutput>
 {
     protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) => RunAsync(input);
@@ -81,12 +81,11 @@ public sealed class PersistActivity(
             using var scope = serviceScopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
 
-            // [ADDED 2026-09-18] Fast path for a redelivered activity: a prior attempt (this pod
-            // or another) already finished this exact report. Return it WITHOUT re-encrypting or
-            // re-writing the blob - encryption mints a fresh AES key/IV per call, so overwriting an
-            // already-persisted blob here would silently break that row's own stored
-            // EncryptedAesKey (the row would still point at the old ciphertext's key, not the new
-            // one just written over it). Checking first avoids ever touching the blob a second time.
+            // [ADDED 2026-09-18] Fast, cheap check before doing any real work: a prior attempt
+            // (this pod or another) already finished this exact report. Skips encrypt/blob/lock
+            // entirely on the common redelivery case. The AUTHORITATIVE check - the one the race
+            // actually depends on - is the one repeated just before the insert, below, once the
+            // distributed lock is held.
             var existing = await db.GeneratedReports.FindAsync(reportId);
             if (existing is not null)
             {
@@ -116,30 +115,29 @@ public sealed class PersistActivity(
                 KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
             };
 
-            db.GeneratedReports.Add(report);
-
-            try
+            // [ADDED 2026-09-24] FOUND LIVE AGAIN - the exact same failure class this class's own
+            // 2026-09-18 fix only made loggable, not prevented: "An error occurred while saving the
+            // entity changes" when multiple PersistActivity calls for the SAME TENANT hit
+            // SaveChangesAsync at once (that incident was 4 replicas racing one report; this one was
+            // one reqId's sibling dimensions finishing together - same mechanism, different trigger).
+            // ITenantReportLock (SqlTenantReportLock in production) serializes writes per tenant
+            // across every replica - see that interface's own doc comment for why it can't be an
+            // in-process lock. The re-check inside the lock is what makes a retried/relocked attempt
+            // a no-op once another replica's transaction has already committed the same reportId.
+            return await tenantReportLock.ExecuteWithLockAsync(db, input.TenantId, async () =>
             {
+                if (await db.GeneratedReports.AnyAsync(r => r.Id == reportId))
+                {
+                    logger.LogWarning(
+                        "PersistActivity: lost the race for report {ReportId} to another replica while waiting for the tenant lock - returning theirs.", reportId);
+                    return new PersistOutput(reportId.ToString());
+                }
+
+                db.GeneratedReports.Add(report);
                 await db.SaveChangesAsync();
-            }
-            catch (DbUpdateException)
-            {
-                // [ADDED 2026-09-18] Lost a real race: between the FindAsync check above and this
-                // INSERT, another pod's redelivered attempt may have won and its row is now there.
-                // That row is the truth - the blob we just wrote above is orphaned (harmless; same
-                // known gap as the not-yet-built temp-blob purge job, never a correctness issue
-                // since nothing will ever reference it - the DB row, which we do NOT own, points at
-                // THEIRS). `await` is not legal in a catch filter, so the check happens here instead
-                // and a genuinely different failure (no row exists) rethrows as before.
-                if (!await db.GeneratedReports.AnyAsync(r => r.Id == reportId))
-                    throw;
 
-                logger.LogWarning(
-                    "PersistActivity: lost a concurrent race for report {ReportId} to another pod's redelivered attempt - returning theirs.", reportId);
-                return new PersistOutput(reportId.ToString());
-            }
-
-            return new PersistOutput(report.Id.ToString());
+                return new PersistOutput(report.Id.ToString());
+            });
         }
         catch (Exception ex)
         {

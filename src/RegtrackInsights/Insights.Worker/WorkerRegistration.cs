@@ -146,11 +146,13 @@ public static class WorkerRegistration
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
         // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
         // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
+        services.AddSingleton<ITenantReportLock, SqlTenantReportLock>();
         services.AddTransient(sp => new PersistActivity(
             sp.GetRequiredService<IReportEncryptor>(),
             sp.GetRequiredService<IReportBlobWriter>(),
             sp.GetRequiredService<IServiceScopeFactory>(),
             sp.GetRequiredService<ILogger<PersistActivity>>(),
+            sp.GetRequiredService<ITenantReportLock>(),
             configuration["Reports:LocalFallbackDirectory"]));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
