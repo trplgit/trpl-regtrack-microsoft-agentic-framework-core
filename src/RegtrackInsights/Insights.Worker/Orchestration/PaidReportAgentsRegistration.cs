@@ -158,7 +158,9 @@ public static class PaidReportAgentsRegistration
 
             return new Dictionary<string, IFreehandDimensionCompositionAgent>
             {
-                ["Act"] = Build("Act", "02_composition_freehand_act.md"),
+                // [ADDED 2026-09-25] v2 - real "window" data_quality entry documented (Act's own
+                // period-scoping change). See that file's own header for what changed and why.
+                ["Act"] = Build("Act", "02_composition_freehand_act_v2.md"),
                 ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging.md"),
                 ["Departments"] = Build("Departments", "02_composition_freehand_departments.md"),
                 ["Licence"] = Build("Licence", "02_composition_freehand_licence.md"),
@@ -168,7 +170,8 @@ public static class PaidReportAgentsRegistration
                 ["Risk"] = Build("Risk", "02_composition_freehand_risk.md"),
                 ["Nature"] = Build("Nature", "02_composition_freehand_nature.md"),
                 ["Internal"] = Build("Internal", "02_composition_freehand_internal.md"),
-                ["Event"] = Build("Event", "02_composition_freehand_event.md"),
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
+                ["Event"] = Build("Event", "02_composition_freehand_event_v2.md"),
                 // [ADDED 2026-09-23] Retires Sambram's fixed single-section Users template - see
                 // FreehandDimensions.cs's own doc comment for the real lab-tested evidence behind
                 // this decision.
@@ -310,9 +313,11 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
                     "05_report_html_dimension_selection_backlogaging.md", freehandModel),
+                // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix (Act's own
+                // period-scoping change) - see that file's own header for what changed and why.
                 ["dimension_selection:Act"] = Build(
                     "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_act.md", freehandModel),
+                    "05_report_html_dimension_selection_act_v2.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
                     "05_report_html_dimension_selection_licence.md", freehandModel),
@@ -327,9 +332,10 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection:Internal"] = Build(
                     "DimensionSelectionInternalReportHtmlAgent", "Renders a freehand-composed Statutory-vs-Internal insight as self-contained HTML.",
                     "05_report_html_dimension_selection_internal.md", freehandModel),
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_event.md", freehandModel),
+                    "05_report_html_dimension_selection_event_v2.md", freehandModel),
             };
         });
 
