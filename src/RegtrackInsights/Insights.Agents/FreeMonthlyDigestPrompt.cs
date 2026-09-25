@@ -247,11 +247,16 @@ public sealed partial class FreeMonthlyDigestPrompt
             to a fact headline (WithPeriodHeadline).                                             */
         var eligible = candidates.Where(c => HasAMeaningfulBase(c.BaseCount)).ToList();
 
-        var named = eligible
-            .Where(c => c.DefaultSlot is 1 or 2)
-            .OrderBy(c => c.DefaultSlot)
-            .Select((c, i) => new MonthlyNamedFinding(i + 1, c))
-            .ToList();
+        /*  The proc's own slots 1 and 2 get the same reads-the-same test the extras do - two rows
+            with the same label, site and date are one name to the reader wherever they rank. (Same
+            label and site on DIFFERENT dates stays: the email can tell them apart by date. The
+            card, which shows no dates, drops those itself - InsightCardInput.Build.)               */
+        var defaults = new List<MonthlyCandidate>();
+        foreach (var c in eligible.Where(c => c.DefaultSlot is 1 or 2).OrderBy(c => c.DefaultSlot))
+            if (!defaults.Any(d => ReadsTheSame(d, c)))
+                defaults.Add(c);
+
+        var named = defaults.Select((c, i) => new MonthlyNamedFinding(i + 1, c)).ToList();
 
         var extras = eligible
             .Where(c => c.DefaultSlot is null && c.EntityLabel is { } label && CleanLabel(label).Length > 0)

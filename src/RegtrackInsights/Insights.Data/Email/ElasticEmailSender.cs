@@ -2,7 +2,7 @@ using System.Net.Http.Json;
 
 namespace Insights.Data.Email;
 
-/// <summary>Primary provider (Email:ElasticEmail:ApiKeySecretName - Key Vault, never appsettings). Elastic Email v4 REST API.</summary>
+/// <summary>Elastic Email v4 REST API (EmailGateway.ElasticEmail, EmailGatewayMaster ID 1) - the default for tenants with no gateway row. Key: Email:ElasticEmail:ApiKey.</summary>
 public sealed class ElasticEmailSender(HttpClient httpClient, string apiKey) : IEmailSender
 {
     public async Task<EmailSendResult> SendAsync(EmailMessage message, CancellationToken cancellationToken = default)

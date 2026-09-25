@@ -1,5 +1,6 @@
 using DurableTask.Core;
 using Insights.Data;
+using Insights.Data.Email;
 using Insights.Domain;
 using Microsoft.Extensions.Logging;
 
@@ -11,9 +12,16 @@ public sealed record DispatchRecipientRef(long UserId, string Email, string? Nam
 
 public sealed record DispatchGroup(FreeDigestArtifact Artifact, IReadOnlyList<DispatchRecipientRef> Recipients);
 
+/// <param name="EmailGatewayId">
+/// The EmailGatewayMaster ID every recipient of this tenant is sent through this run. Nullable,
+/// and last, so a history recorded before per-tenant routing still deserialises - null means "not
+/// resolved here", and SendDigestFromArtifactActivity then resolves it live. Null NEVER means a
+/// default provider.
+/// </param>
 public sealed record ResolveDigestDispatchOutput(
     bool ShouldProceed, string Decision, string Reason, string TenantName,
-    IReadOnlyList<DispatchGroup> Groups, int RecipientsSkippedNoMatchingArtifact, int RecipientsSkippedNoScope);
+    IReadOnlyList<DispatchGroup> Groups, int RecipientsSkippedNoMatchingArtifact, int RecipientsSkippedNoScope,
+    int? EmailGatewayId = null);
 
 /// <summary>
 /// MONDAY, node 1: the re-gate. Everything Sunday resolved is treated as a CLAIM, never a grant
@@ -22,6 +30,11 @@ public sealed record ResolveDigestDispatchOutput(
 ///
 /// Re-checks, cheapest first:
 ///   1. Tenant gate (entitled, not superseded) - unchanged from today's EvaluateGateAsync.
+///   1b. Email gateway (2026-09-25) - which provider this tenant's mail goes through, read LIVE
+///      from dbo.EmailDeliveryGatewayCustomization so an ops switch flipped since Sunday applies.
+///      A configuration that cannot be trusted refuses the whole tenant here, before any
+///      recipient is claimed (EmailGatewayRules). Resolved once per tenant per run: a switch
+///      flipped mid-send applies from the next tenant/tick, not mid-tenant.
 ///   2. Recipients, resolved LIVE - repository.GetRecipientsAsync already excludes anyone
 ///      suppressed (unsubscribed/bounced) or deleted since Sunday.
 ///   3. Scope signature, RECOMPUTED live and matched against a Sunday artifact by that same
@@ -36,9 +49,12 @@ public sealed record ResolveDigestDispatchOutput(
 /// </summary>
 public sealed class ResolveDigestDispatchActivity(
     IFreeDigestRepository repository, IFreeDigestArtifactRepository artifacts, IScopeRepository scope,
-    ILogger<ResolveDigestDispatchActivity> logger)
+    IEmailGatewayResolver gatewayResolver, ILogger<ResolveDigestDispatchActivity> logger)
     : AsyncTaskActivity<ResolveDigestDispatchInput, ResolveDigestDispatchOutput>
 {
+    /// <summary>The Decision value when the tenant's email gateway configuration is refused.</summary>
+    public const string EmailGatewayRefusedDecision = "EmailGatewayRefused";
+
     protected override Task<ResolveDigestDispatchOutput> ExecuteAsync(TaskContext context, ResolveDigestDispatchInput input) => RunAsync(input);
 
     internal async Task<ResolveDigestDispatchOutput> RunAsync(ResolveDigestDispatchInput input)
@@ -54,12 +70,28 @@ public sealed class ResolveDigestDispatchActivity(
                 false, gate.Decision.ToString(), gate.Reason, tenant.TenantName, [], 0, 0);
         }
 
+        var gateway = await gatewayResolver.ResolveAsync(input.TenantId);
+        foreach (var warning in gateway.Warnings)
+            logger.LogWarning("ResolveDigestDispatchActivity: {Warning}", warning);
+
+        if (gateway.Gateway is not { } resolvedGateway)
+        {
+            // Fail closed, fail loudly: a gateway row nobody can interpret is a config error to
+            // fix, not a reason to guess a provider for this tenant's customers.
+            logger.LogError("ResolveDigestDispatchActivity: {Detail} Nothing is sent for this tenant this run.", gateway.Detail);
+            return new ResolveDigestDispatchOutput(
+                false, EmailGatewayRefusedDecision, gateway.Detail, tenant.TenantName, [], 0, 0);
+        }
+
+        logger.LogInformation("ResolveDigestDispatchActivity: {Detail} (source {Source}).", gateway.Detail, gateway.Source);
+        var gatewayId = (int)resolvedGateway;
+
         var pendingArtifacts = await artifacts.GetForDispatchAsync(input.TenantId, input.ArtifactFreshnessDays);
         if (pendingArtifacts.Count == 0)
         {
             return new ResolveDigestDispatchOutput(
                 true, gate.Decision.ToString(), "No undispatched, in-freshness artifacts for this tenant.",
-                tenant.TenantName, [], 0, 0);
+                tenant.TenantName, [], 0, 0, gatewayId);
         }
 
         /*  [BUG FOUND LIVE, 2026-09-11] GetForDispatchAsync returns every COMPLETE, undispatched,
@@ -133,6 +165,6 @@ public sealed class ResolveDigestDispatchActivity(
         }
 
         return new ResolveDigestDispatchOutput(
-            true, gate.Decision.ToString(), gate.Reason, tenant.TenantName, groups, noMatch, noScope);
+            true, gate.Decision.ToString(), gate.Reason, tenant.TenantName, groups, noMatch, noScope, gatewayId);
     }
 }
