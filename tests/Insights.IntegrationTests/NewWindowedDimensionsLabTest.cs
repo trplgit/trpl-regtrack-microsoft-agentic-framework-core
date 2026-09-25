@@ -107,7 +107,7 @@ public sealed class NewWindowedDimensionsLabTest(ITestOutputHelper output)
         var (windowStart, windowEnd) = Window30Days();
         var repo = new SqlDimensionRepository(connectionString);
         var r = await repo.GetNatureAsync(UserId, TenantId, windowStart, windowEnd);
-        output.WriteLine($"[Nature] ScopedInstances={r.ControlTotals.ScopedInstances} SumOfRows={r.ControlTotals.SumOfRows}");
+        output.WriteLine($"[Nature] ScopedInstances={r.ControlTotals.ScopedInstances} CategorisedInstances={r.ControlTotals.CategorisedInstances}");
         AssertRealWindowedResult("Nature", r, windowStart, windowEnd);
     }
 

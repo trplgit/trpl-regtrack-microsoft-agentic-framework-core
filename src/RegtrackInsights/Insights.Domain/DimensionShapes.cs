@@ -158,7 +158,18 @@ public sealed record RiskRow
 public sealed record NatureControlTotals
 {
     public int ScopedInstances { get; init; }
-    public int SumOfRows { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-25, found live] Was SumOfRows - sql/09's own column is CategorisedInstances,
+    /// renamed there specifically because rows cover only instances WITH a nature, so a field
+    /// called SumOfRows compared against ScopedInstances reads as a gap when it is a declared
+    /// residual (CLAUDE.md 4a's own documented naming rule for this exact dimension). This C#
+    /// property was never renamed to match, so it silently defaulted to 0 via Dapper's exact-name
+    /// mapping - found live via a rigorous real-data review (control_totals showed "SumOfRows":0
+    /// on a real 24-row Nature fetch) - and this exact field name is referenced directly in both
+    /// the Nature composition and render prompts as a real field, so the render/compose agent was
+    /// being told about a field that could never carry its real value.
+    /// </summary>
+    public int CategorisedInstances { get; init; }
     public bool Reconciled { get; init; }
     public int OverdueInstances { get; init; }
     public decimal TenantOverduePct { get; init; }
@@ -223,7 +234,17 @@ public sealed record DepartmentsControlTotals
     public int DepartmentsWithObligations { get; init; }
     public int UnassignedInstances { get; init; }
     public decimal UnassignedPct { get; init; }
-    public decimal TenantOwnerlessPct { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-25, found live] Was TenantOwnerlessPct - sql/10's own column is
+    /// TenantNoInstanceOwnerPct (renamed at the SQL layer at some point in the past for the same
+    /// ownership_has_two_mechanisms precision reasons documented on that data_quality note), but
+    /// this C# property was never renamed to match. Dapper's default mapping requires an exact
+    /// name match, so this silently defaulted to 0 regardless of the real computed value - a
+    /// systematic real-data review found this dead/always-wrong field (confirmed unused by any
+    /// prompt or other C# code, so no report ever visibly showed a wrong number from it, but it
+    /// would have been a landmine the moment anything started reading it).
+    /// </summary>
+    public decimal TenantNoInstanceOwnerPct { get; init; }
 }
 
 public sealed record DepartmentsRow
@@ -409,8 +430,20 @@ public sealed record InternalControlTotals
     public int SumOfInternalRows { get; init; }
     public int StatutoryOverdueInstances { get; init; }
     public int InternalOverdueInstances { get; init; }
-    public decimal? StatutoryOwnerlessPct { get; init; }
-    public decimal? InternalOwnerlessPct { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-25, found live] Was StatutoryOwnerlessPct/InternalOwnerlessPct on both this
+    /// record and InternalRow below - sql/13's real columns are StatutoryNoInstanceOwnerPct/
+    /// InternalNoInstanceOwnerPct (control_totals) and StatutoryNoInstanceOwner(Pct)/
+    /// InternalNoInstanceOwner(Pct) (rows), never "Ownerless". None of these 6 C# properties ever
+    /// matched their real SQL column, so all 6 silently carried Dapper's CLR default (0 or null)
+    /// on every single fetch regardless of real data - found live via a rigorous real-data review
+    /// (a real Minda-scale tenant's control_totals showed both these fields as null). The Internal
+    /// render prompt references the row-level names directly as real fields, so the render/compose
+    /// agent has been reading dead branch-level ownership data on every row, every run, since this
+    /// dimension shipped.
+    /// </summary>
+    public decimal? StatutoryNoInstanceOwnerPct { get; init; }
+    public decimal? InternalNoInstanceOwnerPct { get; init; }
     public int BranchesWithStatutory { get; init; }
     public int BranchesWithInternal { get; init; }
     public bool InternalAbsentEntirely { get; init; }
@@ -424,12 +457,12 @@ public sealed record InternalRow
     public string? ApexName { get; init; }
     public int StatutoryInstances { get; init; }
     public int StatutoryOverdue { get; init; }
-    public int StatutoryOwnerless { get; init; }
+    public int StatutoryNoInstanceOwner { get; init; }
     public int InternalInstances { get; init; }
     public int InternalOverdue { get; init; }
-    public int InternalOwnerless { get; init; }
-    public decimal? StatutoryOwnerlessPct { get; init; }
-    public decimal? InternalOwnerlessPct { get; init; }
+    public int InternalNoInstanceOwner { get; init; }
+    public decimal? StatutoryNoInstanceOwnerPct { get; init; }
+    public decimal? InternalNoInstanceOwnerPct { get; init; }
     public string? Flags { get; init; }
 }
 

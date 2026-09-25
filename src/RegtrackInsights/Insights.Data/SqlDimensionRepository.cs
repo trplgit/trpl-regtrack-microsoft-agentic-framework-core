@@ -147,9 +147,21 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         four times first). Same bug class as Act's own 51092, fixed here with the real code set.
         The new window-guard code (51104) joins the same reconciliation bucket. Users has no real
         dictionary-gap code of its own.                                                          */
-    public Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
-        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
-        ExecuteAsync<UsersControlTotals, UsersRow>(
+    /*  [FIX 2026-09-25, found live via a rigorous real-data review] UsersHeadcountCalculator has
+        existed, unit-tested, since 2026-09-15 (see its own doc comment - built specifically because
+        the render prompt asked for a "Reviewer cover {performerUserCount}:{reviewerUserCount}"
+        chip with nothing backing it and the model substituted a wrong number). It was never
+        actually wired in here. No SQL column backs PerformerUserCount/ReviewerUserCount by design,
+        so Dapper's default mapping silently left them at 0 - and a real live tenant-1285 report
+        was found stating "0 performer users" / "0 reviewer users" verbatim in its own rendered
+        HTML, directly contradicting its own per-user assignment table on the same page (which
+        correctly showed several named users with real nonzero PerformerInstances/
+        ReviewerInstances). Fixed by post-processing the fetched rows exactly the way the
+        calculator's own doc comment always said this should work.                               */
+    public async Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default)
+    {
+        var result = await ExecuteAsync<UsersControlTotals, UsersRow>(
             "Users", "dbo.usp_Insights_Dimension_Users",
             scopeDeniedCode: UsersErrorBase,
             reconciliationCodes: [UsersErrorBase + 1, UsersErrorBase + 2, UsersErrorBase + 3, UsersErrorBase + 4],
@@ -157,6 +169,18 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             userId, customerId,
             new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
             null, cancellationToken);
+
+        var (performerUserCount, reviewerUserCount) = UsersHeadcountCalculator.Compute(result.Rows);
+        var correctedControlTotals = result.ControlTotals with
+        {
+            PerformerUserCount = performerUserCount,
+            ReviewerUserCount = reviewerUserCount,
+        };
+
+        return new DimensionResult<UsersControlTotals, UsersRow>(
+            result.Dimension, correctedControlTotals, result.Rows, result.Detectors,
+            result.Assertions, result.Findings, result.DataQuality);
+    }
 
     /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - the new
         window-guard code (51112) lands exactly on InternalErrorBase+2, which the convenience
