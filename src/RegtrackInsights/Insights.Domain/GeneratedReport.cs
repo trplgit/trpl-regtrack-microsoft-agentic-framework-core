@@ -12,6 +12,18 @@ public sealed class GeneratedReport
     public required string ScopeDescriptor { get; init; }
     public required string ReportType { get; init; }
     public required string Period { get; init; }
+
+    /// <summary>
+    /// [ADDED 2026-09-25, sql/33_generated_report_dimension_key.sql] The real fix for the
+    /// interim `Period` "::dim=" suffix hack (see ReportDimensionKey's own doc comment) - a
+    /// comma-separated list of the dimension(s) this run covered, or NULL for every report type
+    /// other than dimension_selection ("all dimensions" - matches the null-means-all convention
+    /// RequestedDimensions already carries everywhere else in this codebase). EfCooldownRepository
+    /// matches on this column directly when present, falling back to the Period suffix only for
+    /// legacy rows written before this column existed.
+    /// </summary>
+    public string? RequestedDimensions { get; init; }
+
     public DateTime GeneratedAtUtc { get; init; }
     public required int GeneratedByUserId { get; init; }
 

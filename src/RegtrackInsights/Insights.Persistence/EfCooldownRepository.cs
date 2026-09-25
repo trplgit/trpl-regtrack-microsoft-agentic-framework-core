@@ -23,12 +23,17 @@ public sealed class EfCooldownRepository(InsightsReportsDbContext db, int cooldo
             return new CooldownResult(true, null);
 
         // [REDESIGNED 2026-09-25] Matches on the real dimension identity, not the free-text period
-        // string. dimension is still only recoverable from GeneratedReport.Period's interim
-        // "::dim=<name>" suffix (see ReportDimensionKey's own doc comment - the real dedicated
-        // column is still deferred) - normalise and match by suffix, the same normalisation
-        // ReportDimensionKey.ForCooldownAndRunId already applies when writing it. A null dimension
-        // (every report type except dimension_selection) matches on scope+reportType alone - there
-        // is only ever one unit for those types, so no further narrowing is needed or possible.
+        // string. GeneratedReport.RequestedDimensions (sql/33, deployed 2026-09-25) is now the real
+        // column - every row written by the updated PersistActivity populates it, comma-joined,
+        // trim/lowercase-normalised (ReportDimensionKey.Normalize). Rows written before that column
+        // existed only carry the interim Period "::dim=<name>" suffix (see ReportDimensionKey's own
+        // doc comment) - fall back to parsing that suffix ONLY when RequestedDimensions is NULL, so
+        // old rows still lock correctly during the transition. sql/33's own
+        // CK_GeneratedReport_DimensionKeyAgrees constraint guarantees the two never disagree once
+        // both are populated, so there is no ambiguity to resolve when a row happens to carry both.
+        // A null dimension (every report type except dimension_selection) matches on
+        // scope+reportType alone - there is only ever one unit for those types, so no further
+        // narrowing is needed or possible.
         var query = db.GeneratedReports
             .Where(r => r.CustomerId == customerId
                      && r.ReportType == reportType
@@ -37,8 +42,12 @@ public sealed class EfCooldownRepository(InsightsReportsDbContext db, int cooldo
 
         if (dimension is { Length: > 0 })
         {
-            var suffix = "::dim=" + dimension.Trim().ToLowerInvariant();
-            query = query.Where(r => r.Period.EndsWith(suffix));
+            var normalized = dimension.Trim().ToLowerInvariant();
+            var suffix = "::dim=" + normalized;
+            var member = "," + normalized + ",";
+            query = query.Where(r =>
+                (r.RequestedDimensions != null && ("," + r.RequestedDimensions + ",").Contains(member))
+                || (r.RequestedDimensions == null && r.Period.EndsWith(suffix)));
         }
 
         var lastSuccess = await query

@@ -356,8 +356,23 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         in-flight instance whose history this could contradict. **COORDINATED RELEASE**: this
         worker build and the sql/11 + sql/14 deploy must ship together, same reasoning as 3.2->3.3 -
         deploy either alone and Act/Event fetch fails (degrades to a placeholder, report still
-        ships) until both are in place. */
-    public const string Version = "4.0";
+        ships) until both are in place.
+
+        Bumped 4.0 -> 4.1: PersistInput (scheduled at the SAME position, same ScheduleTask call -
+        payload-shape-only, not a call-sequence change) gains input.RequestedDimensions, which
+        PersistActivity now writes into the new GeneratedReport.RequestedDimensions column (sql/33,
+        deployed to UAT 2026-09-25) - the real replacement for the interim Period "::dim=" suffix
+        EfCooldownRepository used to parse (see ReportDimensionKey's own doc comment). Trailing
+        optional field, defaults null, so an in-flight 4.0 instance replays identically.
+        **COORDINATED RELEASE, HARDER FAILURE MODE THAN 3.9->4.0's**: sql/33 MUST be live before
+        this worker build deploys - unlike Act/Event's window params (which degrade to a
+        placeholder if the SQL isn't there yet), a worker writing RequestedDimensions against a
+        database that lacks the column gets a hard EF "Invalid column name" error on EVERY SINGLE
+        PersistActivity call, breaking ALL report persistence, not just one dimension. sql/33 is
+        additive-only (nullable column, permissive CHECK) and was deployed to UAT ahead of this code
+        specifically so this ordering constraint is already satisfied there - verify it is live in
+        any OTHER environment before this worker build ships to it. */
+    public const string Version = "4.1";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
     // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
@@ -963,7 +978,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
             SetStage(InsightsRunStage.Complete, final: true);
             return await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
-                new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId));
+                new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId, input.RequestedDimensions));
         }
         finally
         {

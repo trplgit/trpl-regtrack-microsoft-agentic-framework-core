@@ -7,8 +7,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
+/// <param name="RequestedDimensions">
+/// [ADDED 2026-09-25] Real dimension(s) this run covered, for GeneratedReport.RequestedDimensions
+/// (sql/33) - null for every report type other than dimension_selection. Trailing optional so
+/// every existing caller/test keeps compiling unchanged.
+/// </param>
 public sealed record PersistInput(
-    string Html, int TenantId, string ReportType, string Period, string ScopeDescriptor, int UserId);
+    string Html, int TenantId, string ReportType, string Period, string ScopeDescriptor, int UserId,
+    IReadOnlyList<string>? RequestedDimensions = null);
 
 /// <param name="LocalFilePath">
 /// [ADDED 2026-09-12] Set only when Reports:LocalFallbackDirectory is configured - see
@@ -110,6 +116,7 @@ public sealed class PersistActivity(
                 BlobContainer = location.Container,
                 BlobPath = location.Path,
                 Status = "complete",
+                RequestedDimensions = ReportDimensionKey.Normalize(input.RequestedDimensions),
                 EncryptedAesKey = envelope.EncryptedAesKey,
                 KeyVaultObjectName = envelope.KeyVaultObjectName,
                 KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
