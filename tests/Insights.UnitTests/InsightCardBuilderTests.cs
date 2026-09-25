@@ -273,6 +273,92 @@ public sealed class InsightCardBuilderTests
     }
 }
 
+/// <summary>
+/// [FOUND on tenant 1082, 2026-09-23] Two licence rows, both "Motor Vehicle Pollution under
+/// Control" at "Khavda", held both slots and the card named the same licence and site twice.
+/// </summary>
+public sealed class InsightCardRepeatedNameTests
+{
+    [Fact]
+    public void Card_NamesTheSameLicenceAtTheSameSiteOnce_EvenOnDifferentDates()
+    {
+        var data = MonthlyExamples.Licence();
+        var first = data.Candidates[0];
+        var twin = first with { DefaultSlot = 2, EntityId = 2002, EventDate = first.EventDate!.Value.AddDays(1) };
+
+        var input = InsightCardInput.Build(data with { Candidates = [first, twin] });
+
+        Assert.Single(input.NamedFindings);
+        Assert.Contains("{{NAME_1}}", input.UserMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{NAME_2}}", input.UserMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Email_NamesTheSameLicenceSiteAndDateOnce_WhenBothHoldTheProcsDefaultSlots()
+    {
+        var data = MonthlyExamples.Licence();
+        var first = data.Candidates[0];
+        var twin = first with { DefaultSlot = 2, EntityId = 2002 };
+
+        var prompt = FreeMonthlyDigestPrompt.Build(data with { Candidates = [first, twin] });
+
+        Assert.Single(prompt.NamedFindings);
+    }
+
+    [Fact]
+    public void Card_StillNamesTwoDifferentLicences()
+    {
+        var input = InsightCardInput.Build(MonthlyExamples.Licence());
+
+        Assert.Equal(2, input.NamedFindings.Count);
+    }
+}
+
+/// <summary>
+/// [FOUND 2026-09-25] A card said "{site} holds 81% of the overdue work" where 81% was the share
+/// of that site's OWN overdue obligations carrying liability, and gave no period at all.
+/// </summary>
+public sealed class InsightCardPeriodAndShareTests
+{
+    [Fact]
+    public void EveryFactSentToTheModel_CarriesItsPeriodInWords()
+    {
+        var input = InsightCardInput.Build(MonthlyExamples.Overview());
+
+        Assert.Contains("\"period\":\"obligations that fell due in {{PREV_MONTH}}", input.UserMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"period\":\"\"", input.UserMessage, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("stock", "including those that fell due in earlier months")]
+    [InlineData("prev", "{{PREV_MONTH}}")]
+    [InlineData("curr", "{{CURR_MONTH}}")]
+    public void PeriodOf_NamesTheWindow(string windowScope, string expected) =>
+        Assert.Contains(expected, InsightCardInput.PeriodOf(windowScope, "section", "key"), StringComparison.Ordinal);
+
+    [Fact]
+    public void Figures_SayALiabilityPercentageIsAShareOfTheMembersOwnOverdueWork()
+    {
+        var finding = MonthlyExamples.Users().Candidates[0] with { Metric = "overdue_with_liability_pct" };
+
+        var figures = InsightCardInput.Figures(finding);
+
+        Assert.Contains("OWN overdue obligations", figures, StringComparison.Ordinal);
+        Assert.Contains("not a share of the organisation's overdue work", figures, StringComparison.Ordinal);
+        Assert.Contains("{{AS_AT}}", figures, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("First sentence. Second sentence here.", true)]
+    [InlineData("First sentence. Second one. And a third.", true)]
+    [InlineData("One. Two here. Three here. Four here.", false)]
+    public void Narrative_AllowsTwoOrThreeSentences(string text, bool allowed)
+    {
+        var count = InsightCardWriter.SentenceCount(text);
+        Assert.Equal(allowed, count is >= InsightCardWriter.MinNarrativeSentences and <= InsightCardWriter.MaxNarrativeSentences);
+    }
+}
+
 public sealed class InsightCardWriterParseTests
 {
     [Fact]

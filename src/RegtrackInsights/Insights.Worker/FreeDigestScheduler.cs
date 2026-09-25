@@ -12,9 +12,9 @@ namespace Insights.Worker;
 
 /// <summary>
 /// The free digest schedule - ADR-0001 (2026-09-10): every entitled tenant GENERATES on
-/// FreeDigestSettings.GenerateDay (default Sunday) and SENDS on FreeDigestSettings.SendDay at
-/// FreeDigestSettings.SendHourLocal in FreeDigestSettings.ScheduleTimeZone (default Monday, 9am
-/// IST) - a deliberate product decision to move away from the legacy per-tenant staggered anchor
+/// FreeDigestSettings.GenerateDay from GenerateHourLocal (default Sunday 00:00) and SENDS on
+/// FreeDigestSettings.SendDay from SendHourLocal in FreeDigestSettings.ScheduleTimeZone (default
+/// Monday 08:00 IST, so ~5,000 recipients are in inboxes before 9am) - a deliberate product decision to move away from the legacy per-tenant staggered anchor
 /// day (hash(tenant_id) % 7). See ADR-0001 D10 for the tradeoff this accepts: Sunday's compose
 /// load and Monday's mail volume both concentrate onto one day instead of spreading across the
 /// week.
@@ -42,19 +42,19 @@ public sealed class FreeDigestScheduler(
         }
 
         logger.LogInformation(
-            "Free digest schedule enabled. Checking every {Interval} - generate on {GenerateDay}, send from {SendHour:00}:00 {TimeZone} on {SendDay}.",
-            settings.ScheduleCheckInterval, settings.GenerateDay, settings.SendHourLocal, settings.ScheduleTimeZone.Id, settings.SendDay);
+            "Free digest schedule enabled - generate from {GenerateHour:00}:00 on {GenerateDay}, send from {SendHour:00}:00 on {SendDay} ({TimeZone}); re-checks at most every {Interval}.",
+            settings.GenerateHourLocal, settings.GenerateDay, settings.SendHourLocal, settings.SendDay, settings.ScheduleTimeZone.Id, settings.ScheduleCheckInterval);
 
-        using var timer = new PeriodicTimer(settings.ScheduleCheckInterval);
-
-        do
+        // Clock-aligned wakes, not a boot-relative PeriodicTimer - see FreeDigestScheduleClock.
+        // The first check runs immediately, so a worker that was down at a phase start catches up.
+        while (true)
         {
             try
             {
                 var utcNow = DateTime.UtcNow;
                 var localNow = TimeZoneInfo.ConvertTimeFromUtc(utcNow, settings.ScheduleTimeZone);
 
-                if (localNow.DayOfWeek == settings.GenerateDay)
+                if (FreeDigestScheduleClock.IsGenerateDue(localNow, settings))
                 {
                     await RunDueTenantsAsync(GeneratePhase, utcNow, stoppingToken);
 
@@ -64,16 +64,20 @@ public sealed class FreeDigestScheduler(
                         await RunDueTenantsAsync(InsightJsonPhase, utcNow, stoppingToken);
                 }
 
-                if (localNow.DayOfWeek == settings.SendDay && localNow.Hour >= settings.SendHourLocal)
+                if (FreeDigestScheduleClock.IsSendDue(localNow, settings))
                     await RunDueTenantsAsync(SendPhase, utcNow, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // A bad tick must not kill the lane - the next one may well succeed.
-                logger.LogError(ex, "Free digest schedule tick failed; will retry on the next interval.");
+                logger.LogError(ex, "Free digest schedule tick failed; will retry on the next wake.");
             }
+
+            // Measured from AFTER the tick: a send phase spends minutes enqueuing tenants.
+            var delay = FreeDigestScheduleClock.NextWakeDelay(DateTime.UtcNow, settings);
+            logger.LogDebug("Free digest schedule: next check in {Delay}.", delay);
+            await Task.Delay(delay, stoppingToken);
         }
-        while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
     private async Task RunDueTenantsAsync(Func<TaskHubClient, FreeDigestTenant, DateTime, CancellationToken, Task> phase, DateTime utcNow, CancellationToken cancellationToken)

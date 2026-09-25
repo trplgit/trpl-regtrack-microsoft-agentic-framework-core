@@ -501,8 +501,12 @@ public static partial class FreeMonthlyDigestValidator
     /// number must not be followed by % or "per cent" - TenantPct is genuinely scope-wide.
     /// The gap excludes digits so the match anchors on the number NEAREST the phrase: in "192 of
     /// the 1041 overdue items across your scope" the claim is about 1041, not 192.
+    ///
+    /// <para>[2026-09-25] The card prompt (07b) says "your organisation", never "scope", so the
+    /// same claim now arrives in those words and must be caught the same way. A figure followed by
+    /// "days" is an age, not a count ("overdue for more than 90 days across your organisation").</para>
     /// </summary>
-    [GeneratedRegex(@"(?<n>\d{1,3}(?:,\d{3})+|\d+)(?!\s*(%|per\s?cent|percent))[^.!?;\d]{0,80}?(?<phrase>across your scope|in your scope|across the estate|across your entire scope)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<n>\d{1,3}(?:,\d{3})+|\d+)(?!\s*(%|per\s?cent|percent|days?\b))[^.!?;\d]{0,80}?(?<phrase>across your scope|in your scope|across the estate|across your entire scope|across your organisation|in your organisation|across your whole organisation)", RegexOptions.IgnoreCase)]
     private static partial Regex ScopeWideCount();
 
     /// <summary>

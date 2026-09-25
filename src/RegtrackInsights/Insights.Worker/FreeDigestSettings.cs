@@ -66,7 +66,12 @@ public sealed class FreeDigestSettings
     /// <summary>FreeDigest:Schedule:Enabled. Off by default - a worker must not mail customers merely because it booted.</summary>
     public bool ScheduleEnabled { get; init; }
 
-    /// <summary>How often the weekly lane wakes to look for due tenants. Ticking often is safe - the per-recipient claim is the guarantee.</summary>
+    /// <summary>
+    /// FreeDigest:Schedule:CheckIntervalMinutes. The LONGEST the weekly lane ever sleeps before
+    /// re-reading the clock - it also wakes exactly at each phase's start (see
+    /// FreeDigestScheduleClock), so this no longer delays a phase. On Generate/Send day it is the
+    /// catch-up re-check interval. Ticking often is safe - the per-recipient claim is the guarantee.
+    /// </summary>
     public TimeSpan ScheduleCheckInterval { get; init; } = TimeSpan.FromMinutes(60);
 
     /// <summary>Pause between tenants. The free lane is lowest priority (10.3) and must not starve a paying user's on-demand run.</summary>
@@ -84,8 +89,14 @@ public sealed class FreeDigestSettings
     /// <summary>FreeDigest:Schedule:SendDay. The day the two-phase system actually mails recipients. Default Monday.</summary>
     public DayOfWeek SendDay { get; init; } = DayOfWeek.Monday;
 
-    /// <summary>FreeDigest:Schedule:SendHourLocal. Hour, in ScheduleTimeZone, the send window opens. Default 9 (9am).</summary>
-    public int SendHourLocal { get; init; } = 9;
+    /// <summary>FreeDigest:Schedule:GenerateHourLocal. Hour, in ScheduleTimeZone, generation opens on GenerateDay. Default 0 (midnight).</summary>
+    public int GenerateHourLocal { get; init; }
+
+    /// <summary>
+    /// FreeDigest:Schedule:SendHourLocal. Hour, in ScheduleTimeZone, the send window opens. Default
+    /// 8 (8am): ~5,000 recipients at 5/sec finish by ~08:25, so mail is in inboxes before 9am.
+    /// </summary>
+    public int SendHourLocal { get; init; } = 8;
 
     /// <summary>
     /// FreeDigest:Artifact:FreshnessDays. An artifact generated more than this many days ago is
@@ -121,12 +132,6 @@ public sealed class FreeDigestSettings
 
     /// <summary>FreeDigest:InsightApi:TimeoutSeconds - a wedged endpoint must surface as a failed POST, not hang an activity forever.</summary>
     public TimeSpan InsightApiTimeout { get; init; } = TimeSpan.FromSeconds(30);
-
-    /// <summary>Email:RateLimit:RequestsPerSecond. The shared ElasticEmail account is used by other services too - this is this project's good-citizen share, not a technical ceiling.</summary>
-    public int EmailRateLimitPerSecond { get; init; } = 5;
-
-    /// <summary>Email:RateLimit:AcquireTimeoutSeconds. A wedged/overwhelmed rate limiter must surface as a failed send, not hang an activity forever.</summary>
-    public TimeSpan EmailRateLimitAcquireTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// TESTING ONLY. FreeDigest:DebugDumpHtmlDir - when set, PersistDigestArtifactActivity writes

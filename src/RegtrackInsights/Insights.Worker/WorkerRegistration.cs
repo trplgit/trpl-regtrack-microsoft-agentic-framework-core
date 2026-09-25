@@ -171,6 +171,7 @@ public static class WorkerRegistration
         services.AddTransient<FetchDigestArtifactActivity>();
         services.AddTransient<SendDigestFromArtifactActivity>();
         services.AddTransient<MarkDigestArtifactDispatchedActivity>();
+        services.AddTransient<RecordDigestSendFailedActivity>();
 
         // ADR-0002 (2026-09-11) - the per-user insight JSON lane, Sunday-only, sibling to the
         // GENERATE phase above. ComposeInsightJsonActivity has no special construction needs, so
@@ -221,7 +222,7 @@ public static class WorkerRegistration
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
                 ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),
                 ActivityCreator<FetchDigestArtifactActivity>(sp), ActivityCreator<SendDigestFromArtifactActivity>(sp),
-                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp),
+                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp), ActivityCreator<RecordDigestSendFailedActivity>(sp),
                 ActivityCreator<ComposeInsightJsonActivity>(sp), ActivityCreator<PostInsightJsonActivity>(sp));
 
             return worker;

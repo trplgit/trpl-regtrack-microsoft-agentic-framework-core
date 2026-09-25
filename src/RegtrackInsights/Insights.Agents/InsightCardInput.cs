@@ -74,7 +74,19 @@ public sealed class InsightCardInput
         var edition = data.Edition;
 
         var candidateLeads = string.Equals(data.HeadlineSource, "candidate", StringComparison.Ordinal);
-        var named = guardrails.NamedFindings.Take(InsightCardRules.NamedFindingsCap).ToList();
+        /*  [FOUND on tenant 1082, 2026-09-23] Two licence rows, both "Motor Vehicle Pollution under
+            Control" at "Khavda" (expired a day apart), were both named, and the card read "X at
+            Khavda, X at Khavda and X at Khavda". The card shows no dates, so a finding whose bound
+            name and site repeat an earlier one's is the same name to the reader - keep the first. */
+        var named = new List<MonthlyNamedFinding>();
+        foreach (var n in guardrails.NamedFindings)
+        {
+            if (named.Count == InsightCardRules.NamedFindingsCap)
+                break;
+            if (!named.Any(earlier => ReadsTheSameOnTheCard(earlier, n, guardrails.Bindings)))
+                named.Add(n);
+        }
+
         var headlineFinding = candidateLeads ? named.FirstOrDefault(n => n.Slot == 1) : null;
         var headlineFact = candidateLeads ? null : data.Facts.SingleOrDefault(f => f.IsHeadline);
 
@@ -141,6 +153,7 @@ public sealed class InsightCardInput
                 f.FactValue,
                 Label = Plain(f.DisplayLabel),
                 f.WindowScope,
+                Period = PeriodOf(f.WindowScope, f.Section, f.FactKey),
                 f.ImpactClass,
                 AsAtRequired = f.AsAtRequired ? true : (bool?)null,
                 IsHeadline = f.IsHeadline ? true : (bool?)null,
@@ -164,6 +177,7 @@ public sealed class InsightCardInput
                 DatePlaceholder = n.DatePlaceholder,
                 n.Candidate.Detector,
                 Means = Means(n.Candidate.Detector),
+                Figures = Figures(n.Candidate),
                 n.Candidate.EntityKind,
                 n.Candidate.Metric,
                 n.Candidate.ItemCount,
@@ -193,20 +207,93 @@ public sealed class InsightCardInput
         };
     }
 
-    /// <summary>What a detector found, in plain words - the card lane's own glossary, sent only with a finding that uses it.</summary>
+    private static bool ReadsTheSameOnTheCard(MonthlyNamedFinding a, MonthlyNamedFinding b, IReadOnlyDictionary<string, string> bindings)
+    {
+        static string? Bound(string? placeholder, IReadOnlyDictionary<string, string> map) =>
+            placeholder is not null && map.TryGetValue(placeholder, out var value) ? value : null;
+
+        var nameA = Bound(a.NamePlaceholder, bindings);
+        return nameA is not null
+               && string.Equals(a.Candidate.EntityKind, b.Candidate.EntityKind, StringComparison.Ordinal)
+               && string.Equals(nameA, Bound(b.NamePlaceholder, bindings), StringComparison.OrdinalIgnoreCase)
+               && string.Equals(Bound(a.AtPlaceholder, bindings), Bound(b.AtPlaceholder, bindings), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The time window a fact covers, in the words the reader should see. [2026-09-25] Readers
+    /// could not tell whether a card's figures were last month's, this month's, or the whole
+    /// backlog - the stock figures in particular count everything overdue, however old.
+    /// </summary>
+    internal static string PeriodOf(string windowScope, string section, string factKey) => windowScope switch
+    {
+        "prev" => "obligations that fell due in {{PREV_MONTH}}, as they stand on {{AS_AT}}",
+        "curr" when section == "rest_of_month" || factKey.StartsWith("rm_", StringComparison.Ordinal) => "obligations still to fall due between {{AS_AT}} and the end of {{CURR_MONTH}}",
+        "curr" => "obligations due in {{CURR_MONTH}} up to {{AS_AT}}",
+        "stock" => "all obligations overdue as on {{AS_AT}}, including those that fell due in earlier months - not only this month",
+        _ => "a total used for comparison",
+    };
+
+    /// <summary>
+    /// What each number on a named finding counts, and over what period - by the proc's own Metric
+    /// (sql/36-41). [FOUND 2026-09-25] Given only "metric_pct: 81" a draft wrote "holds 81% of the
+    /// overdue work" for a site where 81% of ITS OWN overdue obligations carry liability: a true
+    /// number attached to the wrong whole. The closed-number check cannot see that.
+    /// </summary>
+    internal static string Figures(MonthlyCandidate c)
+    {
+        const string asAt = "Period: overdue as on {{AS_AT}}, including obligations that fell due in earlier months.";
+        var flagged = "problem_count = how many were flagged for this; population_count = how many were compared.";
+
+        var figures = c.Metric switch
+        {
+            "overdue_with_liability_pct" =>
+                "item_count = overdue obligations here that carry personal criminal liability; base_count = all overdue obligations here; "
+                + "metric_pct = the share of THIS one's OWN overdue obligations that carry that liability (not a share of the organisation's overdue work); "
+                + "tenant_pct = the same share across your whole organisation. " + asAt,
+            "overdue_over_90_days_pct" =>
+                "item_count = obligations here overdue for more than 90 days; base_count = all overdue obligations here; "
+                + "metric_pct = the share of THIS one's OWN overdue obligations that are more than 90 days old; tenant_pct = the same share across your whole organisation. " + asAt,
+            "share_of_all_overdue_pct" =>
+                "item_count = overdue obligations held here; base_count = all overdue obligations in your organisation; "
+                + "metric_pct = this one's share of ALL overdue obligations in your organisation. " + asAt,
+            "last_month_still_open_pct" =>
+                "item_count = obligations that fell due here in {{PREV_MONTH}} and are still open on {{AS_AT}}; base_count = all obligations that fell due here in {{PREV_MONTH}}; "
+                + "metric_pct = the share of those still open; tenant_pct = the same share across your whole organisation.",
+            "obligation_overdue_rate_pct" =>
+                "metric_pct = the share of THIS category's obligations that are overdue; tenant_pct = the share of all obligations in your organisation that are overdue. " + asAt,
+            "licences_expired_unrenewed_pct" =>
+                "item_count = licences here that have expired with no renewal in progress; base_count = all licences held here; "
+                + "metric_pct = the share of THIS one's OWN licences in that state; tenant_pct = the same share across your whole organisation. Period: the position on {{AS_AT}}.",
+            "liability_overdue_items" =>
+                "item_count = overdue obligations here that carry personal criminal liability. " + asAt,
+            "open_items_with_one_performer" =>
+                "item_count = open obligations here, every one assigned to the same single person. Period: open on {{AS_AT}}.",
+            "expired_on" or "expires_on" =>
+                "The date placeholder is the licence's expiry date.",
+            _ => string.Empty,
+        };
+
+        return figures.Length == 0 ? flagged : figures + " " + flagged;
+    }
+
+    /// <summary>
+    /// What a detector found, in plain words - the card lane's own glossary, sent only with a finding
+    /// that uses it. Written the way the card should read (07b): everyday words, "your organisation",
+    /// never "scope", because the model echoes the wording it is handed.
+    /// </summary>
     internal static string Means(string detector) => detector switch
     {
-        "last_month_slippage" => "A higher share of this one's previous-month obligations is still open than across the whole scope.",
+        "last_month_slippage" => "More of last month's work is still open here than across the rest of your organisation.",
         "single_point_of_failure" => "Every open obligation here rests on one person; nobody else is assigned to any of it.",
-        "overdue_concentration" => "This one holds a large share of everything that is overdue.",
-        "chronic_backlog" => "Its overdue obligations have sat more than 90 days, at a higher rate than the rest of the scope.",
-        "liability_share" => "More of its overdue obligations carry personal criminal liability than elsewhere in the scope.",
+        "overdue_concentration" => "This one holds a big part of all overdue work in your organisation.",
+        "chronic_backlog" => "More of its overdue work is over 90 days old than across the rest of your organisation.",
+        "liability_share" => "A higher share of its overdue obligations carry personal liability for the responsible officer than elsewhere in your organisation.",
         "multi_location_pattern" => "This Act is overdue at many of the sites it applies to.",
-        "category_overdue_skew" => "This category of obligation is overdue far more often than everything else.",
-        "liability_overdue_location" => "This site is well above the scope's own rate on liability-bearing overdue obligations.",
+        "category_overdue_skew" => "Work of this kind is overdue far more often than other work.",
+        "liability_overdue_location" => "This site has more overdue obligations that carry personal liability for the responsible officer than the rest of your organisation.",
         "deactivated_owner" => "Open obligations are held by someone who is no longer an active user of RegTrack.",
-        "self_review" => "The same person performs the obligation and approves it.",
-        "ghost_location" => "In scope, but with no obligations configured at all.",
+        "self_review" => "The same person does the work and approves it.",
+        "ghost_location" => "A site in your organisation with no obligations set up at all.",
         "licence_expiring_unrenewed" => "This licence expires this month with no renewal filed.",
         "licence_lapsed_recent_unrenewed" => "This licence has expired and still has no renewal in progress.",
         "expired_unrenewed_location" => "Expired-and-unrenewed licences are concentrated at this one site.",

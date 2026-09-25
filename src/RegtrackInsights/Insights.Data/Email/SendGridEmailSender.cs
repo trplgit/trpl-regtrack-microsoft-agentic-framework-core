@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 
 namespace Insights.Data.Email;
 
-/// <summary>Failover provider (Email:SendGrid:ApiKeySecretName - Key Vault, never appsettings). SendGrid v3 mail/send.</summary>
+/// <summary>SendGrid v3 mail/send (EmailGateway.SendGrid, EmailGatewayMaster ID 2). Key: Email:SendGrid:ApiKey. The FromAddress must be a verified SendGrid sender or every send is rejected.</summary>
 public sealed class SendGridEmailSender(HttpClient httpClient, string apiKey) : IEmailSender
 {
     public async Task<EmailSendResult> SendAsync(EmailMessage message, CancellationToken cancellationToken = default)

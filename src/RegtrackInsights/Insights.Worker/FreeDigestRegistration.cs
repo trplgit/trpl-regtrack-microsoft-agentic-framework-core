@@ -51,13 +51,18 @@ public static class FreeDigestRegistration
         var cardChatClientFactory = BuildChatClientFactory(
             configuration, configuration["Llm:AzureOpenAi:InsightCardReasoningEffort"] ?? "low");
 
-        var emailSenderFactory = BuildEmailSenderFactory(configuration);
+        var emailSenderRegistryFactory = BuildEmailSenderRegistryFactory(configuration);
+        var defaultEmailGateway = ReadDefaultEmailGateway(configuration);
+        var emailHttpTimeout = TimeSpan.FromSeconds(RequirePositive(configuration, "Email:HttpTimeoutSeconds", 30));
 
         /*  Named HttpClients via the factory, never `new HttpClient()`. A long-lived host that
             constructs its own clients exhausts sockets; one holding a single static client never
             picks up DNS changes. The factory solves both.                                      */
         services.AddHttpClient(LlmClientName);
-        services.AddHttpClient(EmailClientName);
+
+        /*  An explicit timeout, not HttpClient's 100s default: one wedged provider call would
+            otherwise hold a recipient for ~6.5 minutes across the three retry attempts.        */
+        services.AddHttpClient(EmailClientName, http => http.Timeout = emailHttpTimeout);
         services.AddHttpClient(InsightApiClientName, http => http.Timeout = settings.InsightApiTimeout);
 
         services.AddSingleton(settings);
@@ -70,14 +75,15 @@ public static class FreeDigestRegistration
         services.AddSingleton(sp =>
             chatClientFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(LlmClientName)));
 
-        /*  ADR-0001 (2026-09-10) - every send in this worker passes through the rate limiter here,
-            wrapping whichever concrete provider (or FailoverEmailSender pair) the factory above
-            selected. This is the ONLY IEmailSender registration - nothing sends unrated-limited.  */
-        services.AddSingleton<IEmailSender>(sp =>
-        {
-            var inner = emailSenderFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(EmailClientName));
-            return new RateLimitedEmailSender(inner, settings.EmailRateLimitPerSecond, settings.EmailRateLimitAcquireTimeout);
-        });
+        /*  Per-tenant email routing (2026-09-25). Every send goes through the registry, and every
+            sender in it is individually rate-limited - nothing sends un-rate-limited. There is
+            deliberately NO plain IEmailSender registration any more: a consumer that asked for
+            "the" sender would bypass per-tenant routing.                                        */
+        services.AddSingleton<IEmailSenderRegistry>(sp =>
+            emailSenderRegistryFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(EmailClientName)));
+
+        var gatewayConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
+        services.AddSingleton<IEmailGatewayResolver>(_ => new SqlEmailGatewayResolver(gatewayConnectionString, defaultEmailGateway));
 
         services.AddSingleton<InsightNarrativeWriter>();
 
@@ -200,11 +206,10 @@ public static class FreeDigestRegistration
         ScheduleTimeZone = TimeZoneInfo.FindSystemTimeZoneById(configuration["FreeDigest:Schedule:TimeZone"] ?? "India Standard Time"),
         GenerateDay = Enum.Parse<DayOfWeek>(configuration["FreeDigest:Schedule:GenerateDay"] ?? "Sunday"),
         SendDay = Enum.Parse<DayOfWeek>(configuration["FreeDigest:Schedule:SendDay"] ?? "Monday"),
-        SendHourLocal = configuration.GetValue("FreeDigest:Schedule:SendHourLocal", 9),
+        GenerateHourLocal = RequireHour(configuration, "FreeDigest:Schedule:GenerateHourLocal", 0),
+        SendHourLocal = RequireHour(configuration, "FreeDigest:Schedule:SendHourLocal", 8),
         ArtifactFreshnessDays = configuration.GetValue("FreeDigest:Artifact:FreshnessDays", 3),
         ArtifactRetentionDays = configuration.GetValue("FreeDigest:Artifact:RetentionDays", 90),
-        EmailRateLimitPerSecond = configuration.GetValue("Email:RateLimit:RequestsPerSecond", 5),
-        EmailRateLimitAcquireTimeout = TimeSpan.FromSeconds(configuration.GetValue("Email:RateLimit:AcquireTimeoutSeconds", 30)),
 
         // ADR-0002 (2026-09-11) - deliberately NOT Require()'d. The destination endpoint is not
         // configured yet (the user will supply it later); the worker must still boot with this
@@ -307,33 +312,56 @@ public static class FreeDigestRegistration
         }
     }
 
-    private static Func<HttpClient, IEmailSender> BuildEmailSenderFactory(IConfiguration configuration)
+    /*  Per-tenant routing (2026-09-25): ANY tenant can be routed to EITHER provider by
+        dbo.EmailDeliveryGatewayCustomization, so both keys and both rate limits are required at
+        startup - a missing SendGrid key must stop the host now, not fail the first SendGrid-routed
+        tenant on a Monday morning.                                                             */
+    private static Func<HttpClient, IEmailSenderRegistry> BuildEmailSenderRegistryFactory(IConfiguration configuration)
     {
-        var provider = Require(configuration, "Email:Provider");
+        /*  Email:Provider used to pick ONE provider for every tenant. Silently ignoring a leftover
+            value would let someone believe they had forced all mail through one provider when
+            they had not - so its presence stops startup and says what replaced it.             */
+        if (configuration["Email:Provider"] is { Length: > 0 } retired)
+            throw new InvalidOperationException(
+                $"Email:Provider ('{retired}') is retired - the provider is now chosen per tenant from "
+                + "dbo.EmailDeliveryGatewayCustomization (no row = Email:DefaultGatewayId). Remove the key.");
 
-        switch (Normalise(provider))
+        var elasticKey = Require(configuration, "Email:ElasticEmail:ApiKey");
+        var sendGridKey = Require(configuration, "Email:SendGrid:ApiKey");
+
+        var elasticRate = RequirePositive(configuration, "Email:ElasticEmail:RateLimit:RequestsPerSecond", 5);
+        var elasticAcquire = TimeSpan.FromSeconds(RequirePositive(configuration, "Email:ElasticEmail:RateLimit:AcquireTimeoutSeconds", 30));
+        var sendGridRate = RequirePositive(configuration, "Email:SendGrid:RateLimit:RequestsPerSecond", 5);
+        var sendGridAcquire = TimeSpan.FromSeconds(RequirePositive(configuration, "Email:SendGrid:RateLimit:AcquireTimeoutSeconds", 30));
+
+        return http => new EmailSenderRegistry(new Dictionary<EmailGateway, IEmailSender>
         {
-            case "elasticemail":
-                var elasticKey = Require(configuration, "Email:ElasticEmail:ApiKey");
-                return http => new ElasticEmailSender(http, elasticKey);
+            [EmailGateway.ElasticEmail] = new RateLimitedEmailSender(new ElasticEmailSender(http, elasticKey), elasticRate, elasticAcquire),
+            [EmailGateway.SendGrid] = new RateLimitedEmailSender(new SendGridEmailSender(http, sendGridKey), sendGridRate, sendGridAcquire),
+        });
+    }
 
-            case "sendgrid":
-                var sendGridKey = Require(configuration, "Email:SendGrid:ApiKey");
-                return http => new SendGridEmailSender(http, sendGridKey);
+    /// <summary>Email:DefaultGatewayId - the provider for a tenant with no active gateway row. An EmailGatewayMaster ID; default 1 (Elastic Email).</summary>
+    private static EmailGateway ReadDefaultEmailGateway(IConfiguration configuration)
+    {
+        var id = configuration.GetValue("Email:DefaultGatewayId", (int)EmailGateway.ElasticEmail);
 
-            case "failover":
-                /*  Order matters: FailoverEmailSender only tries the secondary when the primary
-                    throws, so the pair is not symmetric.                                        */
-                var primaryKey = Require(configuration, "Email:ElasticEmail:ApiKey");
-                var secondaryKey = Require(configuration, "Email:SendGrid:ApiKey");
-                return http => new FailoverEmailSender(
-                    new ElasticEmailSender(http, primaryKey),
-                    new SendGridEmailSender(http, secondaryKey));
+        return Enum.IsDefined(typeof(EmailGateway), id)
+            ? (EmailGateway)id
+            : throw new InvalidOperationException(
+                $"Email:DefaultGatewayId {id} is not a known gateway. Expected 1 (Elastic Email) or 2 (SendGrid).");
+    }
 
-            default:
-                throw new InvalidOperationException(
-                    $"Unknown Email:Provider '{provider}'. Expected elastic_email, sendgrid or failover.");
-        }
+    private static int RequirePositive(IConfiguration configuration, string key, int defaultValue)
+    {
+        var value = configuration.GetValue(key, defaultValue);
+        return value > 0 ? value : throw new InvalidOperationException($"{key} must be greater than 0 (was {value}).");
+    }
+
+    private static int RequireHour(IConfiguration configuration, string key, int defaultValue)
+    {
+        var value = configuration.GetValue(key, defaultValue);
+        return value is >= 0 and <= 23 ? value : throw new InvalidOperationException($"{key} must be an hour from 0 to 23 (was {value}).");
     }
 
     /// <summary>

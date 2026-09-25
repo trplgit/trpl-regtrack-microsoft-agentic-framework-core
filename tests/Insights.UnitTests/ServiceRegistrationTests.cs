@@ -40,13 +40,13 @@ public sealed class ServiceRegistrationTests
             ["FreeDigest:Monthly:AllowPersonNames"] = "true",
             ["Agents:PromptDirectory"] = "./prompts",
             ["Email:TemplatePath"] = "./templates",
-            ["Email:Provider"] = "elastic_email",
             ["Email:FromAddress"] = "noreply@example.com",
             ["Email:FromName"] = "RegTrack Insights",
             ["Email:UpgradeUrl"] = "https://example.com/upgrade",
             ["Email:UnsubscribeBaseUrl"] = "https://example.com/unsubscribe",
             ["Email:UnsubscribeSigningKey"] = "test-signing-key",
             ["Email:ElasticEmail:ApiKey"] = "placeholder",
+            ["Email:SendGrid:ApiKey"] = "placeholder",
             // [MERGE FIX, 2026-09-15] Tanvi's "added base url for cdn links" commit (823865e)
             // made AddInsightsFreeDigest require this too - placeholder, never dialled, same
             // reasoning as every other value here.
@@ -113,17 +113,48 @@ public sealed class ServiceRegistrationTests
         Assert.NotNull(provider2.GetRequiredService<Insights.Agents.IClaudeClient>());
     }
 
+    /// <summary>
+    /// Per-tenant routing: BOTH providers are built at startup (any tenant can be routed to
+    /// either), each behind its own rate limiter, plus the gateway resolver.
+    /// </summary>
     [Fact]
-    public void FailoverEmailProviderResolves()
+    public void BothEmailProvidersAndTheGatewayResolverResolve()
     {
-        var configuration = BuildConfiguration(new Dictionary<string, string?>
-        {
-            ["Email:Provider"] = "failover",
-            ["Email:SendGrid:ApiKey"] = "placeholder",
-        });
+        using var provider = BuildProvider(BuildConfiguration());
 
-        using var provider = BuildProvider(configuration);
-        Assert.NotNull(provider.GetRequiredService<Insights.Data.Email.IEmailSender>());
+        var registry = provider.GetRequiredService<Insights.Data.Email.IEmailSenderRegistry>();
+        Assert.IsType<Insights.Data.Email.RateLimitedEmailSender>(registry.For(Insights.Data.Email.EmailGateway.ElasticEmail));
+        Assert.IsType<Insights.Data.Email.RateLimitedEmailSender>(registry.For(Insights.Data.Email.EmailGateway.SendGrid));
+        Assert.NotSame(registry.For(Insights.Data.Email.EmailGateway.ElasticEmail), registry.For(Insights.Data.Email.EmailGateway.SendGrid));
+        Assert.NotNull(provider.GetRequiredService<Insights.Data.Email.IEmailGatewayResolver>());
+    }
+
+    /// <summary>
+    /// The retired single-provider switch must stop startup, not be silently ignored - someone
+    /// setting it would otherwise believe they had forced every tenant through one provider.
+    /// </summary>
+    [Fact]
+    public void RetiredEmailProviderKeyFailsAtStartup()
+    {
+        var configuration = BuildConfiguration(new Dictionary<string, string?> { ["Email:Provider"] = "ElasticEmail" });
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(configuration).Dispose());
+        Assert.Contains("Email:Provider", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Email:DefaultGatewayId", "7")]
+    [InlineData("Email:ElasticEmail:RateLimit:RequestsPerSecond", "0")]
+    [InlineData("Email:SendGrid:RateLimit:RequestsPerSecond", "-1")]
+    [InlineData("Email:HttpTimeoutSeconds", "0")]
+    [InlineData("FreeDigest:Schedule:SendHourLocal", "24")]
+    [InlineData("FreeDigest:Schedule:GenerateHourLocal", "-1")]
+    public void InvalidEmailOrScheduleValueFailsAtStartup(string key, string value)
+    {
+        var configuration = BuildConfiguration(new Dictionary<string, string?> { [key] = value });
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildProvider(configuration).Dispose());
+        Assert.Contains(key, ex.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -133,7 +164,6 @@ public sealed class ServiceRegistrationTests
     /// </summary>
     [Theory]
     [InlineData("Llm:Provider")]
-    [InlineData("Email:Provider")]
     public void UnknownProviderFailsAtStartup(string key)
     {
         var configuration = BuildConfiguration(new Dictionary<string, string?> { [key] = "not-a-real-provider" });
@@ -158,6 +188,7 @@ public sealed class ServiceRegistrationTests
     [InlineData("Email:TemplatePath")]
     [InlineData("Llm:AzureOpenAi:ApiKey")]
     [InlineData("Email:ElasticEmail:ApiKey")]
+    [InlineData("Email:SendGrid:ApiKey")]
     public void MissingRequiredConfigurationFailsAtStartup(string key)
     {
         var configuration = BuildConfiguration(new Dictionary<string, string?> { [key] = null });

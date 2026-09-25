@@ -33,8 +33,14 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
     private const int MinCompletionTokens = 150;
     private const int MaxCompletionTokens = 600;
 
-    /// <summary>The narrative is two sentences by contract; a third is a rejected draft, not a trimmed one.</summary>
-    public const int NarrativeSentences = 2;
+    /// <summary>
+    /// The narrative is two or three sentences by contract; a fourth is a rejected draft, not a
+    /// trimmed one. [RAISED 2026-09-25] Two sentences forced the model to drop the period and cram a
+    /// second finding into a clause ("..., while obligations are not configured at Finance"); the
+    /// third sentence gives each its own complete statement.
+    /// </summary>
+    public const int MinNarrativeSentences = 2;
+    public const int MaxNarrativeSentences = 3;
 
     public async Task<InsightCardText> WriteAsync(InsightCardInput input, int tokenCap, CancellationToken cancellationToken = default)
     {
@@ -70,8 +76,8 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
             problems.Add("headline or narrative is empty");
 
         var sentences = SentenceCount(narrative);
-        if (sentences != NarrativeSentences)
-            problems.Add($"narrative has {sentences} sentences, not {NarrativeSentences}");
+        if (sentences is < MinNarrativeSentences or > MaxNarrativeSentences)
+            problems.Add($"narrative has {sentences} sentences, not {MinNarrativeSentences} to {MaxNarrativeSentences}");
 
         if (problems.Count > 0)
             return Fallback(prompt, "validator rejected the draft: " + string.Join("; ", problems), result);
@@ -182,7 +188,7 @@ public static class InsightCardFallback
 
     private static string FactSentence(MonthlyFact fact, IReadOnlyList<MonthlyFact> facts, MonthlyDigestSlot slot)
     {
-        var label = fact.DisplayLabel.Replace("items", "obligations", StringComparison.OrdinalIgnoreCase).Replace("item", "obligation", StringComparison.OrdinalIgnoreCase).Trim();
+        var label = Plain(fact.DisplayLabel);
         var value = InsightCardRules.Count(fact.FactValue);
 
         if (label.StartsWith("of those", StringComparison.OrdinalIgnoreCase))
@@ -191,7 +197,7 @@ public static class InsightCardFallback
                                                         && !o.DisplayLabel.StartsWith("of", StringComparison.OrdinalIgnoreCase));
             var rest = label["of those".Length..].Trim();
             return sectionBase is not null
-                ? $"Of the {InsightCardRules.Count(sectionBase.FactValue)} {sectionBase.DisplayLabel.Replace("items", "obligations", StringComparison.OrdinalIgnoreCase)}, {value} {rest}."
+                ? $"Of the {InsightCardRules.Count(sectionBase.FactValue)} {Plain(sectionBase.DisplayLabel)}, {value} {rest}."
                 : $"{value} {InsightCardRules.UnitForFact(fact.FactKey, slot)} {rest}.";
         }
 
@@ -232,4 +238,14 @@ public static class InsightCardFallback
     }
 
     private static string DetectorPlain(string detector) => detector.Replace('_', ' ');
+
+    /// <summary>
+    /// The proc labels are definitions, written for the model; the fallback prints them to a
+    /// manager, so the backlog wording is put the way the card prompt (07b) asks the model to put it.
+    /// </summary>
+    internal static string Plain(string label) =>
+        InsightCardInput.Plain(label)
+            .Replace("make up the standing backlog - overdue now, whatever date each was originally due", "are overdue across your organisation", StringComparison.OrdinalIgnoreCase)
+            .Replace("of that standing backlog", "in the overdue backlog", StringComparison.OrdinalIgnoreCase)
+            .Replace("the standing backlog", "the overdue backlog", StringComparison.OrdinalIgnoreCase);
 }
