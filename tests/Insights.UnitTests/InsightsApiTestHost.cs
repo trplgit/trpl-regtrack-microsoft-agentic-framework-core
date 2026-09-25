@@ -176,17 +176,21 @@ internal sealed class FakeReportContentService(ReportContentResult? result) : IR
 /// </summary>
 internal sealed class FakeCooldownRepository : ICooldownRepository
 {
-    private readonly Func<string, CooldownResult> _resultForPeriod;
+    // [RENAMED 2026-09-25] Was keyed on the effective period string - the real key is now the raw
+    // dimension name (or null for a non-dimension_selection report type), per ICooldownRepository's
+    // redesign. `resultForDimension` receives exactly what CheckAsync's own dimension parameter
+    // receives, including null.
+    private readonly Func<string?, CooldownResult> _resultForDimension;
     private int _inFlight;
 
     public FakeCooldownRepository(CooldownResult result) : this(_ => result) { }
 
-    public FakeCooldownRepository(Func<string, CooldownResult> resultForPeriod) => _resultForPeriod = resultForPeriod;
+    public FakeCooldownRepository(Func<string?, CooldownResult> resultForDimension) => _resultForDimension = resultForDimension;
 
-    public List<(int CustomerId, string ReportType, string ScopeDescriptor, string Period)> Calls { get; } = [];
+    public List<(int CustomerId, string ReportType, string ScopeDescriptor, string? Dimension)> Calls { get; } = [];
 
     public async Task<CooldownResult> CheckAsync(
-        int customerId, string reportType, string scopeDescriptor, string period,
+        int customerId, string reportType, string scopeDescriptor, string? dimension,
         CancellationToken cancellationToken = default)
     {
         if (Interlocked.CompareExchange(ref _inFlight, 1, 0) != 0)
@@ -198,12 +202,12 @@ internal sealed class FakeCooldownRepository : ICooldownRepository
 
         try
         {
-            Calls.Add((customerId, reportType, scopeDescriptor, period));
+            Calls.Add((customerId, reportType, scopeDescriptor, dimension));
             // Real room for a concurrency bug to manifest - a synchronous fake (no await point)
             // would never actually overlap two "concurrent" calls even if the caller used
             // Task.WhenAll, since nothing yields control between them.
             await Task.Delay(5, cancellationToken);
-            return _resultForPeriod(period);
+            return _resultForDimension(dimension);
         }
         finally
         {

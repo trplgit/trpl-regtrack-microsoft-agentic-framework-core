@@ -305,19 +305,32 @@ public static class RunEndpoints
             request.ReportType!, dimension is null ? null : [dimension]);
 
         // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - folds
-        // RequestedDimensions into the period used for BOTH the cooldown check and the enqueue
-        // below, so each fanned-out dimension gets its OWN cooldown/run-id key even though they
-        // all share the caller's one Period value. No-op for every report type except
-        // dimension_selection.
+        // RequestedDimensions into the period used for the enqueue/run-id key below, so each
+        // fanned-out dimension gets its OWN run-id even though they all share the caller's one
+        // Period value. No-op for every report type except dimension_selection.
+        // [NO LONGER feeds the cooldown check as of 2026-09-25 - that now takes `dimension`
+        // directly, see below.]
         var effectivePeriod = ReportDimensionKey.ForCooldownAndRunId(request.Period, requestedDimensions);
 
-        // Step 3 (design doc Sec.2.4's 30-day cooldown) - keyed to (scope, reportType, period),
+        // Step 3 (design doc Sec.2.4's cooldown) - keyed to (scope, reportType, dimension)
+        // [REDESIGNED 2026-09-25, was period - see ICooldownRepository's own doc comment for why],
         // NOT to this caller, so a colleague at the same scope who generated it yesterday locks
-        // this call too.
+        // this call too. `dimension` here is the raw per-unit name (or null for a non-
+        // dimension_selection request) - effectivePeriod stays reserved for the enqueue/run-id
+        // key below, which is unaffected by this redesign.
         var cooldownResult = await cooldown.CheckAsync(
-            request.TenantId, reportType, request.Scope.ToDescriptor(), effectivePeriod, cancellationToken);
+            request.TenantId, reportType, request.Scope.ToDescriptor(), dimension, cancellationToken);
         if (!cooldownResult.IsOpen)
-            return new GeneratedReportUnit(dimension, reportType, "cooldown", NextAvailableUtc: cooldownResult.NextAvailableUtc);
+        {
+            var message = cooldownResult.DaysRemaining is { } daysRemaining
+                ? $"You already generated a report for this. There is a cooldown period and {daysRemaining} day{(daysRemaining == 1 ? "" : "s")} left."
+                : null;
+            return new GeneratedReportUnit(
+                dimension, reportType, "cooldown",
+                NextAvailableUtc: cooldownResult.NextAvailableUtc,
+                DaysRemaining: cooldownResult.DaysRemaining,
+                Message: message);
+        }
 
         // [ADDED 2026-09-25] The real missing piece flagged since 2026-09-24: request.Period was
         // free text that never reached any dimension's actual data - ReportPeriodResolver existed,
@@ -640,6 +653,18 @@ public sealed record GenerateReportRequest(
 /// <param name="RunId">Present only when Status is "queued".</param>
 /// <param name="StreamUrl">Present only when Status is "queued" - same shape as the pre-fan-out single-report response.</param>
 /// <param name="NextAvailableUtc">Present only when Status is "cooldown".</param>
+/// <param name="DaysRemaining">
+/// [ADDED 2026-09-25] Present only when Status is "cooldown" - the real whole-days-left figure
+/// (CooldownResult.DaysRemaining, rounded up), so a client doesn't have to compute it itself from
+/// NextAvailableUtc.
+/// </param>
+/// <param name="Message">
+/// [ADDED 2026-09-25] Present only when Status is "cooldown" - a ready-to-show sentence, real
+/// product-specified wording: "You already generated a report for this. There is a cooldown period
+/// and N day(s) left." NextAvailableUtc/DaysRemaining remain the structured data for a client that
+/// wants to build its own copy; this is the literal text for one that doesn't.
+/// </param>
 public sealed record GeneratedReportUnit(
     string? Dimension, string ReportType, string Status,
-    string? RunId = null, string? StreamUrl = null, DateTime? NextAvailableUtc = null);
+    string? RunId = null, string? StreamUrl = null, DateTime? NextAvailableUtc = null,
+    int? DaysRemaining = null, string? Message = null);

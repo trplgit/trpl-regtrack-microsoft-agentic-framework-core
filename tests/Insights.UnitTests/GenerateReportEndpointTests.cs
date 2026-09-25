@@ -398,19 +398,22 @@ public sealed class GenerateReportEndpointTests
 
         Assert.Equal(2, cooldown.Calls.Count);
         Assert.Equal(2, enqueuer.Calls.Count);
-        // Same caller-supplied period ("FY2025-26") for both - but the effective period actually
-        // used for the cooldown key and the enqueue must differ, which is the whole fix.
-        Assert.NotEqual(cooldown.Calls[0].Period, cooldown.Calls[1].Period);
+        // Same caller-supplied period ("FY2025-26") for both - the enqueuer's effective period still
+        // differs per dimension (unchanged, real fix from 2026-09-09). The cooldown check itself
+        // [REDESIGNED 2026-09-25] no longer looks at period at all - it is keyed on the raw
+        // dimension name directly, which is what must differ here instead.
         Assert.NotEqual(enqueuer.Calls[0].Period, enqueuer.Calls[1].Period);
-        Assert.Contains("nature", cooldown.Calls[0].Period, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("act", cooldown.Calls[1].Period, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Nature", cooldown.Calls[0].Dimension);
+        Assert.Equal("Act", cooldown.Calls[1].Dimension);
     }
 
     /// <summary>
-    /// API_CONTRACTS.md §3 step 3 / design doc Sec.2.4's 30-day cooldown.
+    /// API_CONTRACTS.md §3 step 3 / design doc Sec.2.4's cooldown.
     /// [ADDED 2026-09-08] The check itself was a [KNOWN LIMITATION] until build order item 14
     /// (GeneratedReport persistence) shipped; these are its first tests. Keyed to
-    /// (scope, reportType, period), NOT to the caller.
+    /// (scope, reportType, dimension) [REDESIGNED 2026-09-25, was period], NOT to the caller.
+    /// Request() below is a non-dimension_selection type (compliance_health) - dimension is null,
+    /// there being only one unit for that report type.
     /// </summary>
     [Fact]
     public async Task Generate_OpenCooldown_ChecksTheExactKeyAndThenEnqueues()
@@ -429,7 +432,7 @@ public sealed class GenerateReportEndpointTests
         Assert.Equal(Tenant, call.CustomerId);
         Assert.Equal("compliance_health", call.ReportType);
         Assert.Equal("tenant", call.ScopeDescriptor);
-        Assert.Equal("FY2025-26", call.Period);
+        Assert.Null(call.Dimension);
         Assert.Single(enqueuer.Calls);
     }
 
@@ -476,9 +479,9 @@ public sealed class GenerateReportEndpointTests
         var directory = new FakeTenantDirectory(Eligible(Tenant));
         var scope = new FakeScopeRepository(scopePairCount: 3);
         var nextAvailable = new DateTime(2026, 10, 8, 0, 0, 0, DateTimeKind.Utc);
-        // "Act"'s effective period carries "::dim=act" (ReportDimensionKey) - only that one is closed.
-        var cooldown = new FakeCooldownRepository(period =>
-            period.Contains("act", StringComparison.OrdinalIgnoreCase)
+        // [REDESIGNED 2026-09-25] The real dimension name is passed directly now - only "Act" is closed.
+        var cooldown = new FakeCooldownRepository(dimension =>
+            string.Equals(dimension, "Act", StringComparison.OrdinalIgnoreCase)
                 ? new CooldownResult(false, nextAvailable)
                 : new CooldownResult(true, null));
         var enqueuer = new FakeRunEnqueuer("insights-1490-fanout");

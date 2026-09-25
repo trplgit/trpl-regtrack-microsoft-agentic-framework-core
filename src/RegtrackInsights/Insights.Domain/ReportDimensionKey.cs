@@ -2,15 +2,24 @@ namespace Insights.Domain;
 
 /// <summary>
 /// [TEMP WORKAROUND 2026-09-09, no schema change] The real fix for the dimension_selection
-/// cooldown bug is a new GeneratedReport.RequestedDimensions column (see
+/// per-dimension identity problem is a new GeneratedReport.RequestedDimensions column (see
 /// sql/28_generated_report_dimension_key.sql, not yet deployed - SQL changes go through Vinay).
 /// Until that lands, this is the zero-schema-change interim fix: fold the requested dimension(s)
-/// into the PERIOD string itself before it is used for the cooldown check, the run id hash, and
-/// persistence - Period is the one component of the (scope, reportType, period) key that is
-/// never parsed or validated by anything downstream (unlike ScopeDescriptor, which
-/// InsightsScopeRequest.Parse and ReportContentService.CoversReportScopeAsync both parse
-/// strictly, or ReportType, which the orchestrator branches control-flow on) - see the reference
-/// architecture review's rejection of overloading ReportType for the same reasoning.
+/// into the PERIOD string itself before it is used for the run id hash and persistence - Period
+/// is the one component of the (scope, reportType, period) key that is never parsed or validated
+/// by anything downstream (unlike ScopeDescriptor, which InsightsScopeRequest.Parse and
+/// ReportContentService.CoversReportScopeAsync both parse strictly, or ReportType, which the
+/// orchestrator branches control-flow on) - see the reference architecture review's rejection of
+/// overloading ReportType for the same reasoning.
+///
+/// [REDESIGNED 2026-09-25] ICooldownRepository.CheckAsync no longer takes a period at all - the
+/// cooldown key is now (scope, reportType, dimension) directly, with dimension passed as its own
+/// real parameter rather than being read back out of this suffix. This method's output is STILL
+/// the source EfCooldownRepository parses the dimension out of (via the same "::dim=" suffix,
+/// matched by EndsWith), since the real dedicated column is still deferred - so this workaround
+/// remains load-bearing for cooldown too, just indirectly: RunEndpoints.cs passes the raw
+/// dimension name to CheckAsync, and EfCooldownRepository matches it against whatever this method
+/// already wrote into Period when the row was persisted.
 ///
 /// [KNOWN TRADEOFF] The value stored in GeneratedReport.Period for a dimension_selection run is
 /// no longer exactly the caller-supplied period - it carries a suffix. Nothing today reads that
