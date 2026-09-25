@@ -25,6 +25,13 @@ public sealed class DimensionRepositoryTests
 
     private static IDimensionRepository Repository => new SqlDimensionRepository(ConnectionString);
 
+    // [ADDED 2026-09-25] Location/Entity/Risk/Nature/Departments/Users/Internal (and, already,
+    // Act/Event) now require a real caller-supplied window - a fixed 90-day lookback is enough to
+    // prove the wrapper still returns a well-formed, reconciled result; these tests assert
+    // shape/reconciliation, not specific windowed figures.
+    private static readonly DateTime WindowEnd = DateTime.UtcNow;
+    private static readonly DateTime WindowStart = WindowEnd.AddDays(-90);
+
     public static IEnumerable<object[]> ValidatedTenants =>
     [
         [35, 5], [36, 23], [38, 29], [11885, 1355], [12006, 1363],
@@ -61,7 +68,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetLocationAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetLocationAsync(userId, customerId);
+        var result = await Repository.GetLocationAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Location");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -70,7 +77,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetEntityAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetEntityAsync(userId, customerId);
+        var result = await Repository.GetEntityAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Entity");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -79,7 +86,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetRiskAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetRiskAsync(userId, customerId);
+        var result = await Repository.GetRiskAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Risk");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -88,7 +95,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetNatureAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetNatureAsync(userId, customerId);
+        var result = await Repository.GetNatureAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Nature");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -97,7 +104,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetDepartmentsAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetDepartmentsAsync(userId, customerId);
+        var result = await Repository.GetDepartmentsAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Departments");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -106,7 +113,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetActAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetActAsync(userId, customerId);
+        var result = await Repository.GetActAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Act");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -115,7 +122,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetUsersAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetUsersAsync(userId, customerId);
+        var result = await Repository.GetUsersAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Users");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -124,7 +131,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetInternalAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetInternalAsync(userId, customerId);
+        var result = await Repository.GetInternalAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Internal");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -133,7 +140,7 @@ public sealed class DimensionRepositoryTests
     [MemberData(nameof(ValidatedTenants))]
     public async Task GetEventAsync_ReturnsWellFormedResult(int userId, int customerId)
     {
-        var result = await Repository.GetEventAsync(userId, customerId);
+        var result = await Repository.GetEventAsync(userId, customerId, WindowStart, WindowEnd);
         AssertWellFormed(result, "Event");
         Assert.True(result.ControlTotals.Reconciled);
     }
@@ -173,7 +180,7 @@ public sealed class DimensionRepositoryTests
     [Fact]
     public async Task GetUsersAsync_DoesNotConflateScopedAndPerUserTotals()
     {
-        var result = await Repository.GetUsersAsync(userId: 38, customerId: 29);
+        var result = await Repository.GetUsersAsync(userId: 38, customerId: 29, windowStart: WindowStart, windowEnd: WindowEnd);
 
         Assert.True(result.ControlTotals.ScopedInstances >= 0);
         Assert.True(result.ControlTotals.SumOfPerUserInstances >= 0);
@@ -187,7 +194,7 @@ public sealed class DimensionRepositoryTests
     [Fact]
     public async Task GetInternalAsync_HandlesInternalAbsentEntirelyWithoutThrowing()
     {
-        var result = await Repository.GetInternalAsync(userId: 38, customerId: 29);
+        var result = await Repository.GetInternalAsync(userId: 38, customerId: 29, windowStart: WindowStart, windowEnd: WindowEnd);
 
         Assert.True(result.ControlTotals.ScopedInstances >= 0);
     }

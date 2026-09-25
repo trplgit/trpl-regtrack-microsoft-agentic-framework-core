@@ -61,8 +61,10 @@ public sealed class MindaUsersInternalReportTest(ITestOutputHelper output)
         var apiKey = RequireConfig("Llm:Maf:ApiKey");
         var promptsDir = Path.Combine(AppContext.BaseDirectory, "prompts");
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var r = await dimensionRepository.GetUsersAsync(UserId, TenantId);
+        var r = await dimensionRepository.GetUsersAsync(UserId, TenantId, windowStart, windowEnd);
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(r.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(r.ControlTotals);
         output.WriteLine($"Fetched {r.Rows.Count} rows, {r.Assertions.Count} assertions.");
@@ -131,8 +133,10 @@ public sealed class MindaUsersInternalReportTest(ITestOutputHelper output)
         var labRunId = $"lab-minda-internal-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
         var toolLog = new SqlToolInvocationRecorder(writeConnectionString);
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var r = await dimensionRepository.GetInternalAsync(UserId, TenantId);
+        var r = await dimensionRepository.GetInternalAsync(UserId, TenantId, windowStart, windowEnd);
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(r.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(r.ControlTotals);
         var dataQualityJson = System.Text.Json.JsonSerializer.Serialize(r.DataQuality);
@@ -216,8 +220,10 @@ public sealed class MindaUsersInternalReportTest(ITestOutputHelper output)
         var labRunId = $"lab-minda-internal-notool-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
         var toolLog = new SqlToolInvocationRecorder(writeConnectionString);
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var r = await dimensionRepository.GetInternalAsync(UserId, TenantId);
+        var r = await dimensionRepository.GetInternalAsync(UserId, TenantId, windowStart, windowEnd);
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(r.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(r.ControlTotals);
         var dataQualityJson = System.Text.Json.JsonSerializer.Serialize(r.DataQuality);
@@ -294,8 +300,10 @@ public sealed class MindaUsersInternalReportTest(ITestOutputHelper output)
         // replica, but Key Vault/encryption infra must go through the writable UAT DB.
         var encryptor = new Insights.Persistence.AdalKeyVaultReportEncryptor(writeConnectionString);
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var r = await dimensionRepository.GetInternalAsync(UserId, TenantId);
+        var r = await dimensionRepository.GetInternalAsync(UserId, TenantId, windowStart, windowEnd);
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(r.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(r.ControlTotals);
         var dataQualityJson = System.Text.Json.JsonSerializer.Serialize(r.DataQuality);

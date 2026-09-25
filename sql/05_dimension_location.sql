@@ -31,6 +31,16 @@
   at up to 119,797 instances on one production tenant.
 
   IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
+
+  -- [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default --
+  @WindowStart/@WindowEnd are now REQUIRED. Location's own population carries no
+  per-row date - an instance persists across years while its real due dates live
+  on ComplianceScheduleOn, one row per recurring occurrence. Scoping answers
+  "which of this tenant's obligations had a scheduled occurrence in the selected
+  period", via ComplianceScheduleOn - see the note at #inst's window-gate step
+  below for the full mechanism, matching sql/23 TimelinessFY's and sql/11 Act's
+  proven pattern. This is a period picker window (30/60/90 days or a quarter),
+  never a fiscal year - FY-only scoping stays specific to TimelinessFY.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -42,6 +52,8 @@ GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_Location
     @UserID      INT,
     @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
     @AsOf        DATETIME = NULL
 AS
 BEGIN
@@ -72,6 +84,39 @@ BEGIN
     JOIN Compliance c ON c.ID = s.ComplianceID;
 
     CREATE CLUSTERED INDEX IX_inst ON #inst (BranchID, ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Location's own population (ComplianceInstance via tvfInsightsScopedInstances) carries
+        no per-row date - an instance persists across years while its real due dates
+        live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY and sql/11 Act: #inst is already materialised and indexed above,
+        so find which of those instances had >=1 scheduled occurrence in the window,
+        then narrow #inst itself down to just those. Every downstream step (overdue,
+        ownership, per-branch rollup, reconciliation) already reads from #inst, so
+        they inherit the window for free - nothing else in this file changes.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51032, N'LOCATION DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51032, N'LOCATION DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd;
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
 
     /*===================================================================
       2. OVERDUE (dictionary-driven, affirmative form)
@@ -773,6 +818,7 @@ SELECT
         exist ONLY here - attached to no assertion and no finding. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
                    WHEN 'state_peer_norm_median_vs_mean'       THEN 'PeerStateOverduePct'
                    WHEN 'no_schedules_missing_frequency'       THEN 'NoSchedules_NoFrequency'
                    WHEN 'no_schedules_despite_frequency'       THEN 'NoSchedules_HasFrequency'
@@ -784,6 +830,12 @@ SELECT
                    WHEN 'orphaned_entities'                    THEN 'RootKind'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear in any row here even if it exists cumulatively.') AS Detail
+        UNION ALL
         SELECT 'state_peer_norm_median_vs_mean' AS Issue,
                N'PeerStateOverduePct uses the MEDIAN of the tenant''s own branches in that state. '
              + N'BA sign-off on median vs mean for this specific comparison is still pending. '
@@ -844,7 +896,7 @@ SELECT
         FROM #rows WHERE NodeType = 'intermediate' HAVING SUM(Instances) > 0
     ) q;
 
-    DROP TABLE #ownership; DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #owned; DROP TABLE #people;
+    DROP TABLE #ownership; DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #owned; DROP TABLE #people;
     DROP TABLE #closures; DROP TABLE #rows; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

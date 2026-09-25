@@ -146,11 +146,13 @@ public static class WorkerRegistration
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
         // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
         // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
+        services.AddSingleton<ITenantReportLock, SqlTenantReportLock>();
         services.AddTransient(sp => new PersistActivity(
             sp.GetRequiredService<IReportEncryptor>(),
             sp.GetRequiredService<IReportBlobWriter>(),
             sp.GetRequiredService<IServiceScopeFactory>(),
             sp.GetRequiredService<ILogger<PersistActivity>>(),
+            sp.GetRequiredService<ITenantReportLock>(),
             configuration["Reports:LocalFallbackDirectory"]));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
@@ -323,10 +325,16 @@ public static class WorkerRegistration
         var cooldownDays = configuration.GetValue<int?>("Reports:CooldownDays")
             ?? throw new InvalidOperationException("Reports:CooldownDays is not configured.");
 
+        // [ADDED 2026-09-25] Reports:CooldownEnabled - the testing/demo toggle. Defaults true
+        // (real prod behaviour) if unset, unlike CooldownDays above - this is a new optional knob,
+        // not a locked spec value with no safe default. Flip to false in a local/UAT appsettings
+        // file to regenerate the same dimension repeatedly while testing; true for a demo or prod.
+        var cooldownEnabled = configuration.GetValue("Reports:CooldownEnabled", true);
+
         // SCOPED - same captive-dependency reasoning as IReportContentService: it holds a scoped
         // InsightsReportsDbContext, so it cannot be a singleton.
         services.AddScoped<ICooldownRepository>(sp =>
-            new EfCooldownRepository(sp.GetRequiredService<InsightsReportsDbContext>(), cooldownDays));
+            new EfCooldownRepository(sp.GetRequiredService<InsightsReportsDbContext>(), cooldownDays, cooldownEnabled));
 
         // Fan-out reqId grouping (sql/30_report_request.sql) - same captive-dependency reasoning
         // as ICooldownRepository directly above: holds a scoped InsightsReportsDbContext.

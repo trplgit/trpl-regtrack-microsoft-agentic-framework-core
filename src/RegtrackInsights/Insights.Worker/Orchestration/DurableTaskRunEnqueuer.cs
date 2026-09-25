@@ -17,7 +17,8 @@ public sealed class DurableTaskRunEnqueuer(TaskHubClient client, bool runVisionQ
     public async Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null)
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null,
+        DateTime? windowStart = null, DateTime? windowEnd = null)
     {
         /*  The instance id is DERIVED, not left to DTFx - same reasoning as
             InsightsRunOnceWorker: it IS the one-active-run-per-key lock, and it carries the
@@ -35,7 +36,9 @@ public sealed class DurableTaskRunEnqueuer(TaskHubClient client, bool runVisionQ
             not silently worked around. Safe today only because every manual test so far used a
             distinct Period per dimension subset.                                               */
         var runId = InsightsRunId.For(tenantId, scope.ToDescriptor(), reportType, period);
-        var input = new InsightsReportOrchestrationInput(tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId, runVisionQa);
+        var input = new InsightsReportOrchestrationInput(
+            tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId, runVisionQa,
+            windowStart, windowEnd);
 
         /*  [BUG FOUND LIVE, 2026-09-11] The "one-active-run-per-key lock" this class and
             InsightsRunId's own doc comment both describe ("a second enqueue for the same key

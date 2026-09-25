@@ -17,6 +17,27 @@ public class PersistActivityTests
             .Options);
 
     /// <summary>
+    /// [ADDED 2026-09-24] EF Core's InMemory provider does not support transactions at all - see
+    /// ITenantReportLock's own doc comment for why the real sp_getapplock implementation needs one.
+    /// These tests care about encrypt/blob/SQL-row behaviour, not the distributed-lock mechanism
+    /// itself (which cannot be exercised against InMemory - it is SQL-Server-specific T-SQL), so
+    /// they run the caller's action directly with no lock at all, matching how the real lock behaves
+    /// from the caller's point of view when nothing else is contending for it.
+    /// </summary>
+    private sealed class NoOpTenantReportLock : ITenantReportLock
+    {
+        public int CallCount { get; private set; }
+        public int? LastTenantId { get; private set; }
+
+        public Task<T> ExecuteWithLockAsync<T>(DbContext db, int tenantId, Func<Task<T>> action)
+        {
+            CallCount++;
+            LastTenantId = tenantId;
+            return action();
+        }
+    }
+
+    /// <summary>
     /// PersistActivity now takes IServiceScopeFactory rather than InsightsReportsDbContext
     /// directly (fixes the "Cannot access a disposed context instance" bug where ActivityCreator's
     /// own scope disposed the context before RunAsync could use it). The fake factory hands back
@@ -66,7 +87,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
 
         var result = await activity.RunAsync(new PersistInput(
             "<html></html>", TenantId: 29, ReportType: "compliance_health", Period: "FY2025-26",
@@ -114,7 +135,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
 
         await activity.RunAsync(new PersistInput(
             "<html>real tenant data</html>", 29, "compliance_health", "FY2025-26", "tenant", 38));
@@ -141,7 +162,7 @@ public class PersistActivityTests
             var blobWriter = new Mock<IReportBlobWriter>();
             await using var db = NewInMemoryDb();
             var activity = new PersistActivity(
-                encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, localFallbackDirectory: tempDir);
+                encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock(), localFallbackDirectory: tempDir);
 
             var result = await activity.RunAsync(new PersistInput(
                 "<html>real tenant data</html>", 1008, "fixed_holistic", "90day", "tenant", 12116));
@@ -194,7 +215,7 @@ public class PersistActivityTests
 
         await using var db = NewInMemoryDb();
         var logger = new CapturingLogger();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), logger);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), logger, new NoOpTenantReportLock());
 
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => activity.RunAsync(new PersistInput(
             "<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38)));
@@ -239,12 +260,12 @@ public class PersistActivityTests
         var storeName = Guid.NewGuid().ToString();
         var input = new PersistInput("<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38);
 
-        var activity1 = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance);
+        var activity1 = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
         var first = await activity1.RunAsync(input);
 
         // A different PersistActivity instance, own fresh scope factory pointed at the SAME store -
         // simulates the redelivered attempt landing on a different pod, not just a different call.
-        var activity2 = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance);
+        var activity2 = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
         var second = await activity2.RunAsync(input);
 
         Assert.Equal(first.ReportId, second.ReportId);
@@ -270,11 +291,44 @@ public class PersistActivityTests
 
         var storeName = Guid.NewGuid().ToString();
 
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
         var first = await activity.RunAsync(new PersistInput("<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38));
         var second = await activity.RunAsync(new PersistInput("<html></html>", 1285, "compliance_health", "FY2025-26", "tenant", 38));
 
         Assert.NotEqual(first.ReportId, second.ReportId);
         encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-24] The real fix for the 2026-09-18/2026-09-24 concurrent-write bug: the
+    /// insert must happen INSIDE the tenant's write lock, scoped to the input's own tenantId - not
+    /// skipped, and not locked under some other tenant's key (which would let two different
+    /// tenants' writes block each other for no reason, or worse, let same-tenant writes race past
+    /// each other because they locked under the wrong key).
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WritesTheRowInsideTheTenantsOwnLock()
+    {
+        var envelope = Envelope();
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
+
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports-temp", "1285/dimension_selection/2026/09/abc123.html.enc"));
+
+        await using var db = NewInMemoryDb();
+        var tenantLock = new NoOpTenantReportLock();
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, tenantLock);
+
+        await activity.RunAsync(new PersistInput(
+            "<html></html>", TenantId: 1285, ReportType: "dimension_selection", Period: "FY2025-26",
+            ScopeDescriptor: "tenant:Act", UserId: 11416));
+
+        Assert.Equal(1, tenantLock.CallCount);
+        Assert.Equal(1285, tenantLock.LastTenantId);
+        // The row must exist - proves the Add+SaveChanges genuinely ran INSIDE the fake's
+        // action() callback, not skipped or deferred outside the lock.
+        Assert.Single(db.GeneratedReports);
     }
 }

@@ -158,21 +158,30 @@ public static class PaidReportAgentsRegistration
 
             return new Dictionary<string, IFreehandDimensionCompositionAgent>
             {
-                ["Act"] = Build("Act", "02_composition_freehand_act.md"),
+                // [ADDED 2026-09-25] v2 - real "window" data_quality entry documented (Act's own
+                // period-scoping change). See that file's own header for what changed and why.
+                ["Act"] = Build("Act", "02_composition_freehand_act_v2.md"),
                 ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging.md"),
-                ["Departments"] = Build("Departments", "02_composition_freehand_departments.md"),
+                // [ADDED 2026-09-25] v2 - Departments got the same @WindowStart/@WindowEnd hard
+                // population gate as Act/Event this session; its own "window" data_quality entry
+                // needed the same real-detail-text fix, not the generic-filler default.
+                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v2.md"),
                 ["Licence"] = Build("Licence", "02_composition_freehand_licence.md"),
-                ["Location"] = Build("Location", "02_composition_freehand_location.md"),
+                // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
+                ["Location"] = Build("Location", "02_composition_freehand_location_v2.md"),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // pattern as the five above, not a new mechanism.
-                ["Risk"] = Build("Risk", "02_composition_freehand_risk.md"),
-                ["Nature"] = Build("Nature", "02_composition_freehand_nature.md"),
-                ["Internal"] = Build("Internal", "02_composition_freehand_internal.md"),
-                ["Event"] = Build("Event", "02_composition_freehand_event.md"),
+                // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same window data_quality fix.
+                ["Risk"] = Build("Risk", "02_composition_freehand_risk_v2.md"),
+                ["Nature"] = Build("Nature", "02_composition_freehand_nature_v2.md"),
+                ["Internal"] = Build("Internal", "02_composition_freehand_internal_v2.md"),
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
+                ["Event"] = Build("Event", "02_composition_freehand_event_v2.md"),
                 // [ADDED 2026-09-23] Retires Sambram's fixed single-section Users template - see
                 // FreehandDimensions.cs's own doc comment for the real lab-tested evidence behind
                 // this decision.
-                ["Users"] = Build("Users", "02_composition_freehand_users.md"),
+                // [ADDED 2026-09-25] v2 - same window data_quality fix as the others above.
+                ["Users"] = Build("Users", "02_composition_freehand_users_v2.md"),
             };
         });
 
@@ -275,9 +284,11 @@ public static class PaidReportAgentsRegistration
                 // [REPLACED 2026-09-14] Location joined FreehandDimensions.Names the same day as
                 // v1's scope was confirmed - same reasoning as the Departments/BacklogAging/Act/
                 // Licence entries below: real LLM composition ahead of render, sol deployment.
+                // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix, same as Act's
+                // own render prompt - see that file's own header for what changed and why.
                 ["dimension_selection:Location"] = Build(
                     "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_location.md", freehandModel),
+                    "05_report_html_dimension_selection_location_v2.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED 2026-09-09, REPLACED AGAIN 2026-09-23] Dimension-
                 // specific override for a single-"Users" request - RenderHtmlActivity's own doc
                 // comment explains the "{ReportType}:{DimensionName}" key-preference rule this
@@ -290,9 +301,10 @@ public static class PaidReportAgentsRegistration
                 // real fields still have no backing (imprisonment-overdue combined lens, per-user
                 // risk mix, dept-head fan-out, an "Approver" role) - see the prompt file's own "Real
                 // vs. NOT AVAILABLE" table, unchanged by this move.
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Users"] = Build(
                     "DimensionSelectionUserReportHtmlAgent", "Renders a freehand-composed Users insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_user.md", freehandModel),
+                    "05_report_html_dimension_selection_user_v2.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Same reasoning as the Users entry
                 // immediately above. The Concentration tab and closure-status strip the earlier
                 // Angular-mirroring version carried (both honest not-available blocks, no real
@@ -304,32 +316,38 @@ public static class PaidReportAgentsRegistration
                 // of render, so the render agent gets a genuinely agent-decided structure/hero to
                 // build from rather than a fixed document shape. Deliberately on the sol deployment
                 // (freehandModel), not the shared `model` every other agent in this file uses.
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v2.md", freehandModel),
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
                     "05_report_html_dimension_selection_backlogaging.md", freehandModel),
+                // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix (Act's own
+                // period-scoping change) - see that file's own header for what changed and why.
                 ["dimension_selection:Act"] = Build(
                     "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_act.md", freehandModel),
+                    "05_report_html_dimension_selection_act_v2.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
                     "05_report_html_dimension_selection_licence.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
+                // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
+                // fix as Location above.
                 ["dimension_selection:Risk"] = Build(
                     "DimensionSelectionRiskReportHtmlAgent", "Renders a freehand-composed Risk insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_risk.md", freehandModel),
+                    "05_report_html_dimension_selection_risk_v2.md", freehandModel),
                 ["dimension_selection:Nature"] = Build(
                     "DimensionSelectionNatureReportHtmlAgent", "Renders a freehand-composed Nature-of-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_nature.md", freehandModel),
+                    "05_report_html_dimension_selection_nature_v2.md", freehandModel),
                 ["dimension_selection:Internal"] = Build(
                     "DimensionSelectionInternalReportHtmlAgent", "Renders a freehand-composed Statutory-vs-Internal insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_internal.md", freehandModel),
+                    "05_report_html_dimension_selection_internal_v2.md", freehandModel),
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_event.md", freehandModel),
+                    "05_report_html_dimension_selection_event_v2.md", freehandModel),
             };
         });
 

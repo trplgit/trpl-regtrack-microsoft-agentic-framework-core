@@ -32,9 +32,11 @@ public sealed class NarrativeReflectionAgentManualRunTests(ITestOutputHelper out
         var promptsDir = Path.Combine(AppContext.BaseDirectory, "prompts");
         const int userId = 36, customerId = 23;
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(ConnectionString);
-        var location = await dimensionRepository.GetLocationAsync(userId, customerId);
-        var risk = await dimensionRepository.GetRiskAsync(userId, customerId);
+        var location = await dimensionRepository.GetLocationAsync(userId, customerId, windowStart, windowEnd);
+        var risk = await dimensionRepository.GetRiskAsync(userId, customerId, windowStart, windowEnd);
         var assertions = location.Assertions.Concat(risk.Assertions).ToList();
         var findings = location.Findings.Concat(risk.Findings).ToList();
 

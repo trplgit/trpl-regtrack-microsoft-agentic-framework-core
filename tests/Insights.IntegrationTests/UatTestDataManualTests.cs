@@ -333,7 +333,9 @@ public sealed class UatTestDataManualTests(ITestOutputHelper output)
         var repository = provider.GetRequiredService<Insights.Data.IDimensionRepository>();
         try
         {
-            var result = await repository.GetLocationAsync(38, 29, cancellationToken: CancellationToken.None);
+            var windowEnd = DateTime.UtcNow;
+            var windowStart = windowEnd.AddDays(-90);
+            var result = await repository.GetLocationAsync(38, 29, windowStart, windowEnd, cancellationToken: CancellationToken.None);
             output.WriteLine($"Succeeded via real DI repository - {result.Rows.Count} rows, reconciled control totals.");
         }
         catch (Exception ex)
