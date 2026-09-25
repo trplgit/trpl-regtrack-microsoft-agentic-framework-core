@@ -97,29 +97,29 @@ public sealed class EntityHolisticFreehandNarrateLabTest(ITestOutputHelper outpu
         output.WriteLine("Fetching all real dimensions for tenant 1008 (Minda), same set FetchDimensionsActivity uses:");
         await TryFetchAsync("Location", async () =>
         {
-            var result = await dimensionRepository.GetLocationAsync(UserId, TenantId);
+            var result = await dimensionRepository.GetLocationAsync(UserId, TenantId, windowStart, windowEnd);
             locationRows = result.Rows.ToArray();
             return result;
         });
-        await TryFetchAsync("Entity", () => dimensionRepository.GetEntityAsync(UserId, TenantId));
-        await TryFetchAsync("Risk", () => dimensionRepository.GetRiskAsync(UserId, TenantId));
-        await TryFetchAsync("Nature", () => dimensionRepository.GetNatureAsync(UserId, TenantId));
-        await TryFetchAsync("Departments", () => dimensionRepository.GetDepartmentsAsync(UserId, TenantId));
-        await TryFetchAsync("Act", () => dimensionRepository.GetActAsync(UserId, TenantId));
+        await TryFetchAsync("Entity", () => dimensionRepository.GetEntityAsync(UserId, TenantId, windowStart, windowEnd));
+        await TryFetchAsync("Risk", () => dimensionRepository.GetRiskAsync(UserId, TenantId, windowStart, windowEnd));
+        await TryFetchAsync("Nature", () => dimensionRepository.GetNatureAsync(UserId, TenantId, windowStart, windowEnd));
+        await TryFetchAsync("Departments", () => dimensionRepository.GetDepartmentsAsync(UserId, TenantId, windowStart, windowEnd));
+        await TryFetchAsync("Act", () => dimensionRepository.GetActAsync(UserId, TenantId, windowStart, windowEnd));
         // Same UsersHeadcountCalculator patch FetchDimensionsActivity applies - see its own doc
         // comment (and this session's "0:0" finding) for why: raw SQL control totals never compute
         // PerformerUserCount/ReviewerUserCount, only this C# post-step does.
         await TryFetchAsync("Users", async () =>
         {
-            var result = await dimensionRepository.GetUsersAsync(UserId, TenantId);
+            var result = await dimensionRepository.GetUsersAsync(UserId, TenantId, windowStart, windowEnd);
             var (performerUserCount, reviewerUserCount) = UsersHeadcountCalculator.Compute(result.Rows);
             return new DimensionResult<UsersControlTotals, UsersRow>(
                 result.Dimension,
                 result.ControlTotals with { PerformerUserCount = performerUserCount, ReviewerUserCount = reviewerUserCount },
                 result.Rows, result.Detectors, result.Assertions, result.Findings, result.DataQuality);
         });
-        await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(UserId, TenantId));
-        await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(UserId, TenantId));
+        await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(UserId, TenantId, windowStart, windowEnd));
+        await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(UserId, TenantId, windowStart, windowEnd));
         await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(UserId, TenantId));
         await TryFetchAsync("BacklogAging", async () =>
         {

@@ -41,6 +41,20 @@
   IsDeleted = 0) still holding live assignments is the continuity risk this
   dimension exists to surface. Keep them and FLAG them - never filter to
   IsActive = 1.
+
+  -- [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default --
+  @WindowStart/@WindowEnd are now REQUIRED. Users' own population carries no
+  per-row date - an instance persists across years while its real due dates live
+  on ComplianceScheduleOn, one row per recurring occurrence. Scoping answers
+  "which of this tenant's obligations had a scheduled occurrence in the selected
+  period", via ComplianceScheduleOn - see the note at #inst's window-gate step
+  below for the full mechanism, matching sql/23 TimelinessFY's and sql/11 Act's
+  proven pattern. This is a period picker window (30/60/90 days or a quarter),
+  never a fiscal year - FY-only scoping stays specific to TimelinessFY. The gate
+  narrows #inst - the SINGLE base population #asg (performer AND reviewer
+  assignments alike) is built from - so both roles inherit the window identically;
+  there is only one instance population here, not two, despite performer and
+  reviewer being different ROLES on the same #inst rows.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -52,6 +66,8 @@ GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_Users
     @UserID      INT,
     @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
     @AsOf        DATETIME = NULL
 AS
 BEGIN
@@ -71,6 +87,41 @@ BEGIN
     FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s;
 
     CREATE CLUSTERED INDEX IX_inst ON #inst (ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Users' own population (ComplianceInstance via tvfInsightsScopedInstances) carries
+        no per-row date - an instance persists across years while its real due dates
+        live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY and sql/11 Act: #inst is already materialised and indexed above,
+        so find which of those instances had >=1 scheduled occurrence in the window,
+        then narrow #inst itself down to just those. #asg (built next, section 2) joins
+        #inst for BOTH performer and reviewer roles, so both inherit the window
+        identically - there is only one instance population in this dimension, not two.
+        Every downstream step (quality, timing, per-user rollup, reconciliation) already
+        reads from #inst/#asg, so they inherit the window for free too.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51104, N'USERS DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51104, N'USERS DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd;
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
 
     IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
     SELECT DISTINCT o.ComplianceInstanceID
@@ -561,6 +612,7 @@ BEGIN
         added here so they follow the same binding convention. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
                    WHEN 'flow_metric_drift'                    THEN 'OverduePct'
                    WHEN 'engagement_is_not_quality'            THEN 'LoginBand'
                    WHEN 'users_without_quality_reading'        THEN 'OnTimePct'
@@ -572,6 +624,13 @@ BEGIN
                    WHEN 'undocumented_role_id'                 THEN 'OtherRoleInstances'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear against any user here even if it exists '
+                    + N'cumulatively.') AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL
@@ -633,7 +692,7 @@ BEGIN
         WHERE ids.List IS NOT NULL
     ) q;
 
-    DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #asg; DROP TABLE #quality;
+    DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #asg; DROP TABLE #quality;
     DROP TABLE #timing; DROP TABLE #medtiming;
     DROP TABLE #login; DROP TABLE #rows; DROP TABLE #detector;
     DROP TABLE #assert; DROP TABLE #find;

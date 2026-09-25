@@ -33,36 +33,89 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         negligible" estimate; treat the estimate as the thing that is wrong.                  */
     private const int DimensionCommandTimeoutSeconds = 300;
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - the new
+        window-guard code (51032) lands exactly on LocationErrorBase+2, which the convenience
+        overload reserves for dictionary-gap. Location has no real dictionary-gap code of its
+        own - EXEC usp_Insights_AssertStatusCoverage covers that path, same as every other
+        dimension - so dictionaryGapCodes is empty and the window code joins reconciliationCodes,
+        same treatment already given to Act/Event.                                              */
     public Task<DimensionResult<LocationControlTotals, LocationRow>> GetLocationAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<LocationControlTotals, LocationRow>(
-            "Location", "dbo.usp_Insights_Dimension_Location", LocationErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Location", "dbo.usp_Insights_Dimension_Location",
+            scopeDeniedCode: LocationErrorBase,
+            reconciliationCodes: [LocationErrorBase + 1, LocationErrorBase + 2],
+            dictionaryGapCodes: [],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - the new
+        window-guard code (51052) lands exactly on EntityErrorBase+2, which the convenience
+        overload reserves for dictionary-gap. Entity has no real dictionary-gap code of its own,
+        so dictionaryGapCodes is empty and the window code joins reconciliationCodes, same
+        treatment already given to Act/Event.                                                   */
     public Task<DimensionResult<EntityControlTotals, EntityRow>> GetEntityAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<EntityControlTotals, EntityRow>(
-            "Entity", "dbo.usp_Insights_Dimension_Entity", EntityErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf },
+            "Entity", "dbo.usp_Insights_Dimension_Entity",
+            scopeDeniedCode: EntityErrorBase,
+            reconciliationCodes: [EntityErrorBase + 1, EntityErrorBase + 2],
+            dictionaryGapCodes: [],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
             ReadEntityControlTotalsAsync, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload. Two problems,
+        found together: (1) the new window-guard code (51062) lands exactly on RiskErrorBase+2,
+        which the convenience overload reserves for dictionary-gap; (2) Risk's TWO real
+        dictionary-gap codes (51065, 51066 - "no RiskType mapped" / "no Critical mapped") were
+        NEVER actually reachable through the convenience overload at all, since it only ever
+        checks errorBase+2 (51062) for that bucket - a pre-existing miscategorization, same class
+        as Act's own 51092 bug, fixed here rather than perpetuated now that the file is open.    */
     public Task<DimensionResult<RiskControlTotals, RiskRow>> GetRiskAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<RiskControlTotals, RiskRow>(
-            "Risk", "dbo.usp_Insights_Dimension_Risk", RiskErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Risk", "dbo.usp_Insights_Dimension_Risk",
+            scopeDeniedCode: RiskErrorBase,
+            reconciliationCodes: [RiskErrorBase + 1, RiskErrorBase + 2],
+            dictionaryGapCodes: [RiskErrorBase + 5, RiskErrorBase + 6],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload. Nature has
+        THREE real reconciliation codes (51071, 51072, now +51073 for the window guard) and TWO
+        real dictionary-gap codes (51075, 51076) - the convenience overload can express only one
+        of each, so 51072 ("per-nature sums plus untagged bucket do not tie", a genuine
+        reconciliation failure) was being misclassified as dictionary-gap via errorBase+2, the
+        same bug class already found and fixed on Act (51092). Fixed here with the real code
+        sets rather than perpetuated.                                                            */
     public Task<DimensionResult<NatureControlTotals, NatureRow>> GetNatureAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<NatureControlTotals, NatureRow>(
-            "Nature", "dbo.usp_Insights_Dimension_Nature", NatureErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Nature", "dbo.usp_Insights_Dimension_Nature",
+            scopeDeniedCode: NatureErrorBase,
+            reconciliationCodes: [NatureErrorBase + 1, NatureErrorBase + 2, NatureErrorBase + 3],
+            dictionaryGapCodes: [NatureErrorBase + 5, NatureErrorBase + 6],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - the new
+        window-guard code (51082) lands exactly on DepartmentsErrorBase+2, which the convenience
+        overload reserves for dictionary-gap. Departments' one real dictionary-gap code (51085)
+        moves into dictionaryGapCodes explicitly so it stays reachable.                          */
     public Task<DimensionResult<DepartmentsControlTotals, DepartmentsRow>> GetDepartmentsAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<DepartmentsControlTotals, DepartmentsRow>(
-            "Departments", "dbo.usp_Insights_Dimension_Departments", DepartmentsErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Departments", "dbo.usp_Insights_Dimension_Departments",
+            scopeDeniedCode: DepartmentsErrorBase,
+            reconciliationCodes: [DepartmentsErrorBase + 1, DepartmentsErrorBase + 2],
+            dictionaryGapCodes: [DepartmentsErrorBase + 5],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
     /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - it maps codes by
         EXACT number, and Act's real THROWs do not fit that shape: 51092 ("sums plus the unlinked
@@ -83,17 +136,45 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
             null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload. Users has
+        THREE real reconciliation codes (51101, 51102, 51103 - see sql/12's own reconciliation
+        trap note, the distinct-instance-union checks) but the convenience overload only ever
+        checks errorBase+1 (51101) for that bucket and errorBase+2 (51102) for dictionary-gap -
+        so 51102 ("a user row claims more distinct instances than the union contains") was being
+        misclassified as dictionary-gap, and 51103 was not classified at all, falling through to
+        the unclassified-SQL-error retry path every time before eventually surfacing as
+        DimensionReconciliationException anyway (correct verdict, wrong path, needlessly retried
+        four times first). Same bug class as Act's own 51092, fixed here with the real code set.
+        The new window-guard code (51104) joins the same reconciliation bucket. Users has no real
+        dictionary-gap code of its own.                                                          */
     public Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<UsersControlTotals, UsersRow>(
-            "Users", "dbo.usp_Insights_Dimension_Users", UsersErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Users", "dbo.usp_Insights_Dimension_Users",
+            scopeDeniedCode: UsersErrorBase,
+            reconciliationCodes: [UsersErrorBase + 1, UsersErrorBase + 2, UsersErrorBase + 3, UsersErrorBase + 4],
+            dictionaryGapCodes: [],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - the new
+        window-guard code (51112) lands exactly on InternalErrorBase+2, which the convenience
+        overload reserves for dictionary-gap. Internal has no real dictionary-gap code of its
+        own. Its existing reconciliation code (51111) is reused for two distinct conditions
+        (statutory sums, internal sums) - a separate, pre-existing "one code two conditions" trap
+        (CLAUDE.md Sec.5b) left as-is here since fixing it is unrelated to windowing; only the
+        window guard is new.                                                                     */
     public Task<DimensionResult<InternalControlTotals, InternalRow>> GetInternalAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<InternalControlTotals, InternalRow>(
-            "Internal", "dbo.usp_Insights_Dimension_Internal", InternalErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Internal", "dbo.usp_Insights_Dimension_Internal",
+            scopeDeniedCode: InternalErrorBase,
+            reconciliationCodes: [InternalErrorBase + 1, InternalErrorBase + 2],
+            dictionaryGapCodes: [],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
     /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload for the same
         reason as Act above: the new window-guard code (51122) collides with what that convention

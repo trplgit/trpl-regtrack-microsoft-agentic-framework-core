@@ -48,8 +48,10 @@ public sealed class MindaActReportTest(ITestOutputHelper output)
         var toolLog = new SqlToolInvocationRecorder(writeConnectionString);
         var labRunId = $"lab-minda-act-tool-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var r = await dimensionRepository.GetActAsync(UserId, TenantId);
+        var r = await dimensionRepository.GetActAsync(UserId, TenantId, windowStart, windowEnd);
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(r.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(r.ControlTotals);
         var dataQualityJson = System.Text.Json.JsonSerializer.Serialize(r.DataQuality);
@@ -114,8 +116,10 @@ public sealed class MindaActReportTest(ITestOutputHelper output)
 
         var labRunId = $"lab-minda-act-notool-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var r = await dimensionRepository.GetActAsync(UserId, TenantId);
+        var r = await dimensionRepository.GetActAsync(UserId, TenantId, windowStart, windowEnd);
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(r.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(r.ControlTotals);
         var dataQualityJson = System.Text.Json.JsonSerializer.Serialize(r.DataQuality);

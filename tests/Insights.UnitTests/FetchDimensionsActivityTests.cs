@@ -45,22 +45,22 @@ public sealed class FetchDimensionsActivityTests
     private static Mock<IDimensionRepository> BuildHealthyRepository()
     {
         var repo = new Mock<IDimensionRepository>();
-        repo.Setup(r => r.GetLocationAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetLocationAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<LocationControlTotals, LocationRow>("Location", new LocationControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetEntityAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetEntityAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EntityControlTotals, EntityRow>("Entity",
                 new EntityControlTotals(0, 0, true, 0, 0, 0, 0, 0, EntityCountShape.SingleEntity, 0, ComparisonGrain.Locations, ""), [], [], [], [], []));
-        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<RiskControlTotals, RiskRow>("Risk", new RiskControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetNatureAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetNatureAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<NatureControlTotals, NatureRow>("Nature", new NatureControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetDepartmentsAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetDepartmentsAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<DepartmentsControlTotals, DepartmentsRow>("Departments", new DepartmentsControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetActAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<ActControlTotals, ActRow>("Act", new ActControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetUsersAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetUsersAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<UsersControlTotals, UsersRow>("Users", new UsersControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetInternalAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetInternalAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<InternalControlTotals, InternalRow>("Internal", new InternalControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetEventAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, 12, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EventControlTotals, EventRow>("Event", new EventControlTotals(), [], [], [], [], []));
@@ -100,7 +100,7 @@ public sealed class FetchDimensionsActivityTests
         var exception = exceptionType == typeof(DimensionReconciliationException)
             ? new DimensionReconciliationException("Risk", TenantId, new Exception("inner"))
             : (Exception)new DimensionContractViolationException("Risk", "detector flagged > eligible");
-        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>())).ThrowsAsync(exception);
+        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>())).ThrowsAsync(exception);
 
         var recorder = new Mock<IDimensionFailureRecorder>();
         var logger = new CapturingLogger();
@@ -122,12 +122,12 @@ public sealed class FetchDimensionsActivityTests
         var repo = BuildHealthyRepository();
         // Override Location with one that carries a real assertion/finding, so the test can prove
         // successful dimensions' data DOES flow through, while Entity's (thrown) does not.
-        repo.Setup(r => r.GetLocationAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetLocationAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<LocationControlTotals, LocationRow>(
                 "Location", new LocationControlTotals(), [],
                 [], [new Assertion("A1", "overdue_pct", "tenant", 10m, null, null, null, null, null, null)],
                 [new Finding("F1", FindingSeverity.Medium, "headline", ["A1"], null)], []));
-        repo.Setup(r => r.GetEntityAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetEntityAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Entity", TenantId, new Exception("inner")));
 
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
@@ -143,22 +143,22 @@ public sealed class FetchDimensionsActivityTests
     public async Task RunAsync_ScopeDenied_PropagatesUncaught_FailsTheWholeRun()
     {
         var repo = BuildHealthyRepository();
-        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionScopeDeniedException("Risk", UserId, TenantId, new Exception("inner")));
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
-        await Assert.ThrowsAsync<DimensionScopeDeniedException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
+        await Assert.ThrowsAsync<DimensionScopeDeniedException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd)));
     }
 
     [Fact]
     public async Task RunAsync_DictionaryGap_PropagatesUncaught_FailsTheWholeRun()
     {
         var repo = BuildHealthyRepository();
-        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionDictionaryGapException("Risk", new Exception("inner")));
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
-        await Assert.ThrowsAsync<DimensionDictionaryGapException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
+        await Assert.ThrowsAsync<DimensionDictionaryGapException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd)));
     }
 
     /// <summary>[TRAP this guards] All fifteen failing is total failure, not a fifteen-placeholder "partial" report with nothing real in it.</summary>
@@ -166,21 +166,21 @@ public sealed class FetchDimensionsActivityTests
     public async Task RunAsync_AllFifteenDimensionsFail_ThrowsRatherThanReturningAnEmptyReport()
     {
         var repo = new Mock<IDimensionRepository>();
-        repo.Setup(r => r.GetLocationAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetLocationAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Location", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetEntityAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetEntityAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Entity", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Risk", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetNatureAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetNatureAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Nature", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetDepartmentsAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetDepartmentsAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Departments", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetActAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Act", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetUsersAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetUsersAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Users", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetInternalAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetInternalAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Internal", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetEventAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, 12, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Event", TenantId, new Exception("inner")));
@@ -199,6 +199,6 @@ public sealed class FetchDimensionsActivityTests
 
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd)));
     }
 }

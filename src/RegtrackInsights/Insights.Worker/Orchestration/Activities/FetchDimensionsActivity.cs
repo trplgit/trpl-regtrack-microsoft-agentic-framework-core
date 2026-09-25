@@ -14,10 +14,17 @@ namespace Insights.Worker.Orchestration.Activities;
 /// report type (DimensionSelectionComposition) and any future ad-hoc single/multi-dimension
 /// inspection tooling - one filter, not a second fetch path.
 /// </summary>
-/// <param name="WindowStart">Start of the period-picker window for the two windowed dimensions
-/// (TimelinessFY, EvidenceIntegrity). Both WindowStart and WindowEnd must be supplied together or
-/// both left null; null/null means "current financial year to date" (see RunAsync). The picked
-/// dropdown option is resolved to a concrete pair by ReportPeriodResolver upstream.</param>
+/// <param name="WindowStart">
+/// Start of the period-picker window. TWO different rules apply, by dimension:
+///   - TimelinessFY / EvidenceIntegrity: FALL BACK to "current financial year to date" when null
+///     (see RunAsync) - their pre-existing behaviour, unchanged.
+///   - Act / Event / Location / Entity / Risk / Nature / Departments / Users / Internal: NO
+///     fallback. Their deployed procs REQUIRE a concrete window and THROW on NULL (product
+///     decision 2026-09-25 - "we are not providing years" outside TimelinessFY). If one of these
+///     is requested without a resolvable window, that ONE dimension fails loudly via the normal
+///     partial-generation path (see RunAsync) rather than a fabricated window being invented.
+/// Both WindowStart and WindowEnd must be supplied together or both left null. The picked dropdown
+/// option is resolved to a concrete pair by ReportPeriodResolver upstream.</param>
 public sealed record FetchDimensionsInput(
     int UserId, int CustomerId, IReadOnlyList<string>? RequestedDimensions = null,
     DateTime? WindowStart = null, DateTime? WindowEnd = null);
@@ -130,11 +137,61 @@ public sealed class FetchDimensionsActivity(
             }
         }
 
-        await TryFetchAsync("Location", () => dimensionRepository.GetLocationAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Entity", () => dimensionRepository.GetEntityAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Risk", () => dimensionRepository.GetRiskAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Nature", () => dimensionRepository.GetNatureAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Departments", () => dimensionRepository.GetDepartmentsAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        // [ADDED 2026-09-25] Location/Entity/Risk/Nature/Departments now require a real
+        // caller-supplied window each - same no-fallback rule as Act/Event below (product
+        // decision 2026-09-25, reversing the 2026-09-24 "these stay cumulative" design). If the
+        // caller requested one of these without a resolvable period, fail that ONE dimension
+        // loudly via the normal partial-generation path rather than fabricating a window.
+        if (IsRequested("Location"))
+        {
+            if (input is { WindowStart: { } locWs, WindowEnd: { } locWe })
+                await TryFetchAsync("Location", () => dimensionRepository.GetLocationAsync(input.UserId, input.CustomerId, locWs, locWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Location requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Location");
+            }
+        }
+        if (IsRequested("Entity"))
+        {
+            if (input is { WindowStart: { } entWs, WindowEnd: { } entWe })
+                await TryFetchAsync("Entity", () => dimensionRepository.GetEntityAsync(input.UserId, input.CustomerId, entWs, entWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Entity requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Entity");
+            }
+        }
+        if (IsRequested("Risk"))
+        {
+            if (input is { WindowStart: { } riskWs, WindowEnd: { } riskWe })
+                await TryFetchAsync("Risk", () => dimensionRepository.GetRiskAsync(input.UserId, input.CustomerId, riskWs, riskWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Risk requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Risk");
+            }
+        }
+        if (IsRequested("Nature"))
+        {
+            if (input is { WindowStart: { } natWs, WindowEnd: { } natWe })
+                await TryFetchAsync("Nature", () => dimensionRepository.GetNatureAsync(input.UserId, input.CustomerId, natWs, natWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Nature requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Nature");
+            }
+        }
+        if (IsRequested("Departments"))
+        {
+            if (input is { WindowStart: { } deptWs, WindowEnd: { } deptWe })
+                await TryFetchAsync("Departments", () => dimensionRepository.GetDepartmentsAsync(input.UserId, input.CustomerId, deptWs, deptWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Departments requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Departments");
+            }
+        }
         // [ADDED 2026-09-25] Act now requires a real caller-supplied window - no FY-to-date
         // fallback, that convention stays specific to TimelinessFY/EvidenceIntegrity (product
         // decision 2026-09-25). If the caller requested Act without a resolvable period, fail
@@ -154,16 +211,39 @@ public sealed class FetchDimensionsActivity(
         // after the repository call returns - see UsersHeadcountCalculator's own doc comment. Pure
         // C# aggregation over the already-fetched, already-reconciled Rows; no new SQL, no change
         // to sql/12_dimension_users.sql.
-        await TryFetchAsync("Users", async () =>
+        // [ADDED 2026-09-25] Users now requires a real caller-supplied window too - same
+        // no-fallback rule as Act/Event/Location/Entity/Risk/Nature/Departments above.
+        if (IsRequested("Users"))
         {
-            var result = await dimensionRepository.GetUsersAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None);
-            var (performerUserCount, reviewerUserCount) = UsersHeadcountCalculator.Compute(result.Rows);
-            return new DimensionResult<UsersControlTotals, UsersRow>(
-                result.Dimension,
-                result.ControlTotals with { PerformerUserCount = performerUserCount, ReviewerUserCount = reviewerUserCount },
-                result.Rows, result.Detectors, result.Assertions, result.Findings, result.DataQuality);
-        });
-        await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+            if (input is { WindowStart: { } usrWs, WindowEnd: { } usrWe })
+                await TryFetchAsync("Users", async () =>
+                {
+                    var result = await dimensionRepository.GetUsersAsync(input.UserId, input.CustomerId, usrWs, usrWe, cancellationToken: CancellationToken.None);
+                    var (performerUserCount, reviewerUserCount) = UsersHeadcountCalculator.Compute(result.Rows);
+                    return new DimensionResult<UsersControlTotals, UsersRow>(
+                        result.Dimension,
+                        result.ControlTotals with { PerformerUserCount = performerUserCount, ReviewerUserCount = reviewerUserCount },
+                        result.Rows, result.Detectors, result.Assertions, result.Findings, result.DataQuality);
+                });
+            else
+            {
+                logger.LogWarning("Users requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Users");
+            }
+        }
+        // [ADDED 2026-09-25] Internal now requires a real caller-supplied window too - same
+        // no-fallback rule, applied to BOTH its populations (statutory and internal) via the same
+        // single window - see sql/13's own header note.
+        if (IsRequested("Internal"))
+        {
+            if (input is { WindowStart: { } intWs, WindowEnd: { } intWe })
+                await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(input.UserId, input.CustomerId, intWs, intWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Internal requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Internal");
+            }
+        }
         // [ADDED 2026-09-25] Same real-window-required rule as Act above.
         if (IsRequested("Event"))
         {

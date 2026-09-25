@@ -38,8 +38,10 @@ public sealed class EventFreehandLabTest(ITestOutputHelper output)
         var apiKey = RequireEnv("MAF_API_KEY");
         var promptsDir = Path.Combine(AppContext.BaseDirectory, "prompts");
 
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         var dimensionRepository = new SqlDimensionRepository(connectionString);
-        var evt = await dimensionRepository.GetEventAsync(userId, customerId);
+        var evt = await dimensionRepository.GetEventAsync(userId, customerId, windowStart, windowEnd);
         output.WriteLine($"[{label}] Fetched {evt.Rows.Count} event-type rows, {evt.Assertions.Count} assertions, {evt.Findings.Count} findings.");
         output.WriteLine($"[{label}] ControlTotals: ScopedInstances={evt.ControlTotals.ScopedInstances} EventTypesReported={evt.ControlTotals.EventTypesReported} InstancesActiveInWindow={evt.ControlTotals.InstancesActiveInWindow} EventModuleDormant={evt.ControlTotals.EventModuleDormant} BranchesWithoutEventCoverage={evt.ControlTotals.BranchesWithoutEventCoverage}");
         foreach (var row in evt.Rows.OrderByDescending(r => r.InstanceCount).Take(10))

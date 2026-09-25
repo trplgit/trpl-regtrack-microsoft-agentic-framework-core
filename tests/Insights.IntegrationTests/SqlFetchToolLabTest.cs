@@ -101,16 +101,18 @@ public sealed class SqlFetchToolLabTest(ITestOutputHelper output)
     private static async Task<(string RowsJson, string ControlTotalsJson, string DataQualityJson, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings, int RowCount)>
         FetchAsync(IDimensionRepository repository, string dimension, int userId, int customerId)
     {
+        var windowEnd = DateTime.UtcNow;
+        var windowStart = windowEnd.AddDays(-90);
         switch (dimension)
         {
             case "Internal":
             {
-                var r = await repository.GetInternalAsync(userId, customerId);
+                var r = await repository.GetInternalAsync(userId, customerId, windowStart, windowEnd);
                 return (System.Text.Json.JsonSerializer.Serialize(r.Rows), System.Text.Json.JsonSerializer.Serialize(r.ControlTotals), System.Text.Json.JsonSerializer.Serialize(r.DataQuality), r.Assertions, r.Findings, r.Rows.Count);
             }
             case "Event":
             {
-                var r = await repository.GetEventAsync(userId, customerId);
+                var r = await repository.GetEventAsync(userId, customerId, windowStart, windowEnd);
                 return (System.Text.Json.JsonSerializer.Serialize(r.Rows), System.Text.Json.JsonSerializer.Serialize(r.ControlTotals), System.Text.Json.JsonSerializer.Serialize(r.DataQuality), r.Assertions, r.Findings, r.Rows.Count);
             }
             default:

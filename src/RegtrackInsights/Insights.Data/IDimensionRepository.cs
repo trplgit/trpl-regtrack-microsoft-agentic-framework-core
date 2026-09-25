@@ -29,25 +29,55 @@ namespace Insights.Data;
 /// </summary>
 public interface IDimensionRepository
 {
-    /// <summary>Locations - the geography cut. Members are branches; ranks carry a materiality floor.</summary>
+    /// <summary>
+    /// Locations - the geography cut. Members are branches; ranks carry a materiality floor. Scoped
+    /// to instances with >=1 scheduled occurrence (ComplianceScheduleOn.ScheduleOn) inside
+    /// [windowStart, windowEnd) - a period-picker window, never a fiscal-year default (that stays
+    /// specific to TimelinessFY). The deployed usp_Insights_Dimension_Location (sql/05) now
+    /// REQUIRES @WindowStart / @WindowEnd; passing NULL THROWs 51032.
+    /// </summary>
     Task<DimensionResult<LocationControlTotals, LocationRow>> GetLocationAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Entity hierarchy - apex-or-orphan anchored. Reconciles on DirectInstances, never SubtreeInstances.</summary>
+    /// <summary>
+    /// Entity hierarchy - apex-or-orphan anchored. Reconciles on DirectInstances, never
+    /// SubtreeInstances. Scoped to instances with >=1 scheduled occurrence
+    /// (ComplianceScheduleOn.ScheduleOn) inside [windowStart, windowEnd) - a period-picker window,
+    /// never a fiscal-year default. The deployed usp_Insights_Dimension_Entity (sql/07) now
+    /// REQUIRES @WindowStart / @WindowEnd; passing NULL THROWs 51052.
+    /// </summary>
     Task<DimensionResult<EntityControlTotals, EntityRow>> GetEntityAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Risk tiers, with the critical value taken from the dictionary rather than a literal.</summary>
+    /// <summary>
+    /// Risk tiers, with the critical value taken from the dictionary rather than a literal. Scoped
+    /// to instances with >=1 scheduled occurrence (ComplianceScheduleOn.ScheduleOn) inside
+    /// [windowStart, windowEnd) - a period-picker window, never a fiscal-year default. The deployed
+    /// usp_Insights_Dimension_Risk (sql/08) now REQUIRES @WindowStart / @WindowEnd; passing NULL
+    /// THROWs 51062.
+    /// </summary>
     Task<DimensionResult<RiskControlTotals, RiskRow>> GetRiskAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Nature of compliance. Half-blind by construction - always surface the uncategorised caveat.</summary>
+    /// <summary>
+    /// Nature of compliance. Half-blind by construction - always surface the uncategorised caveat.
+    /// Scoped to instances with >=1 scheduled occurrence (ComplianceScheduleOn.ScheduleOn) inside
+    /// [windowStart, windowEnd) - a period-picker window, never a fiscal-year default. The deployed
+    /// usp_Insights_Dimension_Nature (sql/09) now REQUIRES @WindowStart / @WindowEnd; passing NULL
+    /// THROWs 51073.
+    /// </summary>
     Task<DimensionResult<NatureControlTotals, NatureRow>> GetNatureAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Departments. Obligations with no department are counted back but appear in no row.</summary>
+    /// <summary>
+    /// Departments. Obligations with no department are counted back but appear in no row. Scoped
+    /// to instances with >=1 scheduled occurrence (ComplianceScheduleOn.ScheduleOn) inside
+    /// [windowStart, windowEnd) - a period-picker window, never a fiscal-year default. The deployed
+    /// usp_Insights_Dimension_Departments (sql/10) now REQUIRES @WindowStart / @WindowEnd; passing
+    /// NULL THROWs 51082.
+    /// </summary>
     Task<DimensionResult<DepartmentsControlTotals, DepartmentsRow>> GetDepartmentsAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Acts, one row per Act per state - the same law across states is several rows. Scoped to
@@ -59,13 +89,28 @@ public interface IDimensionRepository
     Task<DimensionResult<ActControlTotals, ActRow>> GetActAsync(
         int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Users. Does NOT partition instances - see <see cref="UsersControlTotals"/> before deriving any share.</summary>
+    /// <summary>
+    /// Users. Does NOT partition instances - see <see cref="UsersControlTotals"/> before deriving any
+    /// share. Scoped to instances with >=1 scheduled occurrence (ComplianceScheduleOn.ScheduleOn)
+    /// inside [windowStart, windowEnd) - a period-picker window, never a fiscal-year default. There
+    /// is a single instance population here (#inst), which both performer and reviewer assignments
+    /// are built from, so both roles inherit the window identically. The deployed
+    /// usp_Insights_Dimension_Users (sql/12) now REQUIRES @WindowStart / @WindowEnd; passing NULL
+    /// THROWs 51104.
+    /// </summary>
     Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Internal vs statutory obligations - two populations, reconciled independently.</summary>
+    /// <summary>
+    /// Internal vs statutory obligations - two populations, reconciled independently. BOTH are
+    /// scoped to the SAME caller-supplied [windowStart, windowEnd) window, each against its own
+    /// schedule table (statutory: ComplianceScheduleOn.ScheduleOn; internal:
+    /// InternalComplianceScheduledOn.ScheduledOn - two separate schema families). The deployed
+    /// usp_Insights_Dimension_Internal (sql/13) now REQUIRES @WindowStart / @WindowEnd; passing NULL
+    /// THROWs 51112.
+    /// </summary>
     Task<DimensionResult<InternalControlTotals, InternalRow>> GetInternalAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Event-triggered compliance. Counts EVENT instances, a different population from the other
