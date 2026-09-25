@@ -49,9 +49,15 @@ public interface IDimensionRepository
     Task<DimensionResult<DepartmentsControlTotals, DepartmentsRow>> GetDepartmentsAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Acts, one row per Act per state - the same law across states is several rows.</summary>
+    /// <summary>
+    /// Acts, one row per Act per state - the same law across states is several rows. Scoped to
+    /// instances with >=1 scheduled occurrence (ComplianceScheduleOn.ScheduleOn) inside
+    /// [windowStart, windowEnd) - Act.StartDate is the LAW's enactment date, never the scoping
+    /// date (see sql/11's own header). The deployed usp_Insights_Dimension_Act (sql/11) now
+    /// REQUIRES @WindowStart / @WindowEnd; passing NULL THROWs 51093.
+    /// </summary>
     Task<DimensionResult<ActControlTotals, ActRow>> GetActAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default);
 
     /// <summary>Users. Does NOT partition instances - see <see cref="UsersControlTotals"/> before deriving any share.</summary>
     Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
@@ -63,10 +69,15 @@ public interface IDimensionRepository
 
     /// <summary>
     /// Event-triggered compliance. Counts EVENT instances, a different population from the other
-    /// eight. <paramref name="dormancyMonths"/> is the activity window; the proc defaults to 12.
+    /// eight. Scoped to instances whose StartDate falls in [windowStart, windowEnd) - a period-
+    /// picker window, never a fiscal-year default (that stays specific to TimelinessFY).
+    /// <paramref name="dormancyMonths"/> is a SEPARATE concept, the activity-recency lookback used
+    /// for module-dormancy detection; the proc defaults it to 12. The deployed
+    /// usp_Insights_Dimension_Event (sql/14) now REQUIRES @WindowStart / @WindowEnd; passing NULL
+    /// THROWs 51122.
     /// </summary>
     Task<DimensionResult<EventControlTotals, EventRow>> GetEventAsync(
-        int userId, int customerId, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default);
 
     /// <summary>Licences. Grain is licence TYPE, not branch. Branch-only scope (no category axis) - see LicenceControlTotals.</summary>
     Task<DimensionResult<LicenceControlTotals, LicenceRow>> GetLicenceAsync(

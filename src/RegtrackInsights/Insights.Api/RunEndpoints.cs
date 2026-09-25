@@ -319,13 +319,28 @@ public static class RunEndpoints
         if (!cooldownResult.IsOpen)
             return new GeneratedReportUnit(dimension, reportType, "cooldown", NextAvailableUtc: cooldownResult.NextAvailableUtc);
 
+        // [ADDED 2026-09-25] The real missing piece flagged since 2026-09-24: request.Period was
+        // free text that never reached any dimension's actual data - ReportPeriodResolver existed,
+        // nothing called it. ReportPeriodRequestParser recognises a closed set of real period-
+        // picker keywords (last_30_days, last_60_days, last_90_days, q1-q4) and resolves them to a
+        // concrete [start, end) window server-side; anything else - including every existing free-
+        // text period string already in use for the cooldown/run-id key - resolves to null, which
+        // preserves EXACTLY today's behaviour (TimelinessFY/EvidenceIntegrity's own current-FY-to-
+        // date fallback; Act/Event were not reachable with a real window before this release
+        // either way). request.Period itself is unchanged either way - this only adds a window
+        // alongside it when the string is recognised, never replaces or validates it for its other
+        // job.
+        var periodChoice = ReportPeriodRequestParser.TryParse(request.Period);
+        var resolvedWindow = periodChoice is null ? null : (ResolvedReportPeriod?)ReportPeriodResolver.Resolve(periodChoice, DateTime.UtcNow);
+
         // Step 4 (the one-active-run-per-key lock) is free: EnqueueAsync derives the run id from
         // (tenant, scope, reportType, period), so a second call for the same key attaches to the
         // already-running instance instead of starting a duplicate. effectivePeriod (not
         // request.Period) is what makes that key correctly per-dimension - see above.
         var runId = await enqueuer.EnqueueAsync(
             request.TenantId, reportType, request.Scope, effectivePeriod, callerUserId, cancellationToken,
-            requestedDimensions: requestedDimensions, reqId: reqId.ToString());
+            requestedDimensions: requestedDimensions, reqId: reqId.ToString(),
+            windowStart: resolvedWindow?.StartInclusive, windowEnd: resolvedWindow?.EndExclusive);
 
         return new GeneratedReportUnit(dimension, reportType, "queued", runId, $"/api/insights/runs/{runId}/stream");
     }

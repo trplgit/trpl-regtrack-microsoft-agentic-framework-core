@@ -103,9 +103,11 @@ public sealed class FetchDimensionsActivity(
             ? (ws, we)
             : (new DateTime(ReportPeriodResolver.CurrentFyStartYear(now), 4, 1, 0, 0, 0, DateTimeKind.Utc), now);
 
+        bool IsRequested(string name) => requested is not { Count: > 0 } || requested.Contains(name);
+
         async Task TryFetchAsync<TControlTotals, TRow>(string name, Func<Task<DimensionResult<TControlTotals, TRow>>> fetch)
         {
-            if (requested is { Count: > 0 } && !requested.Contains(name))
+            if (!IsRequested(name))
                 return; // not one of the caller's requested dimensions - skip the SQL call entirely.
 
             try
@@ -133,7 +135,21 @@ public sealed class FetchDimensionsActivity(
         await TryFetchAsync("Risk", () => dimensionRepository.GetRiskAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Nature", () => dimensionRepository.GetNatureAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("Departments", () => dimensionRepository.GetDepartmentsAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Act", () => dimensionRepository.GetActAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        // [ADDED 2026-09-25] Act now requires a real caller-supplied window - no FY-to-date
+        // fallback, that convention stays specific to TimelinessFY/EvidenceIntegrity (product
+        // decision 2026-09-25). If the caller requested Act without a resolvable period, fail
+        // this ONE dimension loudly (the same partial-generation path every other dimension
+        // failure already uses) rather than fabricating a window or crashing the whole run.
+        if (IsRequested("Act"))
+        {
+            if (input is { WindowStart: { } actWs, WindowEnd: { } actWe })
+                await TryFetchAsync("Act", () => dimensionRepository.GetActAsync(input.UserId, input.CustomerId, actWs, actWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Act requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Act");
+            }
+        }
         // [ADDED 2026-09-15] Patches PerformerUserCount/ReviewerUserCount onto ControlTotals right
         // after the repository call returns - see UsersHeadcountCalculator's own doc comment. Pure
         // C# aggregation over the already-fetched, already-reconciled Rows; no new SQL, no change
@@ -148,7 +164,17 @@ public sealed class FetchDimensionsActivity(
                 result.Rows, result.Detectors, result.Assertions, result.Findings, result.DataQuality);
         });
         await TryFetchAsync("Internal", () => dimensionRepository.GetInternalAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
-        await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        // [ADDED 2026-09-25] Same real-window-required rule as Act above.
+        if (IsRequested("Event"))
+        {
+            if (input is { WindowStart: { } evWs, WindowEnd: { } evWe })
+                await TryFetchAsync("Event", () => dimensionRepository.GetEventAsync(input.UserId, input.CustomerId, evWs, evWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Event requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Event");
+            }
+        }
         await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("BacklogAging", () => dimensionRepository.GetBacklogAgingAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("TimelinessFY", () => dimensionRepository.GetTimelinessFYAsync(input.UserId, input.CustomerId, windowStart, windowEnd, cancellationToken: CancellationToken.None));

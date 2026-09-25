@@ -341,18 +341,34 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         schedules it) is a real non-determinism mismatch - check for in-flight instances of that
         exact shape before this deploys. Every other ReportType/dimension combination never took
         this branch at all (guarded internally on ReportType+RequestedDimensions), so is completely
-        unaffected. */
-    public const string Version = "3.9";
+        unaffected.
 
-    // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) and input.Period
-    // are used for persistence's index row (ScopeDescriptor, Period) but not threaded into the
-    // dimension queries themselves. IDimensionRepository's nine GetXAsync methods take the
-    // caller's FULL tenant scope (userId, customerId) with no entity-narrowing parameter, and an
-    // optional `asOf` for
-    // period-scoping that FetchDimensionsActivity does not currently pass through either - this
-    // matches every existing manual test and ReportCompositionPipeline itself, neither of which
-    // support sub-scoping today. Wiring real entity-level scope filtering and period selection is
-    // out of scope for this slice; flagged here so it is a visible decision, not a silent gap.
+        Bumped 3.9 -> 4.0: new InsightsReportOrchestrationInput fields WindowStart/WindowEnd, passed
+        straight through into FetchDimensionsInput (which already had these fields since 3.2->3.3,
+        just never fed by anything real). Payload-shape-only for the orchestrator itself (same
+        ScheduleTask sequence) - the real threading work is in RunEndpoints (resolves the request's
+        Period string via ReportPeriodResolver before enqueueing) and FetchDimensionsActivity
+        (Act/Event now also take a real window, sql/11 + sql/14 deployed to UAT requiring it).
+        Both fields default to null, so every existing caller (tests, the CLI trigger, any in-flight
+        3.9 instance) keeps its exact current behaviour - TimelinessFY/EvidenceIntegrity still fall
+        back to current-FY-to-date, and Act/Event were never reachable via the public API's
+        dimension_selection path with a real window before this release either way, so there is no
+        in-flight instance whose history this could contradict. **COORDINATED RELEASE**: this
+        worker build and the sql/11 + sql/14 deploy must ship together, same reasoning as 3.2->3.3 -
+        deploy either alone and Act/Event fetch fails (degrades to a placeholder, report still
+        ships) until both are in place. */
+    public const string Version = "4.0";
+
+    // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
+    // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
+    // themselves - IDimensionRepository's methods take the caller's FULL tenant scope (userId,
+    // customerId) with no entity-narrowing parameter. Still true, unrelated to the window work
+    // above. Period selection is now PARTIALLY wired (see the 4.0 bump note): TimelinessFY,
+    // EvidenceIntegrity, Act and Event take a real [WindowStart, WindowEnd) window resolved
+    // server-side from the request's Period string; the other eleven dimensions remain
+    // deliberately cumulative (2026-09-24 design decision - scoping them would hide standing risk
+    // rather than reveal it, not an oversight). Wiring real entity-level scope filtering is out of
+    // scope for this slice; flagged here so it stays a visible decision, not a silent gap.
 
     private InsightsRunStage _stage = InsightsRunStage.Gathering;
     private int _stagesComplete;
@@ -434,7 +450,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
             SetStage(InsightsRunStage.Validating);
             var dimensions = await context.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0",
-                new FetchDimensionsInput(input.UserId, input.TenantId, input.RequestedDimensions));
+                new FetchDimensionsInput(input.UserId, input.TenantId, input.RequestedDimensions, input.WindowStart, input.WindowEnd));
 
             // [ADDED 2026-09-08] The composite score is a whole-tenant, fixed-holistic concept
             // (CompositeScoreCalculator throws if literally no component can be computed at all) -

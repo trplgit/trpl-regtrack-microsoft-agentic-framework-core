@@ -260,14 +260,15 @@ internal sealed class FakeRunCanceller(bool cancelledResult = true) : IInsightsR
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
 internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
 {
-    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions, string? ReqId)> Calls { get; } = [];
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions, string? ReqId, DateTime? WindowStart, DateTime? WindowEnd)> Calls { get; } = [];
 
     public Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null)
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null,
+        DateTime? windowStart = null, DateTime? windowEnd = null)
     {
-        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId));
+        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId, windowStart, windowEnd));
         return Task.FromResult(runIdToReturn);
     }
 }

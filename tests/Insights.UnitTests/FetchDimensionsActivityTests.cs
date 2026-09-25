@@ -19,6 +19,12 @@ public sealed class FetchDimensionsActivityTests
     private const int UserId = 38;
     private const int TenantId = 29;
 
+    // [ADDED 2026-09-25] Act/Event now require a real caller-supplied window (no FY-to-date
+    // fallback, see FetchDimensionsActivity's own doc comment) - any test that expects them to
+    // actually reach the repository (not auto-fail into FailedDimensions) must supply one.
+    private static readonly DateTime WindowStart = new(2026, 1, 1);
+    private static readonly DateTime WindowEnd = new(2026, 2, 1);
+
     // [ADDED 2026-09-17] Pins the fix for the real gap found live tonight: a dimension's actual
     // exception (e.g. sql/05 Location's "String or binary data would be truncated") was previously
     // discarded here with zero trace beyond an unexported OTel counter - see this activity's own
@@ -50,13 +56,13 @@ public sealed class FetchDimensionsActivityTests
             .ReturnsAsync(new DimensionResult<NatureControlTotals, NatureRow>("Nature", new NatureControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetDepartmentsAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<DepartmentsControlTotals, DepartmentsRow>("Departments", new DepartmentsControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetActAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetActAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<ActControlTotals, ActRow>("Act", new ActControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetUsersAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<UsersControlTotals, UsersRow>("Users", new UsersControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetInternalAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<InternalControlTotals, InternalRow>("Internal", new InternalControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetEventAsync(UserId, TenantId, null, 12, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetEventAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, 12, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EventControlTotals, EventRow>("Event", new EventControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<LicenceControlTotals, LicenceRow>("Licence", new LicenceControlTotals(), [], [], [], [], []));
@@ -79,7 +85,7 @@ public sealed class FetchDimensionsActivityTests
         var repo = BuildHealthyRepository();
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
-        var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
+        var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd));
 
         Assert.Equal(15, result.DimensionResults.Count);
         Assert.Empty(result.FailedDimensions);
@@ -100,7 +106,7 @@ public sealed class FetchDimensionsActivityTests
         var logger = new CapturingLogger();
         var activity = new FetchDimensionsActivity(repo.Object, logger, recorder.Object);
 
-        var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
+        var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd));
 
         Assert.Equal(14, result.DimensionResults.Count);
         Assert.DoesNotContain("Risk", result.DimensionResults.Keys);
@@ -126,7 +132,7 @@ public sealed class FetchDimensionsActivityTests
 
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
-        var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId));
+        var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd));
 
         Assert.Single(result.Assertions); // only Location's
         Assert.Single(result.Findings);
@@ -170,13 +176,13 @@ public sealed class FetchDimensionsActivityTests
             .ThrowsAsync(new DimensionReconciliationException("Nature", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetDepartmentsAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Departments", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetActAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetActAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Act", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetUsersAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Users", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetInternalAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Internal", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetEventAsync(UserId, TenantId, null, 12, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetEventAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, 12, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Event", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Licence", TenantId, new Exception("inner")));

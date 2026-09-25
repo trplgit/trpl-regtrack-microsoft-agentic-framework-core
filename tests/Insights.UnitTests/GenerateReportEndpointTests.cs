@@ -595,6 +595,59 @@ public sealed class GenerateReportEndpointTests
         Assert.Equal(3, enqueuer.Calls.Count);
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-25] The real missing piece flagged since 2026-09-24: a recognised period
+    /// keyword now actually reaches the enqueuer as a concrete window, not just the free-text
+    /// Period string it always was. ReportPeriodResolver's own resolution is trusted here (already
+    /// covered by ReportPeriodResolverTests) - this test only pins that RunEndpoints actually calls
+    /// it and forwards the result.
+    /// </summary>
+    [Fact]
+    public async Task Generate_PeriodIsARecognisedKeyword_ResolvesAndForwardsARealWindow()
+    {
+        const string runId = "insights-1490-window";
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer(runId);
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", Request() with { Period = "last_30_days" });
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var call = Assert.Single(enqueuer.Calls);
+        var expected = ReportPeriodResolver.Resolve(ReportPeriodChoice.Last30Days, DateTime.UtcNow);
+        Assert.Equal(expected.StartInclusive, call.WindowStart);
+        Assert.Equal(expected.EndExclusive, call.WindowEnd);
+        // Period itself is unchanged - the window is ADDITIVE, never a replacement of its other job
+        // (the cooldown/run-id key, GeneratedReport.Period storage).
+        Assert.Equal("last_30_days", call.Period);
+    }
+
+    /// <summary>
+    /// Free text (every existing caller's Period value, including the default "FY2025-26" this
+    /// whole file's Request() helper already uses) must resolve to NO window - preserving exactly
+    /// today's behaviour for every dimension, not silently defaulting to a guessed period
+    /// (CLAUDE.md's "fail closed, never guess" non-negotiable).
+    /// </summary>
+    [Fact]
+    public async Task Generate_PeriodIsFreeText_ForwardsNoWindow_PreservingExistingBehaviour()
+    {
+        const string runId = "insights-1490-nowindow";
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer(runId);
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", Request()); // Period = "FY2025-26"
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var call = Assert.Single(enqueuer.Calls);
+        Assert.Null(call.WindowStart);
+        Assert.Null(call.WindowEnd);
+    }
+
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)
     {
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());

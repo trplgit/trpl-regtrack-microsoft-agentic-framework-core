@@ -64,11 +64,24 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             "Departments", "dbo.usp_Insights_Dimension_Departments", DepartmentsErrorBase,
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload - it maps codes by
+        EXACT number, and Act's real THROWs do not fit that shape: 51092 ("sums plus the unlinked
+        bucket do not tie") is a genuine RECONCILIATION failure, but the convenience overload
+        would classify it as errorBase+2 = dictionary-gap. Pre-existing mismatch, found while
+        adding the new window-guard code (51093) below - fixed here rather than perpetuated,
+        same treatment Licence/BacklogAging/TimelinessFY already got for the same reason. Act has
+        no real dictionary-gap code of its own - EXEC usp_Insights_AssertStatusCoverage covers
+        that path, same as every other dimension.                                                */
     public Task<DimensionResult<ActControlTotals, ActRow>> GetActAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
         ExecuteAsync<ActControlTotals, ActRow>(
-            "Act", "dbo.usp_Insights_Dimension_Act", ActErrorBase,
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            "Act", "dbo.usp_Insights_Dimension_Act",
+            scopeDeniedCode: ActErrorBase,
+            reconciliationCodes: [ActErrorBase + 1, ActErrorBase + 2, ActErrorBase + 3],
+            dictionaryGapCodes: [],
+            userId, customerId,
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf },
+            null, cancellationToken);
 
     public Task<DimensionResult<UsersControlTotals, UsersRow>> GetUsersAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
@@ -82,12 +95,20 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             "Internal", "dbo.usp_Insights_Dimension_Internal", InternalErrorBase,
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
+    /*  [FIX 2026-09-25] Moved off the clean errorBase/+1/+2 convenience overload for the same
+        reason as Act above: the new window-guard code (51122) collides with what that convention
+        implicitly reserved as EventErrorBase+2 = dictionary-gap, even though Event never actually
+        threw a real dictionary-gap error before now. Event has no dictionary-gap code of its own
+        - EXEC usp_Insights_AssertStatusCoverage covers that path, same as every other dimension. */
     public Task<DimensionResult<EventControlTotals, EventRow>> GetEventAsync(
-        int userId, int customerId, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default) =>
         ExecuteAsync<EventControlTotals, EventRow>(
-            "Event", "dbo.usp_Insights_Dimension_Event", EventErrorBase,
+            "Event", "dbo.usp_Insights_Dimension_Event",
+            scopeDeniedCode: EventErrorBase,
+            reconciliationCodes: [EventErrorBase + 1, EventErrorBase + 2],
+            dictionaryGapCodes: [],
             userId, customerId,
-            new { UserID = userId, CustomerID = customerId, AsOf = asOf, DormancyMonths = dormancyMonths },
+            new { UserID = userId, CustomerID = customerId, WindowStart = windowStart, WindowEnd = windowEnd, AsOf = asOf, DormancyMonths = dormancyMonths },
             null, cancellationToken);
 
     /*  [FIX] Licence's THROWs no longer fit the base/base+1/base+2 single-code-per-kind shape

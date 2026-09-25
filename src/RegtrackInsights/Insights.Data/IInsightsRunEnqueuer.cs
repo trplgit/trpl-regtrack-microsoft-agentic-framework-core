@@ -46,8 +46,17 @@ public interface IInsightsRunEnqueuer
     /// with no such concept (PaidKeepWarmScheduler, the manual CLI trigger) - those fall back to
     /// the DTFx run id itself, same as before this parameter existed.
     /// </param>
+    /// <param name="windowStart">
+    /// [ADDED 2026-09-25] The caller-resolved period-picker window start (ReportPeriodResolver.Resolve,
+    /// done in RunEndpoints against the request's Period string), forwarded into
+    /// InsightsReportOrchestrationInput.WindowStart. Trailing optional, same reasoning as every
+    /// other parameter added here - null for every existing call site. Must be supplied together
+    /// with <paramref name="windowEnd"/> or not at all.
+    /// </param>
+    /// <param name="windowEnd">See <paramref name="windowStart"/>.</param>
     Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null);
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null,
+        DateTime? windowStart = null, DateTime? windowEnd = null);
 }
