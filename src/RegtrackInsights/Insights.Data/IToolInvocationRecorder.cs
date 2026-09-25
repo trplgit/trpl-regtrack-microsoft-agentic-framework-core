@@ -1,5 +1,8 @@
 namespace Insights.Data;
 
+/// <summary>One real row from dbo.InsightsToolInvocationLog, read back for a given RunId.</summary>
+public sealed record ToolInvocationLogEntry(string Stage, string ToolName, string Detail, bool Success, int? ResultLength, DateTime RecordedAtUtc);
+
 /// <summary>
 /// [ADDED 2026-09-23] Backed by sql/34_tool_invocation_log.sql - answers "did the agent actually
 /// call fetch_scoped_sql_data or write_tenant_memory for this run" from a permanent record, not a
@@ -17,6 +20,13 @@ public interface IToolInvocationRecorder
         string? runId, string stage, string toolName, string detail, bool success, int? resultLength,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// [ADDED 2026-09-26] Every tool-invocation row for one run, in call order - the read half,
+    /// backing the reasoning-trace explainer. Empty (never null) when the model never called a
+    /// tool this run - the expected, common case, not a gap (see this table's own header comment).
+    /// </summary>
+    Task<IReadOnlyList<ToolInvocationLogEntry>> GetForRunAsync(string runId, CancellationToken cancellationToken = default);
+
     /// <summary>No-op implementation - used when tool-invocation capture isn't configured.</summary>
     public static IToolInvocationRecorder Null { get; } = new NullRecorder();
 
@@ -26,5 +36,8 @@ public interface IToolInvocationRecorder
             string? runId, string stage, string toolName, string detail, bool success, int? resultLength,
             CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+
+        public Task<IReadOnlyList<ToolInvocationLogEntry>> GetForRunAsync(string runId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ToolInvocationLogEntry>>([]);
     }
 }

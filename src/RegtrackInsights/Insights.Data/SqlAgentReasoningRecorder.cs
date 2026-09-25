@@ -21,4 +21,20 @@ public sealed class SqlAgentReasoningRecorder(string connectionString) : IAgentR
         await connection.ExecuteAsync(
             new CommandDefinition(sql, new { RunId = runId, Stage = stage, ReasoningSummary = reasoningSummary }, cancellationToken: cancellationToken));
     }
+
+    public async Task<IReadOnlyList<AgentReasoningLogEntry>> GetForRunAsync(string runId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        const string sql = """
+            SELECT Stage, ReasoningSummary, RecordedAtUtc
+            FROM dbo.InsightsAgentReasoningLog
+            WHERE RunId = @RunId
+            ORDER BY Id;
+            """;
+
+        var rows = await connection.QueryAsync<AgentReasoningLogEntry>(
+            new CommandDefinition(sql, new { RunId = runId }, cancellationToken: cancellationToken));
+        return rows.AsList();
+    }
 }
