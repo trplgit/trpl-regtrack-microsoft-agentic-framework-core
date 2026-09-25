@@ -69,6 +69,13 @@ public interface IAnalystNarrativeAgent
     /// DTFx run id, threaded through only so MafAnalystNarrativeAgent's tool-invocation logging
     /// (see its own doc comment) can key its rows by the run they belong to - never used for
     /// anything else, never sent to the model.
+    ///
+    /// <paramref name="windowStart"/>/<paramref name="windowEnd"/> [ADDED 2026-09-25] - optional,
+    /// trailing, same reasoning as userId/customerId. When this dimension's own fetch was scoped to
+    /// a period-picker window, passing the SAME window here narrows ReadOnlySqlFetchTool's #scoped
+    /// population to match - without this, a live SQL tool call would see the tenant's full
+    /// all-time data while dimension_rows describes only the window, a real two-populations-
+    /// disagreeing risk. Never accepted as JSON text the model writes.
     /// </summary>
     Task<AgentCallResult<NarrativeResult>> AnalyzeAndNarrateAsync(
         CompositionPlan plan,
@@ -81,6 +88,8 @@ public interface IAnalystNarrativeAgent
         int? userId = null,
         int? customerId = null,
         string? runId = null,
+        DateTime? windowStart = null,
+        DateTime? windowEnd = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -140,6 +149,8 @@ public sealed class MafAnalystNarrativeAgent(
         int? userId = null,
         int? customerId = null,
         string? runId = null,
+        DateTime? windowStart = null,
+        DateTime? windowEnd = null,
         CancellationToken cancellationToken = default)
     {
         // [ADDED 2026-09-22] Tenant memory read-side: always injected, never a tool call (same
@@ -187,7 +198,7 @@ public sealed class MafAnalystNarrativeAgent(
         ReadOnlySqlFetchTool? sqlTool = null;
         if (readOnlySqlConnectionString is not null && userId is not null && customerId is not null)
         {
-            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value);
+            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value, windowStart, windowEnd);
 
             // [ADDED 2026-09-22] onSqlToolInvoked is a diagnostic-only hook (null in every real
             // production DI registration today) - a caller that wants to SEE whether the model
@@ -211,7 +222,10 @@ public sealed class MafAnalystNarrativeAgent(
                 "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
                 "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
                 "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-                "doing this\", OwnerClass tells you which is true). Only a single SELECT/WITH statement is " +
+                "doing this\", OwnerClass tells you which is true). When this run is scoped to a period " +
+                "window, #scoped is ALREADY narrowed to that same window (a real scheduled occurrence " +
+                "inside it) - it reflects the SAME population your dimension_rows describes, never the " +
+                "tenant's full all-time data. Only a single SELECT/WITH statement is " +
                 "allowed - no INSERT/UPDATE/DELETE/DROP/ALTER/EXEC, no semicolons, no comments, no other " +
                 "tables. Returns JSON rows (capped at 200) or {\"error\": \"...\"} - on error, do not retry " +
                 "the same query, fall back to the escape hatch. Do not call this speculatively - only when " +
@@ -323,6 +337,8 @@ public sealed class MafAnalystNarrativeAgent(
         int? userId = null,
         int? customerId = null,
         string? runId = null,
+        DateTime? windowStart = null,
+        DateTime? windowEnd = null,
         CancellationToken cancellationToken = default)
     {
         var dimensionNames = dimensionRowsJsonByDimension.Keys.ToList();
@@ -370,7 +386,7 @@ public sealed class MafAnalystNarrativeAgent(
         ReadOnlySqlFetchTool? sqlTool = null;
         if (readOnlySqlConnectionString is not null && userId is not null && customerId is not null)
         {
-            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value);
+            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value, windowStart, windowEnd);
 
             [Description(
                 "Runs a real, read-only SQL SELECT against this tenant's own scoped compliance data, when " +
@@ -383,7 +399,10 @@ public sealed class MafAnalystNarrativeAgent(
                 "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
                 "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
                 "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-                "doing this\", OwnerClass tells you which is true). Only a single SELECT/WITH statement is " +
+                "doing this\", OwnerClass tells you which is true). When this run is scoped to a period " +
+                "window, #scoped is ALREADY narrowed to that same window - it reflects the SAME population " +
+                "your dimension_rows_by_dimension describes, never the tenant's full all-time data. Only a " +
+                "single SELECT/WITH statement is " +
                 "allowed - no INSERT/UPDATE/DELETE/DROP/ALTER/EXEC, no semicolons, no comments, no other " +
                 "tables. Returns JSON rows (capped at 200) or {\"error\": \"...\"} - on error, do not retry " +
                 "the same query, fall back to the escape hatch. Do not call this speculatively - only when " +

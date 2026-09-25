@@ -52,15 +52,29 @@ public sealed class ReadOnlySqlFetchTool
     private readonly string connectionString;
     private readonly int userId;
     private readonly int customerId;
+    private readonly DateTime? windowStart;
+    private readonly DateTime? windowEnd;
     private int callCount;
 
     public int CallsMade => callCount;
 
-    public ReadOnlySqlFetchTool(string connectionString, int userId, int customerId)
+    /// <summary>
+    /// [ADDED 2026-09-25] windowStart/windowEnd - same closure treatment as userId/customerId: the
+    /// model never sees or sets these, they are never a tool parameter, always the caller's own
+    /// already-resolved period-picker window (or null when the caller's dimension is not
+    /// windowed). Before this, #scoped was NEVER date-filtered - a live narrate call for a
+    /// window-scoped dimension (Act/Event/Location/Risk/Nature/Departments/Users/Internal, all 9
+    /// as of this session) could fetch_scoped_sql_data and see the tenant's FULL all-time
+    /// population, disagreeing with the very report data it was cross-checking against. Same
+    /// estate-definition-consistency reasoning CLAUDE.md already documents elsewhere.
+    /// </summary>
+    public ReadOnlySqlFetchTool(string connectionString, int userId, int customerId, DateTime? windowStart = null, DateTime? windowEnd = null)
     {
         this.connectionString = connectionString;
         this.userId = userId;
         this.customerId = customerId;
+        this.windowStart = windowStart;
+        this.windowEnd = windowEnd;
     }
 
     [Description(
@@ -74,7 +88,10 @@ public sealed class ReadOnlySqlFetchTool
         "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
         "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
         "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-        "doing this\", OwnerClass tells you which is true). Only a single SELECT/WITH statement is " +
+        "doing this\", OwnerClass tells you which is true). When this run is scoped to a period " +
+        "window, #scoped is ALREADY narrowed to that same window (a real scheduled occurrence " +
+        "inside it) - it reflects the SAME population your dimension_rows describes, never the " +
+        "tenant's full all-time data. Only a single SELECT/WITH statement is " +
         "allowed - no INSERT/UPDATE/DELETE/DROP/ALTER/EXEC, no semicolons, no comments, no other " +
         "tables. Returns JSON rows (capped at 200) or {\"error\": \"...\"} - on error, do not retry " +
         "the same query, fall back to the escape hatch. Do not call this speculatively - only when " +
@@ -126,6 +143,28 @@ public sealed class ReadOnlySqlFetchTool
             // warns never to read from just one side of. This is what makes real cross-dimension
             // tracing (e.g. "which department is behind these overdue branches") possible through
             // this tool - the original real ask that motivated it.
+            // [ADDED 2026-09-25] When a window is present, #scoped is narrowed to instances with a
+            // real ComplianceScheduleOn occurrence inside it - the SAME #active/DELETE NOT EXISTS
+            // pattern the dimension procs themselves use (sql/11 Act was the first, now all 9
+            // windowed dims), just expressed as a second step here rather than inside a stored
+            // proc. Runs in the SAME batch/round-trip as #scoped's own build and the model's query,
+            // for the identical connection-resiliency reason the #scoped build itself already
+            // documents below - no gap for a silent reconnect to drop a local temp table.
+            var windowNarrowingSql = windowStart is not null && windowEnd is not null
+                ? """
+
+                  IF OBJECT_ID('tempdb..#scopedActive') IS NOT NULL DROP TABLE #scopedActive;
+                  SELECT DISTINCT cso.ComplianceInstanceID
+                  INTO #scopedActive
+                  FROM #scoped s
+                  JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = s.ComplianceInstanceID
+                  WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd;
+
+                  DELETE s FROM #scoped s
+                  WHERE NOT EXISTS (SELECT 1 FROM #scopedActive a WHERE a.ComplianceInstanceID = s.ComplianceInstanceID);
+                  """
+                : "";
+
             var combinedSql =
                 $"""
                 SELECT s.ComplianceInstanceID, s.BranchID, cb.Name AS BranchName, s.CategoryId,
@@ -138,6 +177,7 @@ public sealed class ReadOnlySqlFetchTool
                 LEFT JOIN ComplianceInstance ci ON ci.ID = s.ComplianceInstanceID
                 LEFT JOIN Department d ON d.ID = ci.DepartmentID
                 LEFT JOIN dbo.tvfInsightsOwnership(@UserID, @CustomerID) o ON o.ComplianceInstanceID = s.ComplianceInstanceID;
+                {windowNarrowingSql}
 
                 SET ROWCOUNT {MaxRows};
                 {sql}
@@ -149,6 +189,8 @@ public sealed class ReadOnlySqlFetchTool
             };
             command.Parameters.AddWithValue("@UserID", userId);
             command.Parameters.AddWithValue("@CustomerID", customerId);
+            command.Parameters.AddWithValue("@WindowStart", (object?)windowStart ?? DBNull.Value);
+            command.Parameters.AddWithValue("@WindowEnd", (object?)windowEnd ?? DBNull.Value);
             await using var reader = await command.ExecuteReaderAsync();
 
             var rows = new List<Dictionary<string, object?>>();

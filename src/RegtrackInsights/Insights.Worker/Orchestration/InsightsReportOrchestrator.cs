@@ -371,8 +371,16 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         PersistActivity call, breaking ALL report persistence, not just one dimension. sql/33 is
         additive-only (nullable column, permissive CHECK) and was deployed to UAT ahead of this code
         specifically so this ordering constraint is already satisfied there - verify it is live in
-        any OTHER environment before this worker build ships to it. */
-    public const string Version = "4.1";
+        any OTHER environment before this worker build ships to it.
+
+        Bumped 4.1 -> 4.2: AnalyzeAndNarrateInput (scheduled at the SAME position, same
+        ScheduleTask call - payload-shape-only) gains WindowStart/WindowEnd, threaded straight from
+        input.WindowStart/WindowEnd (already on this orchestrator's own input) into
+        ReadOnlySqlFetchTool's #scoped narrowing - closes a real gap where a live SQL tool call
+        during narrate saw the tenant's full all-time data even when the dimension's own fetch was
+        window-scoped. Trailing optional fields, default null, so an in-flight 4.1 instance replays
+        identically - no coordinated release needed, this is C#-only, no new SQL dependency. */
+    public const string Version = "4.2";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
     // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
@@ -608,7 +616,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     new AnalyzeAndNarrateInput(
                         plan, dimensions.Assertions, dimensions.Findings, freehandDimensionName,
                         freehandRowsJson!, freehandControlTotalsJson, null, null, input.Priority, input.ReqId,
-                        input.UserId, input.TenantId));
+                        input.UserId, input.TenantId, input.WindowStart, input.WindowEnd));
                 ChargeAndCheck(analystResult.TotalTokens);
                 narrative = analystResult.Narrative;
             }

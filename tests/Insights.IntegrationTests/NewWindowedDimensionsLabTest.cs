@@ -267,4 +267,41 @@ public sealed class NewWindowedDimensionsLabTest(ITestOutputHelper output)
         Assert.DoesNotContain(KnownBadGenericFillerPhrase, renderResult.Value, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(windowStart.Year.ToString(), renderResult.Value);
     }
+
+    /// <summary>
+    /// [ADDED 2026-09-25] Direct, no-LLM proof that ReadOnlySqlFetchTool's new windowStart/windowEnd
+    /// params actually narrow #scoped, real UAT data, tenant 1285. Same-query comparison: the
+    /// windowed count must be strictly less than the unwindowed one (real data has instances
+    /// outside the 30-day window), and the windowed count must match Location's own real
+    /// ScopedInstances for the identical window (33, confirmed earlier this session) - proving the
+    /// tool's own narrowing produces the SAME population the dimension procs themselves compute,
+    /// not just "a smaller number".
+    /// </summary>
+    [Fact]
+    public async Task FetchDataAsync_WithWindow_NarrowsScopedToTheSamePopulationAsTheDimensionProcs()
+    {
+        var connectionString = RequireConfig("ConnectionStrings:RegTrack");
+        var (windowStart, windowEnd) = Window30Days();
+
+        var unwindowedTool = new ReadOnlySqlFetchTool(connectionString, UserId, TenantId);
+        var unwindowedResult = await unwindowedTool.FetchDataAsync("SELECT COUNT(*) AS N FROM #scoped");
+        output.WriteLine($"Unwindowed #scoped count: {unwindowedResult}");
+
+        var windowedTool = new ReadOnlySqlFetchTool(connectionString, UserId, TenantId, windowStart, windowEnd);
+        var windowedResult = await windowedTool.FetchDataAsync("SELECT COUNT(*) AS N FROM #scoped");
+        output.WriteLine($"Windowed #scoped count (30-day): {windowedResult}");
+
+        using var unwindowedDoc = System.Text.Json.JsonDocument.Parse(unwindowedResult);
+        using var windowedDoc = System.Text.Json.JsonDocument.Parse(windowedResult);
+
+        var unwindowedCount = unwindowedDoc.RootElement.GetProperty("rows")[0].GetProperty("N").GetInt32();
+        var windowedCount = windowedDoc.RootElement.GetProperty("rows")[0].GetProperty("N").GetInt32();
+
+        output.WriteLine($"Unwindowed={unwindowedCount}, Windowed={windowedCount}");
+
+        Assert.True(windowedCount < unwindowedCount, $"Expected the windowed count ({windowedCount}) to be strictly less than the unwindowed count ({unwindowedCount}) - real data outside the 30-day window should be excluded.");
+        // Real, independently-confirmed figure from this session's own Location proc run for the
+        // identical tenant/window (sql/05, ScopedInstances=33) - not a guess.
+        Assert.Equal(33, windowedCount);
+    }
 }
