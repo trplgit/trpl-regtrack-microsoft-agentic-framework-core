@@ -1025,7 +1025,14 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     new BuildReasoningTraceInput(
                         reportGuid, input.TenantId, input.ReportType, persistResult.GeneratedAtUtc,
                         freehandDimensionName, plan, dimensions.Assertions, dimensions.Findings,
-                        freehandRowsJson!, freehandControlTotalsJson, freehandDataQualityJson));
+                        freehandRowsJson!, freehandControlTotalsJson, freehandDataQualityJson,
+                        // [ADDED 2026-09-27] Same ScheduleTask call, same position - one extra
+                        // trailing optional input field, so an in-flight 4.3 run replays unchanged.
+                        // Deliberately NO version bump: a bump strands every in-flight run on
+                        // deploy (seen live 2026-09-27, a Users run stuck on v4.1), and a
+                        // payload-only change never needed one.
+                        ReportHtml: finalStructureChecked.Html,
+                        UserId: input.UserId, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd));
             }
 
             return persistResult;

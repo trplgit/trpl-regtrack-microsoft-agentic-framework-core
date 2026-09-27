@@ -217,7 +217,7 @@ public static class PaidReportAgentsRegistration
         // composition already runs on that deployment.
         services.AddSingleton<IAnalystNarrativeAgent>(sp => new MafAnalystNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             freehandEndpoint, freehandModel, freehandApiKey, "AnalystNarrativeAgent", "Traces root cause from typed assertions and raw dimension rows.",
-            LoadPromptSync(sp, "v2/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
+            LoadPromptSync(sp, "v3/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
             readOnlySqlConnectionString,
             // [WAS null, FIXED 2026-09-23] This was the real gap: the hook existed but nothing
             // durable ever recorded a call. Now every real fetch_scoped_sql_data/write_tenant_memory
@@ -237,15 +237,16 @@ public static class PaidReportAgentsRegistration
             visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
             LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
-        // [ADDED 2026-09-26] Reasoning-trace explainer - deliberately gpt-4o-mini, and the SAME
-        // Llm:Maf endpoint/apikey every other non-freehand agent in this file uses (user's explicit
-        // instruction) - not FreehandDimensions' sol deployment, and not a new config key. Non-
-        // reasoning model, so CreateSimpleTextAgent (never CreateJsonAgent/CreateTextAgent - see
-        // that method's own doc comment on why gpt-4o-mini 400s on ReasoningOptions).
-        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateSimpleTextAgent(
-            endpoint, "gpt-4o-mini", apiKey, "ReasoningExplainerAgent",
+        // [ADDED 2026-09-26] Reasoning-trace explainer, same Llm:Maf endpoint/apikey as the other
+        // non-freehand agents in this file.
+        // [CHANGED 2026-09-27] gpt-4o-mini -> the standard Llm:Maf model (user decision). Side-by-side
+        // on the same real Users report, gpt-4o-mini wrote wrong formulas ("1,102 = count where
+        // Instances is 0") and invented report locations ("Section People"); the standard model got
+        // every formula and location right. It runs after persist and never delays the report.
+        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateTextAgent(
+            endpoint, model, apiKey, "ReasoningExplainerAgent",
             "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
-            LoadPromptSync(sp, "08_reasoning_explainer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "08_reasoning_explainer_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
@@ -287,6 +288,8 @@ public static class PaidReportAgentsRegistration
                     LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate,
                     modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort));
 
+            // [ADDED 2026-09-27] Every freehand render prompt is now v4 (v3 + section 10 "Atmosphere":
+            // hero wash, one corner shape, tinted plot areas). Composition prompts stay v3.
             return new Dictionary<string, IReportHtmlAgent>
             {
                 ["fixed_holistic"] = Build(
@@ -310,7 +313,7 @@ public static class PaidReportAgentsRegistration
                 // own render prompt - see that file's own header for what changed and why.
                 ["dimension_selection:Location"] = Build(
                     "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_location_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_location_v4.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED 2026-09-09, REPLACED AGAIN 2026-09-23] Dimension-
                 // specific override for a single-"Users" request - RenderHtmlActivity's own doc
                 // comment explains the "{ReportType}:{DimensionName}" key-preference rule this
@@ -326,7 +329,7 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Users"] = Build(
                     "DimensionSelectionUserReportHtmlAgent", "Renders a freehand-composed Users insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_user_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_user_v4.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Same reasoning as the Users entry
                 // immediately above. The Concentration tab and closure-status strip the earlier
                 // Angular-mirroring version carried (both honest not-available blocks, no real
@@ -341,37 +344,37 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v4.md", freehandModel),
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_backlogaging_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_backlogaging_v4.md", freehandModel),
                 // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix (Act's own
                 // period-scoping change) - see that file's own header for what changed and why.
                 // [ADDED 2026-09-27] v3 - "i" / "How to read this chart" panel on every chart,
                 // interactive charts, chart craft rules. Users uses the same v3 sections.
                 ["dimension_selection:Act"] = Build(
                     "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_act_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_act_v4.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v4.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
                 // fix as Location above.
                 ["dimension_selection:Risk"] = Build(
                     "DimensionSelectionRiskReportHtmlAgent", "Renders a freehand-composed Risk insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_risk_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_risk_v4.md", freehandModel),
                 ["dimension_selection:Nature"] = Build(
                     "DimensionSelectionNatureReportHtmlAgent", "Renders a freehand-composed Nature-of-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_nature_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_nature_v4.md", freehandModel),
                 ["dimension_selection:Internal"] = Build(
                     "DimensionSelectionInternalReportHtmlAgent", "Renders a freehand-composed Statutory-vs-Internal insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_internal_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_internal_v4.md", freehandModel),
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_event_v3.md", freehandModel),
+                    "05_report_html_dimension_selection_event_v4.md", freehandModel),
             };
         });
 

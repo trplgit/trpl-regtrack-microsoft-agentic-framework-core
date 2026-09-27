@@ -23,7 +23,14 @@ public sealed record ReasoningTraceBundle(
     string? DimensionControlTotalsJson,
     IReadOnlyList<DataQualityNote> DataQuality,
     IReadOnlyList<AgentReasoningLogEntry> ReasoningLog,
-    IReadOnlyList<ToolInvocationLogEntry> ToolInvocations);
+    IReadOnlyList<ToolInvocationLogEntry> ToolInvocations,
+    // [ADDED 2026-09-27] What the reader actually sees, and every number on it (code-extracted) -
+    // the explainer must cover each one. Null when the finished report was not available.
+    string? ReportText = null,
+    IReadOnlyList<string>? NumbersOnReport = null,
+    // [ADDED 2026-09-27] Filled testers' database checks (ReasoningSourceMap.LoadFilledJson) -
+    // verified queries per number; null for a dimension without a source map.
+    string? DatabaseChecksJson = null);
 
 /// <summary>
 /// [ADDED 2026-09-26] Turns a <see cref="ReasoningTraceBundle"/> into a plain-Markdown "how was
@@ -65,7 +72,10 @@ public sealed class MafReasoningExplainerAgent(AIAgent agent) : IReasoningExplai
               "dimension_control_totals": {{bundle.DimensionControlTotalsJson ?? "null"}},
               "data_quality": {{JsonSerializer.Serialize(bundle.DataQuality, JsonOptions)}},
               "reasoning_log": {{JsonSerializer.Serialize(bundle.ReasoningLog, JsonOptions)}},
-              "tool_invocations": {{JsonSerializer.Serialize(bundle.ToolInvocations, JsonOptions)}}
+              "tool_invocations": {{JsonSerializer.Serialize(bundle.ToolInvocations, JsonOptions)}},
+              "report_text": {{JsonSerializer.Serialize(bundle.ReportText)}},
+              "numbers_on_report": {{JsonSerializer.Serialize(bundle.NumbersOnReport ?? [])}},
+              "database_checks": {{bundle.DatabaseChecksJson ?? "null"}}
             }
             """;
 

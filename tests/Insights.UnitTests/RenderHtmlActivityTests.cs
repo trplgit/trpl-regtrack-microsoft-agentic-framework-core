@@ -123,6 +123,34 @@ public class RenderHtmlActivityTests
         genericAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-27] Single-dimension render: the real rows/totals are injected by code into
+    /// the returned page (DimensionDataInjector), so the model never has to re-type them.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SingleDimensionWithRows_InjectsTheRealDataBlock()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var plan = DimensionSelectionComposition.Build(["Users"]);
+        var narrative = new NarrativeResult([]);
+        var generatedAt = new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc);
+        IReadOnlyList<Assertion> assertions = [];
+        var rows = new Dictionary<string, string> { ["Users"] = """[{"UserID":7,"UserName":"Asha"}]""" };
+        var totals = new Dictionary<string, string> { ["Users"] = """{"UsersReported":1}""" };
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><script>draw()</script></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Users"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "T", DimensionSelectionComposition.ReportType, generatedAt,
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Users"));
+
+        Assert.Contains("id=\"insights-data\"", result.Html);
+        Assert.Contains("\"UserName\":\"Asha\"", result.Html);
+        Assert.Contains("\"UsersReported\":1", result.Html);
+    }
+
     /// <summary>Regression guard - today's exact behavior when no dimension-specific agent is registered yet (the real current state for every dimension).</summary>
     [Fact]
     public async Task RunAsync_SingleDimensionRequest_FallsBackToGenericAgentWhenNoDimensionSpecificOneRegistered()

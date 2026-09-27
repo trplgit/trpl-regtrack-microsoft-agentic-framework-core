@@ -2,6 +2,7 @@ using DurableTask.Core;
 using Insights.Agents;
 using Insights.Data;
 using Insights.Domain;
+using Insights.Presentation;
 using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
@@ -9,7 +10,13 @@ namespace Insights.Worker.Orchestration.Activities;
 public sealed record BuildReasoningTraceInput(
     Guid ReportId, int TenantId, string ReportType, DateTime GeneratedAtUtc,
     string DimensionName, CompositionPlan Plan, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings,
-    string DimensionRowsJson, string? DimensionControlTotalsJson, string? DataQualityJson);
+    string DimensionRowsJson, string? DimensionControlTotalsJson, string? DataQualityJson,
+    // [ADDED 2026-09-27] The finished report the reader sees - its visible text and numbers are
+    // what the testers' reasoning file must explain. Trailing optional: replay-safe, no bump.
+    string? ReportHtml = null,
+    // [ADDED 2026-09-27] Needed to fill the testers' database checks (ReasoningSourceMap) with
+    // the exact user, tenant and period the report used. Trailing optional: replay-safe.
+    int? UserId = null, DateTime? WindowStart = null, DateTime? WindowEnd = null);
 
 public sealed record BuildReasoningTraceOutput(bool Written);
 
@@ -58,14 +65,24 @@ public sealed class BuildReasoningTraceActivity(
                 ? []
                 : System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<DataQualityNote>>(input.DataQualityJson) ?? [];
 
+            var reportText = input.ReportHtml is null ? null : ReportClaimExtractor.VisibleText(input.ReportHtml);
+            var numbers = reportText is null ? null
+                : ReportClaimExtractor.ExtractNumbers(reportText, ReportClaimExtractor.NumbersToIgnore(input.DimensionRowsJson));
+
+            var databaseChecks = input.UserId is { } uid
+                ? ReasoningSourceMap.LoadFilledJson(input.DimensionName, uid, input.TenantId, input.WindowStart, input.WindowEnd)
+                : null;
+
             var bundle = new ReasoningTraceBundle(
                 input.DimensionName, runId, input.Plan, input.Assertions, input.Findings,
-                input.DimensionRowsJson, input.DimensionControlTotalsJson, dataQuality, reasoningLog, toolInvocations);
+                input.DimensionRowsJson, input.DimensionControlTotalsJson, dataQuality, reasoningLog, toolInvocations,
+                reportText, numbers, databaseChecks);
 
             var explainResult = await explainerAgent.ExplainAsync(bundle);
+            var markdown = AppendCompletenessCheck(explainResult.Value, numbers);
 
             var pathContext = new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(input.GeneratedAtUtc), input.ReportId);
-            await traceStore.WriteAsync(explainResult.Value, pathContext);
+            await traceStore.WriteAsync(markdown, pathContext);
 
             logger.LogInformation("BuildReasoningTraceActivity: wrote reasoning trace for report {ReportId} ({Tokens} explainer tokens).", input.ReportId, explainResult.TotalTokens);
             return new BuildReasoningTraceOutput(Written: true);
@@ -75,5 +92,24 @@ public sealed class BuildReasoningTraceActivity(
             logger.LogWarning(ex, "BuildReasoningTraceActivity: failed to build/write the reasoning trace for report {ReportId} - the report itself is unaffected.", input.ReportId);
             return new BuildReasoningTraceOutput(Written: false);
         }
+    }
+
+    /// <summary>
+    /// Code-checked, not model-checked: every number on the finished report must appear in the file.
+    /// Anything the explainer skipped is listed for the tester instead of silently missing.
+    /// </summary>
+    internal static string AppendCompletenessCheck(string markdown, IReadOnlyList<string>? numbersOnReport)
+    {
+        if (numbersOnReport is null)
+            return markdown;
+
+        var missing = ReportClaimExtractor.FindUnexplained(numbersOnReport, markdown);
+        var section = missing.Count == 0
+            ? $"\n\n## Completeness check (done by code)\n\nAll {numbersOnReport.Count} numbers shown on the report appear in this file.\n"
+            : $"\n\n## Numbers not explained above - check manually (found by code)\n\n" +
+              $"{missing.Count} of the {numbersOnReport.Count} numbers shown on the report are not explained in this file. " +
+              "Find each one on the report and check it against the data:\n\n" +
+              string.Join("\n", missing.Select(n => $"- {n}")) + "\n";
+        return markdown.TrimEnd() + section;
     }
 }

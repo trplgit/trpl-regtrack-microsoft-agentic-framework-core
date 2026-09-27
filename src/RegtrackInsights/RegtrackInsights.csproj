@@ -115,6 +115,10 @@
     <Content Include="templates\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Testers' database checks per dimension (ReasoningSourceMap) - verified against the procs. -->
+    <Content Update="source-maps\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!--

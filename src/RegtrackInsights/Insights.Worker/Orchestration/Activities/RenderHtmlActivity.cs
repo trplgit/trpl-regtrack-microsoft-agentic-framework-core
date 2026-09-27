@@ -99,6 +99,18 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
             }
         }
 
-        return new RenderHtmlOutput(result.Value, result.TotalTokens);
+        // [ADDED 2026-09-27] Real rows written by code, not re-typed by the model - see
+        // DimensionDataInjector. Single-dimension reports only; fixed_holistic is unchanged.
+        var html = result.Value;
+        if (input.DimensionName is { } dimension
+            && input.DimensionRowsJson is not null
+            && input.DimensionRowsJson.TryGetValue(dimension, out var rowsJson))
+        {
+            string? totalsJson = null;
+            input.DimensionControlTotalsJson?.TryGetValue(dimension, out totalsJson);
+            html = Insights.Presentation.DimensionDataInjector.Inject(html, dimension, rowsJson, totalsJson);
+        }
+
+        return new RenderHtmlOutput(html, result.TotalTokens);
     }
 }
