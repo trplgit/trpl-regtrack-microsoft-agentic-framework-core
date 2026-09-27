@@ -1,0 +1,40 @@
+{
+  "dimension": "BacklogAging",
+  "rowKeyField": "Bucket",
+  "rowNameField": "Bucket",
+  "note": "Written from usp_Insights_Dimension_BacklogAging (sql/22_dimension_backlog_aging.sql) as deployed. Verified by SourceMapVerificationTests - every query must return exactly what the report's procedure returned. Counted as of today (no report period); counts overdue DUE DATES (schedules), not obligations - one obligation can have several overdue due dates. Financial year runs 1 April - 31 March. Live figure: a check run later can differ slightly.",
+  "setup": [
+    "DECLARE @UserID INT = {UserID};",
+    "DECLARE @CustomerID INT = {CustomerID};",
+    "DECLARE @AsOf DATETIME = SYSDATETIME();",
+    "DECLARE @currentFyStart DATE = DATEFROMPARTS(CASE WHEN MONTH(@AsOf) >= 4 THEN YEAR(@AsOf) ELSE YEAR(@AsOf) - 1 END, 4, 1);",
+    "DECLARE @previousFyStart DATE = DATEADD(YEAR, -1, @currentFyStart);",
+    "",
+    "-- Step 1. Overdue due dates right now (past due and not closed, or never touched - ComplianceScheduleOn,",
+    "--         ComplianceTransaction) at the locations AND categories this user may see, each put in one bucket by its",
+    "--         due date (ComplianceScheduleOn.ScheduleOn): this financial year, last financial year, or older.",
+    "IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;",
+    "SELECT o.ComplianceScheduleOnID, o.ScheduleOn,",
+    "       CASE WHEN o.ScheduleOn >= @currentFyStart THEN 'current_fy' WHEN o.ScheduleOn >= @previousFyStart THEN 'previous_fy' ELSE 'older' END AS Bucket",
+    "INTO #ovd",
+    "FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o",
+    "JOIN (SELECT DISTINCT BranchID, CategoryId FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID)) sp",
+    "  ON sp.BranchID = o.CustomerBranchID AND sp.CategoryId = o.CategoryId",
+    "OPTION (RECOMPILE);"
+  ],
+  "checks": [
+    { "id": "K1", "name": "All overdue due dates", "compare": "totals|DistinctOverdueSchedules",
+      "tables": "Step 1, distinct due dates (ComplianceScheduleOn rows).",
+      "query": ["SELECT COUNT(DISTINCT ComplianceScheduleOnID) AS Value FROM #ovd;"] },
+    { "id": "K2", "name": "Sum of the three age buckets", "compare": "totals|SumOfRows",
+      "tables": "Every overdue due date sits in exactly one bucket, so this equals K1.",
+      "query": ["SELECT SUM(n) AS Value FROM (SELECT COUNT(DISTINCT ComplianceScheduleOnID) AS n FROM #ovd GROUP BY Bucket) x;"] },
+
+    { "id": "W1", "name": "Overdue due dates in an age bucket", "compare": "row|OverdueCount",
+      "tables": "Step 1, this bucket (current_fy / previous_fy / older).",
+      "query": ["SELECT COUNT(DISTINCT ComplianceScheduleOnID) AS Value FROM #ovd WHERE Bucket = '{RowKey}';"] },
+    { "id": "W2", "name": "An age bucket's share of all overdue due dates (%)", "compare": "row|SharePct",
+      "tables": "W1 / K1 x 100. Blank when nothing is overdue.",
+      "query": ["SELECT CAST(100.0 * SUM(CASE WHEN Bucket = '{RowKey}' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS DECIMAL(5,1)) AS Value FROM #ovd;"] }
+  ]
+}

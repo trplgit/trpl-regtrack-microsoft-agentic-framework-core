@@ -1,0 +1,153 @@
+{
+  "dimension": "Licence",
+  "rowKeyField": "LicenseTypeID",
+  "rowNameField": "LicenseTypeName",
+  "note": "Written from usp_Insights_Dimension_Licence (sql/21_dimension_licence.sql) as deployed. Verified by SourceMapVerificationTests - every query must return exactly what the report's procedure returned. Licences are counted as of today (no report period). A licence is 'lapsed' when its end date has passed and it did not end another way (terminated, rejected, renewed or not applicable). Date-based figures move every day.",
+  "setup": [
+    "DECLARE @UserID INT = {UserID};",
+    "DECLARE @CustomerID INT = {CustomerID};",
+    "DECLARE @AsOf DATETIME = GETDATE();",
+    "",
+    "-- Step 1. Licences at the locations this user may see (Lic_tbl_LicenseInstance, not deleted).",
+    "IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;",
+    "SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID, NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.EndDate INTO #lic",
+    "FROM Lic_tbl_LicenseInstance li",
+    "WHERE li.CustomerID = @CustomerID AND li.IsDeleted = 0",
+    "  AND li.CustomerBranchID IN (SELECT BranchID FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID));",
+    "",
+    "-- Step 2. Each licence's latest status (Lic_tbl_LicenseStatusTransaction, newest StatusChangeOn) and whether that",
+    "--         status can count as a lapse (status dictionary InsightsEnumPolarity, Semantic = LicenceStatus:",
+    "--         terminated / rejected / renewed / not_applicable can not). No status row at all = can lapse.",
+    "IF OBJECT_ID('tempdb..#lapse') IS NOT NULL DROP TABLE #lapse;",
+    "WITH ranked AS (SELECT lst.LicenseID, lst.StatusID, ROW_NUMBER() OVER (PARTITION BY lst.LicenseID ORDER BY lst.StatusChangeOn DESC) AS rn",
+    "                FROM Lic_tbl_LicenseStatusTransaction lst JOIN #lic l ON l.LicenseId = lst.LicenseID),",
+    "     cls AS (SELECT TRY_CAST(p.RawValue AS INT) AS StatusId,",
+    "                    CASE WHEN p.Meaning IN (N'terminated', N'rejected', N'renewed', N'not_applicable') THEN 0 ELSE 1 END AS LapseEligible",
+    "             FROM dbo.InsightsEnumPolarity p JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1",
+    "             WHERE p.Semantic = 'LicenceStatus' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL)",
+    "SELECT l.LicenseId, c.LapseEligible INTO #lapse",
+    "FROM #lic l LEFT JOIN ranked r ON r.LicenseID = l.LicenseId AND r.rn = 1 LEFT JOIN cls c ON c.StatusId = r.StatusID;",
+    "",
+    "-- Keep today's date for the checks below (each check runs on its own).",
+    "IF OBJECT_ID('tempdb..#asof') IS NOT NULL DROP TABLE #asof;",
+    "SELECT @AsOf AS AsOf INTO #asof;"
+  ],
+  "checks": [
+    {
+      "id": "Z1",
+      "name": "Licences in the report",
+      "compare": "totals|ScopedLicences",
+      "tables": "Step 1.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic;"
+      ]
+    },
+    {
+      "id": "Z2",
+      "name": "Licences with a licence type",
+      "compare": "totals|TypedLicences",
+      "tables": "Step 1 with a LicenseTypeID.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic WHERE LicenseTypeID IS NOT NULL;"
+      ]
+    },
+    {
+      "id": "Z3",
+      "name": "Overall lapsed rate (%)",
+      "compare": "totals|TenantLapsedPct",
+      "tables": "Lapsed licences that have a licence type / ALL licences (typed or not) x 100 - exactly as the procedure does it. Licences with no type (LicenseTypeID -1) count in the bottom number but never as lapsed, so untyped licences pull this rate down.",
+      "query": [
+        "SELECT CAST(CASE WHEN COUNT(*) = 0 THEN 0",
+        "  ELSE 100.0 * SUM(CASE WHEN l.LicenseTypeID IS NOT NULL AND l.EndDate < a.AsOf AND ISNULL(x.LapseEligible, 1) = 1 THEN 1 ELSE 0 END) / COUNT(*) END AS DECIMAL(5,1)) AS Value",
+        "FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a;"
+      ]
+    },
+    {
+      "id": "Z4",
+      "name": "Licence types that have licences",
+      "compare": "totals|LicenceTypesWithLicences",
+      "tables": "Distinct LicenseTypeID in step 1.",
+      "query": [
+        "SELECT COUNT(DISTINCT LicenseTypeID) AS Value FROM #lic WHERE LicenseTypeID IS NOT NULL;"
+      ]
+    },
+    {
+      "id": "Z5",
+      "name": "Licences past end date that ended another way",
+      "compare": "totals|ExcludedTerminalStateLicences",
+      "tables": "End date passed and latest status is terminated / rejected / renewed / not applicable.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a",
+        "WHERE l.EndDate < a.AsOf AND x.LapseEligible = 0 AND l.LicenseTypeID IS NOT NULL;"
+      ]
+    },
+    {
+      "id": "Y1",
+      "name": "A licence type's licences",
+      "compare": "row|TotalLicences",
+      "tables": "Step 1, this LicenseTypeID.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic WHERE LicenseTypeID = {RowKey};"
+      ]
+    },
+    {
+      "id": "Y2",
+      "name": "A licence type's licences still in force",
+      "compare": "row|ActiveLicences",
+      "tables": "End date today or later.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey} AND EndDate >= a.AsOf;"
+      ]
+    },
+    {
+      "id": "Y3",
+      "name": "A licence type's lapsed licences",
+      "compare": "row|Lapsed",
+      "tables": "End date passed and did not end another way (step 2).",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a",
+        "WHERE l.LicenseTypeID = {RowKey} AND l.EndDate < a.AsOf AND ISNULL(x.LapseEligible, 1) = 1;"
+      ]
+    },
+    {
+      "id": "Y4",
+      "name": "A licence type's licences that ended another way",
+      "compare": "row|ExcludedTerminalState",
+      "tables": "End date passed and latest status is terminated / rejected / renewed / not applicable.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a",
+        "WHERE l.LicenseTypeID = {RowKey} AND l.EndDate < a.AsOf AND x.LapseEligible = 0;"
+      ]
+    },
+    {
+      "id": "Y5",
+      "name": "A licence type's licences ending in the next 30 days",
+      "compare": "row|LapsingNext30",
+      "tables": "End date after today and within 30 days.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey}",
+        "  AND EndDate > a.AsOf AND EndDate <= DATEADD(DAY, 30, a.AsOf);"
+      ]
+    },
+    {
+      "id": "Y6",
+      "name": "Locations holding a licence type",
+      "compare": "row|BranchesCovered",
+      "tables": "Distinct CustomerBranch of this type's licences.",
+      "query": [
+        "SELECT COUNT(DISTINCT BranchID) AS Value FROM #lic WHERE LicenseTypeID = {RowKey};"
+      ]
+    },
+    {
+      "id": "Y7",
+      "name": "A licence type's lapsed rate (%)",
+      "compare": "row|LapsedPct",
+      "tables": "Y3 / Y1 x 100.",
+      "query": [
+        "SELECT CAST(CASE WHEN COUNT(*) = 0 THEN 0",
+        "  ELSE 100.0 * SUM(CASE WHEN l.EndDate < a.AsOf AND ISNULL(x.LapseEligible, 1) = 1 THEN 1 ELSE 0 END) / COUNT(*) END AS DECIMAL(5,1)) AS Value",
+        "FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a WHERE l.LicenseTypeID = {RowKey};"
+      ]
+    }
+  ]
+}

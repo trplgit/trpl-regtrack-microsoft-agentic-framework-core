@@ -56,6 +56,13 @@ public sealed record LocationRow
     public int Instances { get; init; }
     public int Overdue { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public int ImprisonmentInstances { get; init; }
     public int ImprisonmentOverdue { get; init; }
     public int CriticalInstances { get; init; }
@@ -65,6 +72,8 @@ public sealed record LocationRow
     public int ActiveChildren { get; init; }
     public decimal? OverduePct { get; init; }
     public decimal? OwnerlessPct { get; init; }
+    /// <summary>[FIX 2026-09-27] Same as NoInstanceOwner above - the procedure's column name for <see cref="OwnerlessPct"/>.</summary>
+    public decimal? NoInstanceOwnerPct { init => OwnerlessPct = value; }
     public decimal? ClosureRatio { get; init; }
     public int? OverdueRank { get; init; }
     // [FIX] StateID/StateName/PeerStateOverduePct/VsPeerStateNormPP: sql/05_dimension_location.sql
@@ -141,6 +150,13 @@ public sealed record RiskRow
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public int ImprisonmentInstances { get; init; }
     public int ImprisonmentOverdue { get; init; }
     public int BranchesCovered { get; init; }
@@ -192,6 +208,13 @@ public sealed record NatureRow
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public int ImprisonmentInstances { get; init; }
     public int ImprisonmentOverdue { get; init; }
     public int CriticalInstances { get; init; }
@@ -255,7 +278,16 @@ public sealed record DepartmentsRow
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public decimal? OwnerlessPct { get; init; }
+    /// <summary>[FIX 2026-09-27] Same as NoInstanceOwner above - the procedure's column name for <see cref="OwnerlessPct"/>.</summary>
+    public decimal? NoInstanceOwnerPct { init => OwnerlessPct = value; }
     public int ImprisonmentInstances { get; init; }
     public int CriticalInstances { get; init; }
     public int DistinctUsers { get; init; }

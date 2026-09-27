@@ -39,14 +39,21 @@ public static class ReasoningSourceMap
            .Replace("{WindowStart}", windowStart.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))
            .Replace("{WindowEnd}", windowEnd.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
 
-    /// <summary>The filled map as compact JSON for the explainer, or null when there is no map or no period.</summary>
+    /// <summary>
+    /// The filled map as compact JSON for the explainer, or null when there is no map, or the map needs
+    /// a report period and the report has none. Licence and BacklogAging are counted as of today, so
+    /// their maps carry no period placeholders and load without one.
+    /// </summary>
     public static string? LoadFilledJson(string dimension, int userId, int customerId, DateTime? windowStart, DateTime? windowEnd, string? baseDirectory = null)
     {
-        if (windowStart is not { } ws || windowEnd is not { } we)
-            return null;
         var map = Load(dimension, baseDirectory);
         if (map is null)
             return null;
+        var needsPeriod = map.SetupText.Contains("{WindowStart}", StringComparison.Ordinal) || map.SetupText.Contains("{WindowEnd}", StringComparison.Ordinal);
+        if (needsPeriod && (windowStart is null || windowEnd is null))
+            return null;
+        var ws = windowStart ?? DateTime.MinValue;
+        var we = windowEnd ?? DateTime.MinValue;
 
         return JsonSerializer.Serialize(new
         {

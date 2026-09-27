@@ -25,7 +25,12 @@ public sealed record RenderHtmlInput(
     // finding a real visual defect in the PREVIOUS attempt - see IReportHtmlAgent.RenderAsync's
     // own doc comment on this same field.
     string? PreviousVisualIssue = null);
-public sealed record RenderHtmlOutput(string Html, long TotalTokens);
+public sealed record RenderHtmlOutput(
+    string Html, long TotalTokens,
+    // [ADDED 2026-09-27] Numbers the model typed into the page that do not trace to the real data
+    // (ReportNumberTracer) - single-dimension reports only, null otherwise. A trailing optional
+    // field: a run recorded before this existed replays with null, i.e. exactly its old path.
+    IReadOnlyList<string>? UntracedNumbers = null);
 
 /// <summary>
 /// Node 7, runs AFTER the publish gate (spec 3) - no point rendering a refused narrative.
@@ -109,6 +114,12 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
             string? totalsJson = null;
             input.DimensionControlTotalsJson?.TryGetValue(dimension, out totalsJson);
             html = Insights.Presentation.DimensionDataInjector.Inject(html, dimension, rowsJson, totalsJson);
+
+            // The fabricated-number check - detection only; the orchestrator decides to re-render
+            // or refuse. The narrative already passed the publish gate, so its numbers count as data.
+            var untraced = Insights.Presentation.ReportNumberTracer.FindUntraced(
+                html, rowsJson, totalsJson, input.Assertions, input.Narrative.Blocks.Select(b => b.Prose));
+            return new RenderHtmlOutput(html, result.TotalTokens, untraced);
         }
 
         return new RenderHtmlOutput(html, result.TotalTokens);

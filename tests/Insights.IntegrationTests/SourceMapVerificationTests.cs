@@ -61,6 +61,107 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
             JsonSerializer.SerializeToElement(result.Assertions), rowSample: int.MaxValue);
     }
 
+    [Theory]
+    [MemberData(nameof(Tenants))]
+    public async Task Risk_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var (ws, we) = Last30Days();
+        var result = await new SqlDimensionRepository(ConnectionString).GetRiskAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Risk", tenantId, userId, ws, we,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: int.MaxValue);
+    }
+
+    [Theory]
+    [MemberData(nameof(Tenants))]
+    public async Task Nature_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var (ws, we) = Last30Days();
+        var result = await new SqlDimensionRepository(ConnectionString).GetNatureAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Nature", tenantId, userId, ws, we,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
+    }
+
+    [Theory]
+    [MemberData(nameof(Tenants))]
+    public async Task Departments_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var (ws, we) = Last30Days();
+        var result = await new SqlDimensionRepository(ConnectionString).GetDepartmentsAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Departments", tenantId, userId, ws, we,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
+    }
+
+    [Theory]
+    [MemberData(nameof(Tenants))]
+    public async Task Internal_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var (ws, we) = Last30Days();
+        var result = await new SqlDimensionRepository(ConnectionString).GetInternalAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Internal", tenantId, userId, ws, we,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
+    }
+
+    [Theory]
+    [MemberData(nameof(Tenants))]
+    public async Task Location_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var (ws, we) = Last30Days();
+        var result = await new SqlDimensionRepository(ConnectionString).GetLocationAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Location", tenantId, userId, ws, we,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
+    }
+
+    /// <summary>
+    /// Licence has no report period - it counts as of today. Tenant 5 is swapped for 1355: on UAT
+    /// tenant 5's own Licence procedure refuses (a licence points to a type missing from the master -
+    /// the proc's deliberate fail-closed referential check), so there is nothing to compare against.
+    /// </summary>
+    [Theory]
+    [InlineData(1285, 11416)]
+    [InlineData(29, 38)]
+    [InlineData(1355, 11885)]
+    public async Task Licence_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var result = await new SqlDimensionRepository(ConnectionString).GetLicenceAsync(userId, tenantId);
+        await VerifyAsync("Licence", tenantId, userId, DateTime.MinValue, DateTime.MinValue,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
+    }
+
+    /// <summary>BacklogAging has no report period - it counts overdue due dates as of today.</summary>
+    [Theory]
+    [MemberData(nameof(Tenants))]
+    public async Task BacklogAging_EveryCheckMatchesTheProcedure(int tenantId, int userId)
+    {
+        var result = await new SqlDimensionRepository(ConnectionString).GetBacklogAgingAsync(userId, tenantId);
+        await VerifyAsync("BacklogAging", tenantId, userId, DateTime.MinValue, DateTime.MinValue,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: int.MaxValue);
+    }
+
+    /// <summary>Events are rare in a 30-day window on UAT, so a full year is checked too - otherwise the per-type checks never run.</summary>
+    [Theory]
+    [InlineData(1285, 11416, 30)]
+    [InlineData(5, 38, 30)]
+    [InlineData(29, 38, 30)]
+    [InlineData(1285, 11416, 365)]
+    [InlineData(5, 38, 365)]
+    [InlineData(29, 38, 365)]
+    public async Task Event_EveryCheckMatchesTheProcedure(int tenantId, int userId, int days)
+    {
+        var we = DateTime.UtcNow.Date.AddDays(1);
+        var ws = we.AddDays(-days);
+        var result = await new SqlDimensionRepository(ConnectionString).GetEventAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Event", tenantId, userId, ws, we,
+            JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
+            JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
+    }
+
     private async Task VerifyAsync(string dimension, int tenantId, int userId, DateTime ws, DateTime we, JsonElement totals, JsonElement rows, JsonElement assertions, int rowSample)
     {
         var map = ReasoningSourceMap.Load(dimension) ?? throw new InvalidOperationException($"No source map for {dimension}.");
@@ -93,7 +194,7 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
                 case "row":
                     foreach (var row in sampled)
                     {
-                        var key = Prop(row, map.RowKeyField)!.Value.GetRawText();
+                        var key = KeyText(Prop(row, map.RowKeyField)!.Value);
                         Compare($"{check.Id}[{map.RowKeyField}={key}]", parts[1], Prop(row, parts[1]),
                             await ScalarAsync(conn, check.QueryText.Replace("{RowKey}", key)));
                     }
@@ -115,7 +216,7 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
                     var name = Prop(a, "ScopeLabel")?.GetString();
                     var row = rowList.FirstOrDefault(r => Prop(r, map.RowNameField)?.GetString() == name);
                     if (row.ValueKind == JsonValueKind.Undefined) { failures.Add($"{check.Id}: no row named '{name}'"); break; }
-                    var key = Prop(row, map.RowKeyField)!.Value.GetRawText();
+                    var key = KeyText(Prop(row, map.RowKeyField)!.Value);
                     Compare($"{check.Id}[{map.RowKeyField}={key}]", $"{parts[1]}.{parts[2]}", Prop(a, parts[2]),
                         await ScalarAsync(conn, check.QueryText.Replace("{RowKey}", key)));
                     break;
@@ -169,6 +270,9 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
             else failures.Add($"{where} {what}: report={e?.ToString(CultureInfo.InvariantCulture) ?? "null"} query={a?.ToString(CultureInfo.InvariantCulture) ?? "null"}");
         }
     }
+
+    /// <summary>A text key (BacklogAging's bucket) goes in bare - the query already quotes '{RowKey}'.</summary>
+    private static string KeyText(JsonElement key) => key.ValueKind == JsonValueKind.String ? key.GetString()! : key.GetRawText();
 
     private static JsonElement? Prop(JsonElement obj, string name) =>
         obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null ? v : null;

@@ -31,7 +31,7 @@ public static partial class ReportClaimExtractor
     /// </summary>
     public static IReadOnlyList<string> ExtractNumbers(string text, IReadOnlySet<string>? ignore = null)
     {
-        var withoutDates = DateLike().Replace(text, " ");
+        var withoutDates = ClockTime().Replace(DateLike().Replace(text, " "), " ");
         var seen = new HashSet<string>();
         var result = new List<string>();
         foreach (Match m in NumberToken().Matches(withoutDates))
@@ -120,6 +120,10 @@ public static partial class ReportClaimExtractor
     // "27 Sep 2026", "Sep 27, 2026", "2026-09-28"
     [GeneratedRegex(@"\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b|\b\d{4}-\d{2}-\d{2}\b", RegexOptions.IgnoreCase)]
     private static partial Regex DateLike();
+
+    // "09:34", "09:34:12 UTC" - a time of day, not a claim.
+    [GeneratedRegex(@"\b\d{1,2}:\d{2}(?::\d{2})?\b")]
+    private static partial Regex ClockTime();
 
     // A number not glued to letters on either side ("12m" and "FY2026" are labels, not claims).
     [GeneratedRegex(@"(?<![\w.,])\d{1,3}(?:,\d{3})+(?:\.\d+)?%?(?![\w])|(?<![\w.,])\d+(?:\.\d+)?%?(?![\w])")]

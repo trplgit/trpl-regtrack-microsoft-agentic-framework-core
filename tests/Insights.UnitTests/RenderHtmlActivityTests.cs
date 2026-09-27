@@ -151,6 +151,25 @@ public class RenderHtmlActivityTests
         Assert.Contains("\"UsersReported\":1", result.Html);
     }
 
+    [Fact]
+    public async Task RunAsync_SingleDimension_ListsTypedNumbersThatDoNotTraceToTheData()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var rows = new Dictionary<string, string> { ["Act"] = """[{"ActID":1,"ActName":"Factories Act","Instances":20,"Overdue":15},{"ActID":2,"ActName":"Gratuity Act","Instances":13,"Overdue":13}]""" };
+        var totals = new Dictionary<string, string> { ["Act"] = """{"ScopedInstances":33,"OverdueInstances":28}""" };
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><p>28 of 33 overdue (84.8%)</p><p>1,640 penalties</p></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Act"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(DimensionSelectionComposition.Build(["Act"]), new NarrativeResult([]), [], "T",
+            DimensionSelectionComposition.ReportType, new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc),
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Act"));
+
+        Assert.Equal(["1,640"], result.UntracedNumbers);
+    }
+
     /// <summary>Regression guard - today's exact behavior when no dimension-specific agent is registered yet (the real current state for every dimension).</summary>
     [Fact]
     public async Task RunAsync_SingleDimensionRequest_FallsBackToGenericAgentWhenNoDimensionSpecificOneRegistered()

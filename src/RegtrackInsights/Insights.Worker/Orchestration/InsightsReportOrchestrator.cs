@@ -937,6 +937,26 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     // reasoning as the structure/vision gates already documented on this loop - a
                     // truncated/malformed render is exactly the kind of per-call sampling miss a
                     // retry exists for, not a defect in the fixed input.
+                    // [ADDED 2026-09-27] Fabricated-number gate (CLAUDE.md non-negotiables #2/#5):
+                    // RenderHtmlActivity lists every number the model typed that does not trace to
+                    // the real rows / totals / assertions / verified narrative. Same retry mechanism
+                    // as the vision gate below - the feedback goes into the next render attempt; on
+                    // the last attempt the refusal propagates and the report is refused, never
+                    // published with a number nobody can trace. Read from the activity OUTPUT (safe
+                    // on replay); a run recorded before this field existed replays with null and
+                    // takes exactly its old path, so no orchestrator version bump.
+                    if (renderResult.UntracedNumbers is { Count: > 0 } untraced)
+                    {
+                        previousVisualIssue =
+                            $"these numbers on the page do not come from the data: {string.Join(", ", untraced)}. " +
+                            "Every number you type must be a value from dimension_rows, dimension_control_totals, the assertions or the narrative, " +
+                            "or a plain share, gap, sum or count of them. If you cannot trace a number, leave it out, or let the page script compute it from #insights-data.";
+                        throw new OrchestrationRefusedException(
+                            "UNTRACEABLE_NUMBERS",
+                            "We couldn't generate this report to our accuracy standard. Our team has been notified.",
+                            internalDiagnostics: [$"Render attempt {renderAttempt}: numbers not traceable to the data: {string.Join(", ", untraced)}"]);
+                    }
+
                     var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(forwardStyled.Html));
                     var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
                     // Second normalize call: the loop-closing re-check (item 13, already built and tested) -

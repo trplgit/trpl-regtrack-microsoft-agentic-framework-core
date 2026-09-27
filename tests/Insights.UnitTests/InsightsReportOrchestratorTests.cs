@@ -166,6 +166,98 @@ public class InsightsReportOrchestratorTests
         Assert.Equal("The KPI tile row overlaps the finding cards below it.", capturedRenderInputs[1].PreviousVisualIssue);
     }
 
+    [Fact]
+    public async Task RunTask_RenderTypesUntraceableNumbers_RetriesRenderWithThoseNumbersNamed()
+    {
+        var (context, capturedRenderInputs) = SetupRenderChain(
+            new RenderHtmlOutput("<html></html>", 1000, ["4,372", "63.7%"]),
+            new RenderHtmlOutput("<html></html>", 1000, []));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object,
+            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38));
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
+        Assert.Equal(2, capturedRenderInputs.Count);
+        Assert.Null(capturedRenderInputs[0].PreviousVisualIssue);
+        Assert.Contains("4,372, 63.7%", capturedRenderInputs[1].PreviousVisualIssue);
+        // The bad page never reached sanitize or publish - only the clean second attempt did.
+        context.Verify(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunTask_EveryRenderTypesUntraceableNumbers_RefusesAndNeverPersists()
+    {
+        var bad = new RenderHtmlOutput("<html></html>", 1000, ["4,372"]);
+        var (context, _) = SetupRenderChain(bad, bad, bad);
+
+        var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() => new InsightsReportOrchestrator().RunTask(context.Object,
+            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38)));
+
+        Assert.Equal("UNTRACEABLE_NUMBERS", ex.ReasonCode);
+        context.Verify(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()), Times.Exactly(3));
+        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+    }
+
+    private static (Mock<OrchestrationContext> Context, List<RenderHtmlInput> RenderInputs) SetupRenderChain(params RenderHtmlOutput[] renders)
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc));
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
+        context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ComputeScoreOutput(new OverallHealth(null, "Needs Attention", "flat", "test", []), [], "{}"));
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 1000));
+        context.Setup(c => c.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ReflectOnNarrativeOutput(new NarrativeReflectionResult(ReflectionVerdict.Approve, []), 1000));
+        context.Setup(c => c.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PublishGateOutput(true));
+
+        var renderInputs = new List<RenderHtmlInput>();
+        // Attempt N gets renders[N-1] (the last one repeats).
+        context.Setup(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
+            .Callback<string, string, RetryOptions, object[]>((_, _, _, args) => renderInputs.Add((RenderHtmlInput)args[0]))
+            .Returns(() => Task.FromResult(renders[Math.Min(renderInputs.Count, renders.Length) - 1]));
+
+        context.Setup(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectFontOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageGridOutput>(typeof(InjectCoverageGridActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageGridOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageCssOutput>(typeof(InjectCoverageCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new VisionQaOutput(false, null, 0));
+        context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PersistOutput("33333333-3333-3333-3333-333333333333"));
+
+        return (context, renderInputs);
+    }
+
     /// <summary>
     /// [ADDED 2026-09-14, UPDATED 2026-09-21] FreehandDimensions.Names (Act/BacklogAging/
     /// Departments/Licence/Location) get a real LLM composition call instead of
