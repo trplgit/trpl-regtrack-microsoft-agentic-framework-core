@@ -67,9 +67,10 @@ public sealed class PersistActivity(
     ILogger<PersistActivity> logger, ITenantReportLock tenantReportLock, string? localFallbackDirectory = null)
     : AsyncTaskActivity<PersistInput, PersistOutput>
 {
-    protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) => RunAsync(input);
+    protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) =>
+        RunAsync(input, context.OrchestrationInstance.ExecutionId);
 
-    internal async Task<PersistOutput> RunAsync(PersistInput input)
+    internal async Task<PersistOutput> RunAsync(PersistInput input, string? executionId = null)
     {
         // [CHANGED 2026-09-18] Was Guid.NewGuid() - fine exactly once, a real duplicate-row/
         // duplicate-blob generator on DTFx's at-least-once activity redelivery (a pod dying
@@ -78,7 +79,9 @@ public sealed class PersistActivity(
         // from the same (tenant, scope, reportType, period) key InsightsRunId.For already hashes
         // for the orchestration instance id itself means a redelivered attempt targets the SAME
         // row/blob path, not a new one - see InsightsRunId.ReportId's own doc comment.
-        var reportId = InsightsRunId.ReportId(input.TenantId, input.ScopeDescriptor, input.ReportType, input.Period);
+        // [CHANGED 2026-09-27] + executionId - see InsightsRunId.ReportId's own note: a new run for
+        // the same key must get a new report, a redelivered attempt of THIS run must not.
+        var reportId = InsightsRunId.ReportId(input.TenantId, input.ScopeDescriptor, input.ReportType, input.Period, executionId);
         var generatedAtUtc = DateTime.UtcNow;
 
         if (!string.IsNullOrWhiteSpace(localFallbackDirectory))
