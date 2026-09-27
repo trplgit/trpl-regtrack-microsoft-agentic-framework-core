@@ -5,6 +5,9 @@ one decorative corner shape, tinted plot areas, meaning-tinted summary cards). F
 v3 render came out flat white while earlier renders had these touches; now they are required.
 Section 11 - never drop real rows. Section 12 - plain CEO/CFO words, every narrative point shown.
 Section 13 - rows are injected by code as #insights-data; the model reads them, never types them.
+REVISED same day after side-by-side feedback: section 10 now = clean white cards with colour in
+tiles/tags/charts (the washes and corner shape looked ugly); section 12 = no "What this means"
+heading; section 14 = small blue company-name label, big headline, blue reporting-window box.
 
 **[v3, 2026-09-27]** Copied from the previous version (which is untouched). New in v3: every chart
 gets an "i" button that opens a "How to read this chart" panel (section 7), every chart is
@@ -246,50 +249,68 @@ tag), or write the SVG marks out directly - both are fine.
   never combined", "results can differ because of the mix of roles in each group".
 
 
-**10. Atmosphere - soft colour and depth (NEW in v4, required on every page).** A flat white page
-reads as unfinished. Real feedback: renders WITH these touches were preferred, and a render without
-them looked "blunt". Use exactly these, every time (they are part of the shared theme, not optional
-decoration):
+**10. Look and colour - clean white cards, colour where it means something (v4, REVISED 2026-09-27).**
+Real feedback: colour belongs in the number tiles, charts and small labels - AND every section card
+gets a soft coloured background wash with one faint corner circle, toned by that section's meaning
+(liked: "every tab background should be these coloured backgrounds"). The page itself stays plain.
+Build every page that way:
 
 ```css
-/* The lead (hero) section: a soft wash plus one decorative corner shape. Pick the wash by the
-   hero's own tone: .hero--alert when the lead finding is bad/late/at-risk, .hero--calm otherwise. */
-.hero{position:relative;overflow:hidden;border-radius:16px;border:1px solid var(--c-border);padding:28px 30px}
-.hero--alert{background:linear-gradient(120deg,#fdf1e2 0%,#fffaf4 45%,#ffffff 100%);border-color:#f1d9b8}
-.hero--calm{background:linear-gradient(135deg,#ffffff 0%,#f6f9fe 55%,#eaf2fc 100%);border-color:#dbe6f5}
-.hero::before{content:"";position:absolute;right:-70px;top:-70px;width:240px;height:240px;border-radius:50%;
-  background:radial-gradient(circle at 30% 30%,rgba(18,90,171,.10),rgba(18,90,171,.04) 60%,transparent 70%);pointer-events:none}
-.hero--alert::before{background:radial-gradient(circle at 30% 30%,rgba(224,161,6,.16),rgba(224,161,6,.05) 60%,transparent 70%)}
-.hero > *{position:relative}
+/* Page: plain and light. Every section card: a soft wash in its tone + one faint corner circle. */
+body{background:#f7f8fb}
+.card{position:relative;overflow:hidden;border:1px solid var(--c-border);border-radius:16px;padding:26px 28px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.05)}
+.card::before{content:"";position:absolute;right:-70px;top:-70px;width:240px;height:240px;border-radius:50%;pointer-events:none}
+.card > *{position:relative}
+.card--alert{background:linear-gradient(120deg,#fdf1e2 0%,#fffaf4 45%,#ffffff 100%);border-color:#f1d9b8}
+.card--alert::before{background:radial-gradient(circle at 30% 30%,rgba(224,161,6,.16),rgba(224,161,6,.05) 60%,transparent 70%)}
+.card--bad{background:linear-gradient(120deg,#fdeceb 0%,#fff7f6 45%,#ffffff 100%);border-color:#f3cfcb}
+.card--bad::before{background:radial-gradient(circle at 30% 30%,rgba(196,50,40,.12),rgba(196,50,40,.04) 60%,transparent 70%)}
+.card--calm{background:linear-gradient(135deg,#ffffff 0%,#f6f9fe 55%,#eaf2fc 100%);border-color:#dbe6f5}
+.card--calm::before{background:radial-gradient(circle at 30% 30%,rgba(18,90,171,.10),rgba(18,90,171,.04) 60%,transparent 70%)}
+.card--ok{background:linear-gradient(135deg,#ffffff 0%,#f4fbf6 55%,#e6f5ea 100%);border-color:#cfe8d6}
+.card--ok::before{background:radial-gradient(circle at 30% 30%,rgba(22,128,74,.10),rgba(22,128,74,.04) 60%,transparent 70%)}
 
-/* Every other section card: white with the faintest cool fade, soft shadow. */
-.card{background:linear-gradient(180deg,#ffffff 0%,#fbfcfe 100%);border:1px solid var(--c-border);border-radius:14px;
-  box-shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.04)}
+/* A small coloured label above a card's title naming what kind of finding it is
+   ("Estate-wide dependency", "Needs attention", "Working well"). */
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:4px 10px;border-radius:8px}
+.tag--bad{background:var(--bad-bg);color:var(--bad)}
+.tag--warn{background:var(--warn-bg);color:var(--warn)}
+.tag--ok{background:var(--ok-bg);color:var(--ok)}
+.tag--brand{background:var(--c-light-blue);color:var(--c-brand)}
 
-/* Chart plot areas: a soft tinted field, never bare white. */
-.plot{background:linear-gradient(180deg,#f9fbfe 0%,#f4f7fc 100%);border:1px solid #e6ecf5;border-radius:12px}
-/* A chart whose horizontal axis has a meaning on each side (early vs late, better vs worse than
-   average, below vs above a line) gets a directional wash matching its own colours: */
-.plot--diverging{background:linear-gradient(90deg,#e8f2fd 0%,#f7fafe 38%,#ffffff 50%,#fef8ef 62%,#fcf0de 100%)}
-
-/* Summary number cards take the tint of their meaning (real severity only): */
-.kpi{border-radius:12px;border:1px solid var(--c-border);background:#f8fafc}
+/* Summary number tiles: this is where most of the page's colour lives. */
+.kpi{border-radius:12px;border:1px solid var(--c-border);background:#ffffff;padding:16px 16px 18px}
+.kpi-v{font-size:26px;font-weight:700;line-height:1.15;white-space:nowrap}
 .kpi--bad{background:var(--bad-bg);border-color:var(--bad-stroke)}
+.kpi--bad .kpi-v{color:var(--bad)}
 .kpi--warn{background:var(--warn-bg);border-color:var(--warn-stroke)}
 .kpi--ok{background:var(--ok-bg);border-color:var(--ok-stroke)}
 .kpi--brand{background:var(--c-light-blue);border-color:#c9dcf3}
+
+/* Chart drawing areas: a faint tinted field with a thin border (not a gradient wash). */
+.plot{background:#fbfcfe;border:1px solid #e6ecf5;border-radius:12px}
+
+/* One small grey note per card at most, for a caution a reader must not miss. */
+.note{background:#f4f6f9;border-radius:10px;padding:12px 14px;font-size:13.5px;color:var(--c-text-2)}
 ```
 
 Rules:
-- Exactly ONE `.hero` per page (the composition plan's hero section), with ONE decorative
-  `::before` shape. No other decorative shapes anywhere - restraint is what keeps it elegant.
-- Every chart's drawing area sits in a `.plot` (or `.plot--diverging` when its horizontal axis is
-  two-sided). Script-built charts get this class on their container.
-- A `.kpi--bad/--warn/--ok` tint only when the number genuinely carries that meaning (e.g. overdue
-  = bad, unassigned = warn, reconciled = ok); plain counts stay neutral `.kpi`, at most one neutral
-  card per row may use `.kpi--brand` for emphasis.
-- These colours are backgrounds only - text contrast stays as the palette defines it; never put
-  text directly on the corner shape.
+- EVERY section card carries exactly one tone class, matching its `.tag`: `.card--bad` (clearly
+  bad: overdue, prison-term exposure), `.card--alert` (needs attention, at risk), `.card--calm`
+  (neutral facts, workload, structure), `.card--ok` (working well). Mix tones down the page as the
+  content really is - never every card the same tone unless every section really is. The wash and
+  corner circle come only from these classes; no other decorative shapes or page gradients. Text
+  never sits on the circle; it is decoration only.
+- Give the summary number tiles real colour: a tile gets `.kpi--bad/--warn/--ok` when its number
+  genuinely carries that meaning (overdue = bad, unassigned or at risk = warn, on time = ok), and
+  one or two neutral headline tiles may use `.kpi--brand`. A row of four tiles should normally show
+  two or three tints, not four plain white boxes. A tile's number never wraps onto two lines
+  (`white-space:nowrap`; "84.8%" stays together).
+- Charts use strong, clear colours from the palette (brand blue, teal, amber, red for bad) - filled
+  marks, not pale outlines. Every chart's drawing area sits in a `.plot`.
+- Every section card starts with a `.tag` (coloured by the section's real tone), then its title with
+  the "i" button, then its description text (section 12), then its visuals.
 - Class names above are the contract: use them as written so every report looks alike. You may
   add your own classes alongside them.
 
@@ -303,11 +324,13 @@ decoration and CSS, never the data. The rows themselves are never typed by you -
 **12. Words on the page - written for a CEO or CFO (NEW in v4, required).** Real feedback: "the
 content is a little bit low" and too full of jargon. The narrative you are given now carries 3-5
 insight points per section (one per line, separated by `\n`).
-- **Show every narrative point, in full.** Each section shows its narrative points as a short,
-  readable list under a small heading such as "What this means" - one point per line, a little
-  space between them, never merged into one paragraph, never shortened, never dropped. A line
-  starting "Worth checking:" gets a subtle callout style (light `--c-light-blue` background, brand
-  left border) so it stands out as the thing to act on.
+- **Show the narrative points as the section's own description - NO "What this means" heading
+  (REVISED 2026-09-27).** Real feedback: a "What this means" heading with a bullet list after every
+  section looked ugly and repetitive - remove it entirely, never write that heading. Instead put the
+  section's narrative points as its description text directly under the section title: one or two
+  short paragraphs in plain words (join the points into flowing sentences; keep every number and
+  fact, drop nothing true). A point starting "Worth checking:" becomes that card's one `.note` at the
+  bottom (e.g. "**Worth checking:** what cover exists for ...") - at most one note per card.
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
@@ -318,6 +341,15 @@ insight points per section (one per line, separated by `\n`).
   marginal, denominator, materiality floor, control totals, reconciled, proxy, flow metric.
 - No filler: leverage, robust, holistic, landscape, ecosystem, delve, pivotal, crucial, notably,
   underscores, paradigm, granular, actionable insights, stakeholders, going forward, overall.
+- **No messages meant for developers or testers - anywhere a reader can see (ADDED 2026-09-27).**
+  The reader is a business owner, not the team that built this. Never show: "100% reconciled",
+  "reconciled", "verified", "validated", "no fabricated data", "every number traces to the data",
+  "checked against the source", "typed assertion", assertion or finding ids (A-..., F-...), field or
+  column names (`ScopedInstances`, `OverduePct` ...), proc/SQL/table names, "data_quality", "per the
+  composition plan", "as instructed", notes about how the page was built or which rules it follows,
+  or any statement about the report's own accuracy. Say what the numbers mean for the business -
+  never how they were produced or checked. This applies to chips, badges, footers, tooltips, "i"
+  panels and small print too.
 - Short sentences - aim under 20 words. Numbers written plainly with what they count.
 - Counts are whole numbers ("2 laws", never "2.00"); percentages one decimal ("84.8%").
 
@@ -391,14 +423,38 @@ renewal/termination/rejection/not-applicable — NOT a lapse), `LapsingNext30`, 
 | A per-branch or per-state breakdown | **NOT AVAILABLE** — rows are per-type; `BranchesCovered` is a raw count only. |
 | Severity ranking by consequence | **NOT AVAILABLE** — no field ranks types by consequence, rank only by real rate/count. |
 
+## 14. The top of the page - company name, headline, period (v4, REVISED 2026-09-27)
+
+Real feedback: a separate header block (company name + report name + generated date) above the
+page looked wrong. The liked layout is: a small blue label, a big headline, one line under it, then
+a blue "reporting window" box. Build exactly that:
+
+1. **Small blue label** - the company name, an EXACT copy of `tenant_name` (same spelling, same
+   capitals - no `text-transform`, nothing added before or after, no report name). 13px, weight 600,
+   letter-spacing .08em, brand colour. This is the only place the company name appears on the page
+   (plus `<title>`: "{tenant_name} — {short report name}").
+2. **Headline** - the lead finding in plain words (from the composition plan's hero), 44-52px,
+   weight 800, dark text, tight line-height (1.05), at most two lines.
+3. **One line under it** - one or two plain sentences saying what that means, 17px, secondary text.
+4. **Reporting window box** - light blue box (`--c-light-blue` background, #c9dcf3 border, 12px
+   radius, small document icon on the left). Bold brand-colour first line: "Reporting window: " +
+   `report_period.label` copied exactly (e.g. "Reporting window: Last 30 days · 29 Aug 2026 – 27 Sep
+   2026"). Second line: the `window` data_quality meaning in plain words (what is and is not
+   counted). When `report_period` is missing or null the first line is "As of " + the `generated_at`
+   date, and the second line says the figures are counted as of that day - never invent a range.
+
+No other header block, no report-type label, no badge above or beside these. "Generated {date}"
+goes only in the small print at the very bottom of the page.
+
 ## Self-check before returning
 
-- (v4) Section 12: every narrative point shown in full as its own line, "Worth checking" lines
-  styled as callouts, no internal words or filler anywhere a reader sees.- (v4) Section 13: every per-row chart/table/grid is built from `ROWS` read out of
+- (v4) Section 14: the page starts with the small blue label = exact `tenant_name` and nothing else, then the big headline, one line, then the blue "Reporting window: ..." box.
+- (v4) No developer/tester messages anywhere on the page: no "reconciled", "verified", "no fabricated data", ids, field names or notes on how the report was built.
+- (v4) Section 12: no "What this means" heading anywhere; each section's narrative points are its
+  description text under the title, every fact kept; at most one `.note` per card; plain words.- (v4) Section 13: every per-row chart/table/grid is built from `ROWS` read out of
   `#insights-data`; no row data typed anywhere in the page; shown counts come from `ROWS`.- (v4) Section 11: the number of rows embedded in the page equals the number of rows in
-  `dimension_rows` - count them before returning.- (v4) Section 10: exactly one `.hero` with its wash and one corner shape; every section in a
-  `.card`; every chart's drawing area in a `.plot` (two-sided axes use `.plot--diverging`);
-  summary cards tinted only by real meaning. No bare flat-white page.- (v3) EVERY chart has an "i" button with a "How to read this chart" panel built with the exact
+  `dimension_rows` - count them before returning.- (v4) Section 10: every section card has one `.card--bad/--alert/--calm/--ok` tone class (soft wash + corner circle) matching its `.tag`; colour also in `.kpi` tiles (two or three tints per row) and charts; tile numbers never wrap.
+- (v3) EVERY chart has an "i" button with a "How to read this chart" panel built with the exact
   `.hr` mechanism above; every visible component of that chart (marks, axes, size, every colour,
   every reference line with its value, highlights, scale, cards, data notes) has its own row; the
   swatch colours match the chart's real colours; each panel id is unique.

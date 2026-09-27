@@ -24,7 +24,12 @@ public sealed record RenderHtmlInput(
     // [ADDED 2026-09-14] Set only when this attempt is a retry triggered by VisionQaActivity
     // finding a real visual defect in the PREVIOUS attempt - see IReportHtmlAgent.RenderAsync's
     // own doc comment on this same field.
-    string? PreviousVisualIssue = null);
+    string? PreviousVisualIssue = null,
+    // [ADDED 2026-09-27] The report period, for the header's "Last 30 days · 29 Aug – 27 Sep 2026"
+    // line (ReportPeriodContext.Describe). Trailing optional fields - replay-safe.
+    string? Period = null,
+    DateTime? WindowStart = null,
+    DateTime? WindowEnd = null);
 public sealed record RenderHtmlOutput(
     string Html, long TotalTokens,
     // [ADDED 2026-09-27] Numbers the model typed into the page that do not trace to the real data
@@ -88,6 +93,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
+        using var _period = ReportPeriodContext.Push(ReportPeriodContext.Describe(input.Period, input.WindowStart, input.WindowEnd));
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
             input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.PreviousVisualIssue, CancellationToken.None);

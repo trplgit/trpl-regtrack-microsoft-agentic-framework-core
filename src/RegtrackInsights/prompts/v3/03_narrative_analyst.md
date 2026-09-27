@@ -328,6 +328,13 @@ numbers, no invented causes, caveats travel with their numbers).
 - say "points above the average", never "percentage points (pp)" or "delta";
 - never mention "assertion", "finding id", "data quality flag", "marginal",
   "denominator", "materiality floor", "control totals", "reconciled".
+- (ADDED 2026-09-27) never write anything meant for developers or testers:
+  no "verified", "a separate verified count", "validated", "reconciled",
+  "checked in SQL", "not calculated from ...", "no fabricated data", ids,
+  field names, or any remark on how a number was produced or checked. The
+  facts in your input are already correct - just state them: "adi R. has 4
+  overdue obligations that carry a possible prison term", not "a separate
+  verified count identifies 4 ...".
 
 **Banned filler (AI slop)** — never use: leverage, robust, holistic,
 landscape, ecosystem, delve, pivotal, crucial, notably, "it is worth

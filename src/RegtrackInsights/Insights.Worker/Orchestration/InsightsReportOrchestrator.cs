@@ -807,7 +807,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     new RenderHtmlInput(plan, narrative, dimensions.Assertions, gathered.TenantName, input.ReportType, context.CurrentUtcDateTime, input.Priority, locationRows, dimensionRowsJson, dimensionControlTotalsJson,
                         DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null,
                         ReqId: input.ReqId,
-                        PreviousVisualIssue: previousVisualIssue));
+                        PreviousVisualIssue: previousVisualIssue,
+                        Period: input.Period, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder
