@@ -127,6 +127,12 @@ public static class PaidReportAgentsRegistration
         IToolInvocationRecorder toolInvocationRecorder = toolInvocationConnectionString is { Length: > 0 } tics
             ? new SqlToolInvocationRecorder(tics)
             : IToolInvocationRecorder.Null;
+        // [ADDED 2026-09-26] Exposes the SAME instance via DI - previously only a local variable
+        // captured in the closures below (onSqlToolInvoked/onMemoryWriteInvoked). BuildReasoningTraceActivity
+        // needs to resolve this independently to read a run's own tool-invocation rows back out;
+        // registering the already-built instance (not a second factory) guarantees both paths
+        // share one recorder rather than opening two separate connections/instances.
+        services.AddSingleton(toolInvocationRecorder);
 
         services.AddSingleton<InsightsCostMetrics>();
         services.AddSingleton<ILlmUsageRecorder>(sp => sp.GetRequiredService<InsightsCostMetrics>());
@@ -224,6 +230,16 @@ public static class PaidReportAgentsRegistration
         services.AddSingleton<IVisionQaAgent>(sp => new MafVisionQaAgent(MafAgentFactory.CreateJsonAgent(
             visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
             LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+
+        // [ADDED 2026-09-26] Reasoning-trace explainer - deliberately gpt-4o-mini, and the SAME
+        // Llm:Maf endpoint/apikey every other non-freehand agent in this file uses (user's explicit
+        // instruction) - not FreehandDimensions' sol deployment, and not a new config key. Non-
+        // reasoning model, so CreateSimpleTextAgent (never CreateJsonAgent/CreateTextAgent - see
+        // that method's own doc comment on why gpt-4o-mini 400s on ReasoningOptions).
+        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateSimpleTextAgent(
+            endpoint, "gpt-4o-mini", apiKey, "ReasoningExplainerAgent",
+            "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
+            LoadPromptSync(sp, "08_reasoning_explainer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed

@@ -379,8 +379,29 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         ReadOnlySqlFetchTool's #scoped narrowing - closes a real gap where a live SQL tool call
         during narrate saw the tenant's full all-time data even when the dimension's own fetch was
         window-scoped. Trailing optional fields, default null, so an in-flight 4.1 instance replays
-        identically - no coordinated release needed, this is C#-only, no new SQL dependency. */
-    public const string Version = "4.2";
+        identically - no coordinated release needed, this is C#-only, no new SQL dependency.
+
+        Bumped 4.2 -> 4.3: a NEW conditional ScheduleTask call, BuildReasoningTraceActivity, added
+        immediately after PersistActivity - a real call-sequence change, not payload-shape-only.
+        Only reachable when freehandDimensionName is not null (the same single-dimension freehand
+        gate AnalyzeAndNarrateActivity already uses) - every fixed_holistic/multi-dimension/non-
+        freehand run's call sequence is completely unchanged. PersistOutput also gains
+        GeneratedAtUtc (the real timestamp this report's row/blob were built with, including on the
+        redelivery/lost-the-race short-circuit paths, which now look it up rather than assuming a
+        freshly re-derived DateTime.UtcNow) - needed so the new activity's reasoning-trace blob path
+        matches what ReportContentService will later re-derive from GeneratedReport.GeneratedAtUtc.
+        [VERIFY BEFORE DEPLOY] any in-flight 4.2 freehand-single-dimension instance replaying past
+        its own PersistActivity call under 4.3 would now also expect this new ScheduleTask call in
+        its history - check for in-flight instances of that exact shape before this deploys, same
+        reasoning as every other additive-call-sequence bump in this file's own history.
+        [UPDATED 2026-09-26] BuildReasoningTraceActivity's collaborators (IReasoningExplainerAgent,
+        IReasoningTraceStore) are now WIRED FOR REAL in PaidReportAgentsRegistration.cs/
+        WorkerRegistration.cs (gpt-4o-mini on the same Llm:Maf endpoint/key, same blob container the
+        report itself uses) - it is NO LONGER inert on a normally-configured host. Every freehand-
+        single-dimension run now bills one extra small-model call and one extra blob write after
+        persist. Still fails soft (never blocks/fails the real report) and still resolves to a true
+        no-op ONLY on a host that genuinely has none of those services registered. */
+    public const string Version = "4.3";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
     // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
@@ -520,6 +541,9 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             string? freehandDimensionName = null;
             string? freehandRowsJson = null;
             string? freehandControlTotalsJson = null;
+            // [ADDED 2026-09-26] Same hoisting reasoning as the two fields above - needed again,
+            // much further down, by BuildReasoningTraceActivity after persist.
+            string? freehandDataQualityJson = null;
             if (input.ReportType == FixedHolisticComposition.ReportType)
             {
                 plan = FixedHolisticComposition.Build();
@@ -544,6 +568,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 freehandDimensionName = soleDimension;
                 freehandRowsJson = dimensionJson.GetProperty("Rows").GetRawText();
                 freehandControlTotalsJson = dimensionJson.GetProperty("ControlTotals").GetRawText();
+                freehandDataQualityJson = dimensionJson.GetProperty("DataQuality").GetRawText();
                 var composeResult = await context.ScheduleWithRetry<ComposeFreehandDimensionOutput>(
                     typeof(ComposeFreehandDimensionActivity).Name, "1.0",
                     new RetryOptions(TimeSpan.FromSeconds(3), maxNumberOfAttempts: 3)
@@ -554,7 +579,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     new ComposeFreehandDimensionInput(
                         soleDimension, dimensions.Assertions, dimensions.Findings,
                         freehandRowsJson, freehandControlTotalsJson,
-                        dimensionJson.GetProperty("DataQuality").GetRawText(),
+                        freehandDataQualityJson,
                         input.Priority, input.ReqId));
                 ChargeAndCheck(composeResult.TotalTokens);
                 plan = composeResult.Plan;
@@ -985,8 +1010,25 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", new PlaywrightQaInput(finalStructureChecked.Html));
 
             SetStage(InsightsRunStage.Complete, final: true);
-            return await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
+            var persistResult = await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
                 new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId, input.RequestedDimensions));
+
+            // [ADDED 2026-09-26] Node 12b - only for the freehand single-dimension path (the only
+            // shape with a real CompositionPlan + Assertions/Findings for one dimension). Fails
+            // soft, always (see BuildReasoningTraceActivity's own doc comment) - never allowed to
+            // affect what this method returns. LIVE on a normally-configured host (real
+            // IReasoningExplainerAgent/IReasoningTraceStore - see this class's own Version history
+            // comment above), not merely wired-but-inert.
+            if (freehandDimensionName is not null && Guid.TryParse(persistResult.ReportId, out var reportGuid))
+            {
+                _ = await context.ScheduleTask<BuildReasoningTraceOutput>(typeof(BuildReasoningTraceActivity).Name, "1.0",
+                    new BuildReasoningTraceInput(
+                        reportGuid, input.TenantId, input.ReportType, persistResult.GeneratedAtUtc,
+                        freehandDimensionName, plan, dimensions.Assertions, dimensions.Findings,
+                        freehandRowsJson!, freehandControlTotalsJson, freehandDataQualityJson));
+            }
+
+            return persistResult;
         }
         finally
         {

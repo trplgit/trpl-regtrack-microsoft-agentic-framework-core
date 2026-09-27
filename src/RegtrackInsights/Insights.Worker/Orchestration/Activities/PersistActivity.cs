@@ -20,7 +20,15 @@ public sealed record PersistInput(
 /// [ADDED 2026-09-12] Set only when Reports:LocalFallbackDirectory is configured - see
 /// PersistActivity's own doc comment. Null on every normal (encrypt/blob/SQL) persist.
 /// </param>
-public sealed record PersistOutput(string ReportId, string? LocalFilePath = null);
+/// <param name="GeneratedAtUtc">
+/// [ADDED 2026-09-26] The REAL timestamp this report's row/blob path were built with - never a
+/// freshly re-derived DateTime.UtcNow from a later step. On the redelivery/lost-the-race short-
+/// circuit paths (an existing row already won), this is that row's OWN GeneratedAtUtc, not this
+/// invocation's. Needed by BuildReasoningTraceActivity to derive the SAME AzureReasoningTraceStore
+/// blob path ReportContentService will later re-derive from GeneratedReport.GeneratedAtUtc - any
+/// mismatch here would make the trace unfindable at read time.
+/// </param>
+public sealed record PersistOutput(string ReportId, string? LocalFilePath = null, DateTime GeneratedAtUtc = default);
 
 /// <summary>
 /// Node 12: build order item 14's write path. Encrypt -> blob -> SQL index row, replacing
@@ -79,7 +87,7 @@ public sealed class PersistActivity(
             var safePeriod = string.Join("_", input.Period.Split(Path.GetInvalidFileNameChars()));
             var localPath = Path.Combine(localFallbackDirectory, $"{input.TenantId}-{input.ReportType}-{safePeriod}-{reportId}.html");
             await File.WriteAllTextAsync(localPath, input.Html);
-            return new PersistOutput(reportId.ToString(), LocalFilePath: localPath);
+            return new PersistOutput(reportId.ToString(), LocalFilePath: localPath, GeneratedAtUtc: generatedAtUtc);
         }
 
         try
@@ -97,7 +105,7 @@ public sealed class PersistActivity(
             {
                 logger.LogInformation(
                     "PersistActivity: report {ReportId} already persisted - redelivered activity, returning the existing row untouched.", reportId);
-                return new PersistOutput(existing.Id.ToString());
+                return new PersistOutput(existing.Id.ToString(), GeneratedAtUtc: existing.GeneratedAtUtc);
             }
 
             var envelope = await encryptor.EncryptAsync(input.Html);
@@ -133,17 +141,18 @@ public sealed class PersistActivity(
             // a no-op once another replica's transaction has already committed the same reportId.
             return await tenantReportLock.ExecuteWithLockAsync(db, input.TenantId, async () =>
             {
-                if (await db.GeneratedReports.AnyAsync(r => r.Id == reportId))
+                var winner = await db.GeneratedReports.FindAsync(reportId);
+                if (winner is not null)
                 {
                     logger.LogWarning(
                         "PersistActivity: lost the race for report {ReportId} to another replica while waiting for the tenant lock - returning theirs.", reportId);
-                    return new PersistOutput(reportId.ToString());
+                    return new PersistOutput(reportId.ToString(), GeneratedAtUtc: winner.GeneratedAtUtc);
                 }
 
                 db.GeneratedReports.Add(report);
                 await db.SaveChangesAsync();
 
-                return new PersistOutput(report.Id.ToString());
+                return new PersistOutput(report.Id.ToString(), GeneratedAtUtc: generatedAtUtc);
             });
         }
         catch (Exception ex)

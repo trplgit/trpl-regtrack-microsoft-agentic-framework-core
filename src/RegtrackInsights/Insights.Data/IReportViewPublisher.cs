@@ -12,5 +12,14 @@ namespace Insights.Data;
 /// </summary>
 public interface IReportViewPublisher
 {
-    Task<ReportViewLocation> PublishAsync(string plaintextHtml, TimeSpan ttl, CancellationToken cancellationToken = default);
+    /// <param name="extension">
+    /// [ADDED 2026-09-26] Trailing optional, defaults to "html"/"text/html; charset=utf-8" - every
+    /// existing caller (the report itself) keeps its exact current behaviour. The reasoning-trace
+    /// view (ReportContentService, real Markdown text) is the first caller to pass "md"/
+    /// "text/markdown; charset=utf-8" - same throwaway-copy-then-SAS mechanism, just a different
+    /// real content type for a genuinely different kind of plaintext.
+    /// </param>
+    Task<ReportViewLocation> PublishAsync(
+        string plaintextContent, TimeSpan ttl, string extension = "html",
+        string contentType = "text/html; charset=utf-8", CancellationToken cancellationToken = default);
 }

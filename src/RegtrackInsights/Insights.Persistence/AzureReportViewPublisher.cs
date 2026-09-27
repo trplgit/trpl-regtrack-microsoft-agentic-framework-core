@@ -31,19 +31,21 @@ namespace Insights.Persistence;
 /// </summary>
 public sealed class AzureReportViewPublisher(string storageConnectionString, string tempContainerName) : IReportViewPublisher
 {
-    public async Task<ReportViewLocation> PublishAsync(string plaintextHtml, TimeSpan ttl, CancellationToken cancellationToken = default)
+    public async Task<ReportViewLocation> PublishAsync(
+        string plaintextContent, TimeSpan ttl, string extension = "html",
+        string contentType = "text/html; charset=utf-8", CancellationToken cancellationToken = default)
     {
         var service = new BlobServiceClient(storageConnectionString);
         var container = service.GetBlobContainerClient(tempContainerName);
         await container.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
 
-        var blobPath = $"{Guid.NewGuid():N}.html";
+        var blobPath = $"{Guid.NewGuid():N}.{extension}";
         var blob = container.GetBlobClient(blobPath);
 
-        using var contentStream = new MemoryStream(Encoding.UTF8.GetBytes(plaintextHtml));
+        using var contentStream = new MemoryStream(Encoding.UTF8.GetBytes(plaintextContent));
         await blob.UploadAsync(
             contentStream,
-            new BlobHttpHeaders { ContentType = "text/html; charset=utf-8" },
+            new BlobHttpHeaders { ContentType = contentType },
             cancellationToken: cancellationToken);
 
         var expiresUtc = DateTimeOffset.UtcNow.Add(ttl);

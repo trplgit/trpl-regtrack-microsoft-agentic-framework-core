@@ -66,7 +66,8 @@ public sealed class ReportContentServiceTests
         blobReader.Setup(r => r.ReadAsync(It.IsAny<BlobLocation>(), It.IsAny<CancellationToken>())).ReturnsAsync([1, 2, 3]);
 
         var publisher = new Mock<IReportViewPublisher>();
-        publisher.Setup(p => p.PublishAsync(It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+        publisher.Setup(p => p.PublishAsync(
+                It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ReportViewLocation(new Uri("https://blob.example/views/abc.html?sv=sig"), DateTimeOffset.UtcNow.AddMinutes(10)));
 
         var service = new ReportContentService(
@@ -190,7 +191,8 @@ public sealed class ReportContentServiceTests
 
         await service.OpenAsync(report.Id, TenantId, ViewerUserId);
 
-        publisher.Verify(p => p.PublishAsync("<html>decrypted</html>", It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()), Times.Once);
+        publisher.Verify(p => p.PublishAsync(
+            "<html>decrypted</html>", It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     /// <summary>sql/19 - the paid keep-warm scheduler's sole signal that a report was actually opened (design doc Sec.4.3).</summary>

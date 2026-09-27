@@ -1,6 +1,7 @@
 using Insights.Agents;
 using Insights.Data;
 using Insights.Domain;
+using Insights.Presentation;
 using Microsoft.Extensions.Configuration;
 using Xunit.Abstractions;
 
@@ -101,6 +102,24 @@ public sealed class ReasoningTraceLabTest(ITestOutputHelper output)
             userId: UserId, customerId: TenantId, runId: labRunId);
         output.WriteLine($"[{Dimension}] Narrate: {narrateResult.TotalTokens} tokens, {narrateResult.Value.Blocks.Count} blocks.");
 
+        // ---- Real render call - the actual customer-facing report HTML, so this lab produces
+        // both halves of the story: the report itself, and the trace explaining it. ----
+        var renderInstructions = await File.ReadAllTextAsync(Path.Combine(promptsDir, "05_report_html_dimension_selection_licence.md"));
+        var renderAgent = new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
+            endpoint, narrateModel, apiKey, "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
+            renderInstructions));
+        var renderResult = await renderAgent.RenderAsync(
+            composeResult.Value, narrateResult.Value, r.Assertions, "Minda Corporation Group", "dimension_selection", DateTime.UtcNow,
+            locationRows: null,
+            dimensionRowsJson: new Dictionary<string, string> { [Dimension] = rowsJson },
+            dimensionControlTotalsJson: new Dictionary<string, string> { [Dimension] = controlTotalsJson });
+        output.WriteLine($"[{Dimension}] Render: {renderResult.TotalTokens} tokens.");
+
+        var reportHtml = PoppinsFontInjector.Inject(renderResult.Value);
+        const string reportOutPath = @"D:\trpl-reginsights-dev\local-report-licence-minda.html";
+        await File.WriteAllTextAsync(reportOutPath, reportHtml);
+        output.WriteLine($"[{Dimension}] Report written: {reportOutPath}");
+
         // [ADDED 2026-09-26] UAT (10.13.0.6, backing RegTrackReportsWrite) is unreachable this
         // session - only the prod-readonly replica (10.224.254.4) responded above. The real
         // recorder round-trip (write, then read back) is already proven live from an earlier
@@ -147,5 +166,6 @@ public sealed class ReasoningTraceLabTest(ITestOutputHelper output)
 
         Assert.NotEmpty(explainResult.Value);
         Assert.Contains(Dimension, explainResult.Value, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<html", reportHtml, StringComparison.OrdinalIgnoreCase);
     }
 }
