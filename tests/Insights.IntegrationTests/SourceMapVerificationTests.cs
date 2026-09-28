@@ -120,11 +120,14 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
     /// Licence has no report period - it counts as of today. Tenant 5 is swapped for 1355: on UAT
     /// tenant 5's own Licence procedure refuses (a licence points to a type missing from the master -
     /// the proc's deliberate fail-closed referential check), so there is nothing to compare against.
+    /// [2026-09-28] Licence-role scope (sql/21): (29, 38) removed - user 38 is Management with no licence
+    /// assignments, so the procedure now refuses (51169). (5, 35) added as the Company Admin case; 1285 and
+    /// 1355 are Management.
     /// </summary>
     [Theory]
     [InlineData(1285, 11416)]
-    [InlineData(29, 38)]
     [InlineData(1355, 11885)]
+    [InlineData(5, 35)]
     public async Task Licence_EveryCheckMatchesTheProcedure(int tenantId, int userId)
     {
         var result = await new SqlDimensionRepository(ConnectionString).GetLicenceAsync(userId, tenantId);

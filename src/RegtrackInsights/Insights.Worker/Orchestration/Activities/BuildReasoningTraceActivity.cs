@@ -73,14 +73,13 @@ public sealed class BuildReasoningTraceActivity(
             var numbers = reportText is null ? null
                 : ReportClaimExtractor.ExtractNumbers(reportText, ReportClaimExtractor.NumbersToIgnore(input.DimensionRowsJson));
 
-            var databaseChecks = input.UserId is { } uid
-                ? ReasoningSourceMap.LoadFilledJson(input.DimensionName, uid, input.TenantId, input.WindowStart, input.WindowEnd)
-                : null;
-
+            // [REMOVED 2026-09-28] The testers' database checks (ReasoningSourceMap SQL) are no longer
+            // put in the file - the testing team works from formulas, not SQL (user decision). The
+            // source maps stay, verified by SourceMapVerificationTests, for internal use.
             var bundle = new ReasoningTraceBundle(
                 input.DimensionName, runId, input.Plan, input.Assertions, input.Findings,
                 input.DimensionRowsJson, input.DimensionControlTotalsJson, dataQuality, reasoningLog, toolInvocations,
-                reportText, numbers, databaseChecks);
+                reportText, numbers);
 
             var explainResult = await explainerAgent.ExplainAsync(bundle);
             explainTokens = explainResult.TotalTokens;

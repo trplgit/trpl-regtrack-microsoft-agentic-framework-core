@@ -27,10 +27,8 @@ public sealed record ReasoningTraceBundle(
     // [ADDED 2026-09-27] What the reader actually sees, and every number on it (code-extracted) -
     // the explainer must cover each one. Null when the finished report was not available.
     string? ReportText = null,
-    IReadOnlyList<string>? NumbersOnReport = null,
-    // [ADDED 2026-09-27] Filled testers' database checks (ReasoningSourceMap.LoadFilledJson) -
-    // verified queries per number; null for a dimension without a source map.
-    string? DatabaseChecksJson = null);
+    IReadOnlyList<string>? NumbersOnReport = null);
+    // [REMOVED 2026-09-28] DatabaseChecksJson - testers work from formulas, not SQL (user decision).
 
 /// <summary>
 /// [ADDED 2026-09-26] Turns a <see cref="ReasoningTraceBundle"/> into a plain-Markdown "how was
@@ -72,10 +70,9 @@ public sealed class MafReasoningExplainerAgent(AIAgent agent) : IReasoningExplai
               "dimension_control_totals": {{bundle.DimensionControlTotalsJson ?? "null"}},
               "data_quality": {{JsonSerializer.Serialize(bundle.DataQuality, JsonOptions)}},
               "reasoning_log": {{JsonSerializer.Serialize(bundle.ReasoningLog, JsonOptions)}},
-              "tool_invocations": {{JsonSerializer.Serialize(bundle.ToolInvocations, JsonOptions)}},
+              "tool_invocations": {{JsonSerializer.Serialize(ToolCallsWithoutSql(bundle.ToolInvocations), JsonOptions)}},
               "report_text": {{JsonSerializer.Serialize(bundle.ReportText)}},
-              "numbers_on_report": {{JsonSerializer.Serialize(bundle.NumbersOnReport ?? [])}},
-              "database_checks": {{bundle.DatabaseChecksJson ?? "null"}}
+              "numbers_on_report": {{JsonSerializer.Serialize(bundle.NumbersOnReport ?? [])}}
             }
             """;
 
@@ -90,4 +87,11 @@ public sealed class MafReasoningExplainerAgent(AIAgent agent) : IReasoningExplai
         var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
         return new AgentCallResult<string>(text.Trim(), totalTokens, ReasoningSummaryExtractor.Extract(response.Messages));
     }
+
+    /// <summary>
+    /// [ADDED 2026-09-28] What a tool call did, never its SQL text: the model is told to describe
+    /// extra look-ups in plain words, and without the text it has no SQL to copy into the file.
+    /// </summary>
+    internal static IReadOnlyList<object> ToolCallsWithoutSql(IReadOnlyList<ToolInvocationLogEntry> calls) =>
+        calls.Select(c => (object)new { c.Stage, c.ToolName, c.Success, c.ResultLength }).ToList();
 }

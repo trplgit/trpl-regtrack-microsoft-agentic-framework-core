@@ -20,6 +20,12 @@ namespace Insights.Worker.Orchestration;
 /// </summary>
 public static class PaidReportAgentsRegistration
 {
+    /// <summary>
+    /// [ADDED 2026-09-28] The small non-reasoning deployment on the Llm:Maf endpoint - used by the
+    /// reasoning-trace explainer and the tenant-memory summariser (user decision).
+    /// </summary>
+    internal const string SmallModel = "gpt-4o-mini";
+
     public static IServiceCollection AddInsightsPaidReportAgents(this IServiceCollection services, IConfiguration configuration)
     {
         var endpoint = Require(configuration, "Llm:Maf:Endpoint");
@@ -201,9 +207,12 @@ public static class PaidReportAgentsRegistration
         });
 
         // [ADDED 2026-09-28] Summarises older tenant-memory entries instead of cutting them - see
-        // ITenantMemorySummarizer. Standard model; runs only when a section outgrows its limit.
-        services.AddSingleton<ITenantMemorySummarizer>(sp => new MafTenantMemorySummarizer(MafAgentFactory.CreateTextAgent(
-            endpoint, model, apiKey, "TenantMemorySummarizer", "Summarises older tenant-memory entries without losing comparison facts.",
+        // ITenantMemorySummarizer. Runs only when a section outgrows its limit.
+        // [CHANGED 2026-09-28] Standard model -> gpt-4o-mini (user decision), same endpoint/key.
+        // Non-reasoning model, so CreateSimpleTextAgent (ReasoningOptions 400s on gpt-4o-mini).
+        // The summary is still checked in code before it is stored (TenantMemoryCompactor.IsValidSummary).
+        services.AddSingleton<ITenantMemorySummarizer>(sp => new MafTenantMemorySummarizer(MafAgentFactory.CreateSimpleTextAgent(
+            endpoint, SmallModel, apiKey, "TenantMemorySummarizer", "Summarises older tenant-memory entries without losing comparison facts.",
             LoadPromptSync(sp, "09_tenant_memory_summarizer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
@@ -254,8 +263,12 @@ public static class PaidReportAgentsRegistration
         // on the same real Users report, gpt-4o-mini wrote wrong formulas ("1,102 = count where
         // Instances is 0") and invented report locations ("Section People"); the standard model got
         // every formula and location right. It runs after persist and never delays the report.
-        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateTextAgent(
-            endpoint, model, apiKey, "ReasoningExplainerAgent",
+        // [CHANGED 2026-09-28] Back to gpt-4o-mini (user decision), and the testers' SQL section is
+        // gone (testers work from formulas only) - a smaller job than the one 4o-mini got wrong on
+        // 09-27. The code completeness check (BuildReasoningTraceActivity) still lists any number
+        // the file fails to explain.
+        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateSimpleTextAgent(
+            endpoint, SmallModel, apiKey, "ReasoningExplainerAgent",
             "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
             LoadPromptSync(sp, "08_reasoning_explainer_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
 

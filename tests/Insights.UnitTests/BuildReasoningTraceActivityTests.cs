@@ -28,4 +28,20 @@ public sealed class BuildReasoningTraceActivityTests
     {
         Assert.Equal("text", BuildReasoningTraceActivity.AppendCompletenessCheck("text", null));
     }
+
+    [Fact]
+    public void ToolCallsWithoutSql_KeepsWhatHappenedButNeverTheQueryText()
+    {
+        var calls = new[]
+        {
+            new Insights.Data.ToolInvocationLogEntry("analyze_and_narrate", "fetch_scoped_sql_data",
+                "SELECT COUNT(*) FROM #scoped", true, 120, DateTime.UtcNow),
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(Insights.Agents.MafReasoningExplainerAgent.ToolCallsWithoutSql(calls));
+
+        Assert.Contains("fetch_scoped_sql_data", json);
+        Assert.Contains("120", json);
+        Assert.DoesNotContain("SELECT", json);
+    }
 }
