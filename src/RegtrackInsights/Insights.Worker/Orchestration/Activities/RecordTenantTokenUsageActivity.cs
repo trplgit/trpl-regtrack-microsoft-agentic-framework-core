@@ -17,12 +17,22 @@ public sealed record RecordTenantTokenUsageOutput;
 public sealed class RecordTenantTokenUsageActivity(ITenantTokenBudgetRepository repository)
     : AsyncTaskActivity<RecordTenantTokenUsageInput, RecordTenantTokenUsageOutput>
 {
-    protected override Task<RecordTenantTokenUsageOutput> ExecuteAsync(TaskContext context, RecordTenantTokenUsageInput input) => RunAsync(input);
+    protected override Task<RecordTenantTokenUsageOutput> ExecuteAsync(TaskContext context, RecordTenantTokenUsageInput input) =>
+        RunAsync(input, context.OrchestrationInstance?.ExecutionId);
 
-    internal async Task<RecordTenantTokenUsageOutput> RunAsync(RecordTenantTokenUsageInput input)
+    /// <summary>
+    /// [FIX 2026-09-28, found live] The run id is identical for every re-run of the same
+    /// tenant/dimension/period, and the ledger is idempotent per key - so every re-run's real spend
+    /// was dropped (one real 7-dimension request lost 235,714 tokens for Users + Act). The key is now
+    /// per EXECUTION: a new run adds its own row, a DTFx redelivery of the same execution still hits
+    /// the same key. Same approach as the report-id fix in PersistActivity. Done here, not in the
+    /// orchestrator, because OrchestrationContext.OrchestrationInstance is not mockable there.
+    /// </summary>
+    internal async Task<RecordTenantTokenUsageOutput> RunAsync(RecordTenantTokenUsageInput input, string? executionId = null)
     {
+        var key = string.IsNullOrEmpty(executionId) ? input.RunId : $"{input.RunId}|exec:{executionId}";
         if (input.TotalTokens > 0)
-            await repository.RecordUsageAsync(input.CustomerId, input.RunId, input.TotalTokens, CancellationToken.None);
+            await repository.RecordUsageAsync(input.CustomerId, key, input.TotalTokens, CancellationToken.None);
 
         return new RecordTenantTokenUsageOutput();
     }

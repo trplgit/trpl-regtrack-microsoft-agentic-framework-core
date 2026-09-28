@@ -808,7 +808,8 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         DimensionName: input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var renderDimension] ? renderDimension : null,
                         ReqId: input.ReqId,
                         PreviousVisualIssue: previousVisualIssue,
-                        Period: input.Period, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd));
+                        Period: input.Period, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd,
+                        DataQualityJson: freehandDataQualityJson));
                 ChargeAndCheck(renderResult.TotalTokens);
 
                 // Design doc Sec.11.4 (Partial generation) - a fixed, non-agent-authored placeholder

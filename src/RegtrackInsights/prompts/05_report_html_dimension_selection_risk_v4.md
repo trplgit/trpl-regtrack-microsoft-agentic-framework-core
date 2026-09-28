@@ -462,8 +462,38 @@ a blue "reporting window" box. Build exactly that:
 No other header block, no report-type label, no badge above or beside these. "Generated {date}"
 goes only in the small print at the very bottom of the page.
 
+## 15. Labels never overlap or get cut off (v4, ADDED 2026-09-28)
+
+Found live in real reports: location names colliding above a bar chart and rotated names cut off at
+the bottom; law names stacked on top of each other on a date timeline; a map of thin tiles where
+names and a "Prison-term exposure" badge were squeezed into unreadable one-letter columns. Every
+chart must follow these rules, whatever its shape:
+
+- **Measure, then place.** A chart script draws labels, then measures them
+  (`getBBox()`/`getComputedTextLength()` for SVG, `getBoundingClientRect()` for HTML). Any label
+  that would touch another label, a mark it does not belong to, or the chart edge is shortened with
+  "…" (full name kept in its hover/focus detail and `aria-label`) or hidden - never left
+  overlapping. Leave 4px between labels.
+- **Small tiles and thin bars carry no text inside.** Print a name or value inside a tile or bar
+  only when it fits on at most two lines at full size (roughly 64px wide and 36px tall). Anything
+  smaller shows its name and value on hover/focus only. Never break a word into single letters,
+  never stack letters vertically, and never put a badge on a tile narrower than the badge; mark such
+  a tile with its colour or outline instead and explain it in the legend.
+- **Crowded points (timelines, dot plots, scatter).** When labels of nearby points would collide,
+  stagger them into rows or connect them with short leader lines. If they still collide, label
+  only the most important points (the ones the text above discusses) and put the rest in a list
+  or legend under the chart.
+- **Axis labels.** Prefer horizontal labels on a horizontal bar chart (names on the left) over
+  rotated labels under vertical bars. If labels must rotate, measure the longest one and reserve
+  that much space below the axis so nothing is clipped; otherwise shorten with "…".
+- **Group/bracket labels** above a set of bars are shown only if the bracket is wider than the
+  text; otherwise the group name moves into the legend.
+- After drawing, the script runs one last collision check over the chart's labels and hides any
+  label that still overlaps another.
+
 ## Self-check before returning
 
+- (v4) Section 15: no two labels overlap and none is cut off at any chart edge; no text inside tiles or bars too small for it; no letters stacked vertically.
 - (v4) Section 14: the page starts with the small blue label = exact `tenant_name` and nothing else, then the big headline, one line, then the blue "Reporting window: ..." box.
 - (v4) No developer/tester messages anywhere on the page: no "reconciled", "verified", "no fabricated data", ids, field names or notes on how the report was built.
 - (v4) Section 12: no "What this means" heading anywhere; each section's narrative points are its

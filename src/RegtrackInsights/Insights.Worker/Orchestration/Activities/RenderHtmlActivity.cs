@@ -29,7 +29,10 @@ public sealed record RenderHtmlInput(
     // line (ReportPeriodContext.Describe). Trailing optional fields - replay-safe.
     string? Period = null,
     DateTime? WindowStart = null,
-    DateTime? WindowEnd = null);
+    DateTime? WindowEnd = null,
+    // [ADDED 2026-09-28] The dimension's data_quality notes (JSON array, SQL-written). Their
+    // numbers count as data for the fabricated-number check - see RunAsync. Trailing optional.
+    string? DataQualityJson = null);
 public sealed record RenderHtmlOutput(
     string Html, long TotalTokens,
     // [ADDED 2026-09-27] Numbers the model typed into the page that do not trace to the real data
@@ -127,11 +130,34 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
             // so trusting it let a number the narrative model invented reach the page unchecked.
             // Every number traces to rows / totals / assertions only (calibrated that way: 0 false
             // alarms on 12 real renders).
+            // [FIX 2026-09-28, found live] The data_quality notes ARE trusted: the SQL procedure
+            // writes them (e.g. "99.8% populated"), no model does - flagging them re-rendered a
+            // correct Departments page for nothing.
             var untraced = Insights.Presentation.ReportNumberTracer.FindUntraced(
-                html, rowsJson, totalsJson, input.Assertions, trustedTexts: null);
+                html, rowsJson, totalsJson, input.Assertions, trustedTexts: DataQualityDetails(input.DataQualityJson));
             return new RenderHtmlOutput(html, result.TotalTokens, untraced);
         }
 
         return new RenderHtmlOutput(html, result.TotalTokens);
+    }
+
+    private static IReadOnlyList<string> DataQualityDetails(string? dataQualityJson)
+    {
+        if (string.IsNullOrWhiteSpace(dataQualityJson))
+            return [];
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(dataQualityJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return [];
+            return doc.RootElement.EnumerateArray()
+                .Where(e => e.ValueKind == System.Text.Json.JsonValueKind.Object && e.TryGetProperty("Detail", out _))
+                .Select(e => e.GetProperty("Detail").GetString() ?? "")
+                .ToList();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return [];
+        }
     }
 }

@@ -171,6 +171,32 @@ public class RenderHtmlActivityTests
     }
 
     /// <summary>
+    /// [FOUND LIVE 2026-09-28] Departments was re-rendered because "99.8%" was flagged - a fact the
+    /// SQL itself writes into its data-quality notes ("ComplianceScheduleOn.Performerid, 99.8%
+    /// populated"). Those notes are written by code, so their numbers count as data; anything else
+    /// is still caught.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_NumberFromTheSqlsDataQualityNotes_IsTraced_OthersStillCaught()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var rows = new Dictionary<string, string> { ["Departments"] = """[{"DepartmentID":1,"DepartmentName":"HR","Instances":20,"Overdue":15}]""" };
+        var totals = new Dictionary<string, string> { ["Departments"] = """{"ScopedInstances":20,"OverdueInstances":15}""" };
+        const string dataQuality = """[{"Issue":"ownership_has_two_mechanisms","AppliesToMetric":"NoInstanceOwner","Detail":"Performerid on each occurrence, 99.8% populated."}]""";
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><p>15 of 20 overdue. A performer is named on 99.8% of due dates. 1,640 penalties.</p></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Departments"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(DimensionSelectionComposition.Build(["Departments"]), new NarrativeResult([]), [], "T",
+            DimensionSelectionComposition.ReportType, new DateTime(2026, 9, 28, 0, 0, 0, DateTimeKind.Utc),
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Departments", DataQualityJson: dataQuality));
+
+        Assert.Equal(["1,640"], result.UntracedNumbers);
+    }
+
+    /// <summary>
     /// The narrative is NOT a source of truth for numbers: the publish gate only checks which
     /// assertion ids it cites, never the numbers in its prose. A number the narrative model made up
     /// must still be caught when it lands on the page.
