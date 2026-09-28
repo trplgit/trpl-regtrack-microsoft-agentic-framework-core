@@ -63,11 +63,12 @@
   (Semantic='LicenceStatus', Meaning='Expired', RawValue=<verified ID>) once
   the ID is confirmed live - that is a data change, not a code change.
 
-  -- SCOPE - AUTHORISED BRANCHES, THEN THE USER'S LICENCE ROLE -------------
-  [CHANGED 2026-09-28] Step 1 is unchanged: the DISTINCT branch set from
-  tvfInsightsScopePairs (licences are not linked to ComplianceCategoryId, so
-  this is branch-only, not the full (branch, category) pair).
-  Step 2 is new and mirrors RegTrack's own licence module
+  -- SCOPE - THE LICENCE MODULE'S OWN RULE, NOT THE COMPLIANCE SCOPE --------
+  [CHANGED 2026-09-28, user decision] The result must equal RegTrack's own
+  licence report (SP_LicenseMyReport_V2) for the same user - verified
+  licence-for-licence on 14 users. Step 1 = every operating branch of the
+  tenant (no longer tvfInsightsScopePairs - see step 1's note).
+  Step 2 mirrors RegTrack's own licence module
   (SP_LicenseMyReport_V2), which decides visibility by User.LicenseRoleID -
   NOT by User.RoleID:
     CADMN (Company Admin)      -> every licence in the authorised branches
@@ -80,9 +81,10 @@
   Found live on tenant 1285 / user 11416 (MGMT): the branch-only scope showed
   214 licences where RegTrack's own licence report shows that user 180 - 29
   of the 34 were licence types / branches the user was never assigned.
-  (The other 5 are real licences RegTrack's report drops because their linked
-  compliance task has no compliance transaction at all; we keep them and
-  declare them - see data_quality 'licence_task_never_started'.)
+  [CHANGED 2026-09-28, user decision] The other 5 are dropped too, as RegTrack
+  does: a licence only counts when its linked compliance task is live (step 2b)
+  - 214 -> 180, identical to RegTrack's report. Declared in data_quality
+  'licence_no_live_task'.
   Error codes 51168/51169 sit in the x5-x9 part of this file's block because
   51160 (x0) is already the compliance-scope denial; each condition still has
   its own code.
@@ -155,11 +157,23 @@ BEGIN
                  AND NOT EXISTS (SELECT 1 FROM #licStatus ls WHERE ls.StatusId = sm.ID))
         THROW 51167, N'DICTIONARY GAP - Lic_tbl_StatusMaster contains active statuses absent from the LicenceStatus classification. Refusing to guess whether they are lapse-eligible. Seed them and re-run.', 1;
 
-    /*-- 1. SCOPED BRANCH SET - see header: branch-only, not full 2-D ----*/
+    /*-- 1. BRANCH SET - [CHANGED 2026-09-28, user decision: match RegTrack's
+       own licence report exactly]. Every OPERATING branch of the tenant, as
+       SP_LicenseMyReport_V2 uses; the licence role in 1b/2 then narrows it
+       (MGMT/AUDT to their own LIC_EntitiesAssignment pairs, EXCT to their own
+       tasks). Previously the user's COMPLIANCE branches (tvfInsightsScopePairs)
+       were intersected first, which hid licences the licence module itself
+       grants: 5 of 12 Management/Auditor users measured saw fewer licences than
+       RegTrack shows them (one saw 49 of 404, one was refused outright). Still
+       server-derived from the user's own assignment rows - never client input.
+       The pre-flight above still requires the user to be an Insights user.  */
     IF OBJECT_ID('tempdb..#branches') IS NOT NULL DROP TABLE #branches;
-    SELECT DISTINCT sp.BranchID
+    SELECT cb.ID AS BranchID
     INTO #branches
-    FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp;
+    FROM CustomerBranch cb
+    WHERE cb.CustomerID = @CustomerID
+      AND cb.IsDeleted = 0
+      AND cb.Status = 1;
 
     /*-- 1b. LICENCE ROLE - see header. Same rule RegTrack's licence module
        applies (SP_LicenseMyReport_V2 @IsFlag), read from User.LicenseRoleID. */
@@ -179,9 +193,9 @@ BEGIN
     JOIN #branches b ON b.BranchID = li.CustomerBranchID
     WHERE li.CustomerID = @CustomerID AND li.IsDeleted = 0;
 
-    IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
+    IF OBJECT_ID('tempdb..#roleLic') IS NOT NULL DROP TABLE #roleLic;
     SELECT bl.LicenseId, bl.BranchID, bl.LicenseTypeID, bl.StartDate, bl.EndDate
-    INTO #lic
+    INTO #roleLic
     FROM #branchLic bl
     WHERE @licRole = 'CADMN'
        OR (@licRole IN ('MGMT', 'AUDT')
@@ -195,10 +209,56 @@ BEGIN
                        WHERE m.LicenseID = bl.LicenseId AND ca.UserID = @UserID));
 
     /*  Outside-role count is declared in data_quality, never silent. */
-    DECLARE @outsideRole INT = (SELECT COUNT(*) FROM #branchLic) - (SELECT COUNT(*) FROM #lic);
+    DECLARE @outsideRole INT = (SELECT COUNT(*) FROM #branchLic) - (SELECT COUNT(*) FROM #roleLic);
 
-    IF @licRole <> 'CADMN' AND NOT EXISTS (SELECT 1 FROM #lic)
+    IF @licRole <> 'CADMN' AND NOT EXISTS (SELECT 1 FROM #roleLic)
         THROW 51169, N'SCOPE DENIED - the user''s licence role grants no licences in their authorised branches (no LIC_EntitiesAssignment pair or assigned licence task). Refusing to compute.', 1;
+
+    /*-- 2b. LIVE COMPLIANCE TASK - [CHANGED 2026-09-28, user decision] ----
+       Same rule as RegTrack's own licence report (SP_LicenseMyReport_V2): a
+       licence counts only when the compliance schedule its LATEST status points
+       at is (a) mapped to the licence, (b) active and not deleted
+       (IsActive = 1, IsUpcomingNotDeleted = 1), (c) on a compliance instance
+       with an active performer (ComplianceAssignment RoleID 3, user active and
+       not deleted, this tenant) and (d) has been acted on at least once (a
+       ComplianceTransaction row exists). Licences failing this are NOT counted
+       - on tenant 1285 / user 11416 this is 5 licences (185 -> 180, matching
+       RegTrack's report exactly) - and the count is declared in data_quality
+       'licence_no_live_task', never silent.                                  */
+    IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
+    SELECT rl.LicenseId, rl.BranchID, rl.LicenseTypeID, rl.StartDate, rl.EndDate
+    INTO #lic
+    FROM #roleLic rl
+    WHERE EXISTS (SELECT 1
+                  FROM Lic_tbl_LicenseComplianceInstanceScheduleOnMapping m
+                  JOIN ComplianceScheduleOn cso ON cso.ID = m.ComplianceScheduleOnID
+                                               AND cso.IsActive = 1
+                                               AND cso.IsUpcomingNotDeleted = 1
+                  JOIN ComplianceAssignment ca ON ca.ComplianceInstanceID = m.ComplianceInstanceID
+                                              AND ca.RoleID = 3
+                  JOIN [User] pu ON pu.ID = ca.UserID
+                                AND pu.IsDeleted = 0
+                                AND pu.IsActive = 1
+                                AND pu.CustomerID = @CustomerID
+                  WHERE m.LicenseID = rl.LicenseId
+                    /*  "Latest" exactly as RegTrack's RecentLicenseTransactionView
+                        defines it: the row(s) at MAX(CreatedOn) - NOT StatusChangeOn -
+                        with a status in Lic_tbl_StatusMaster, and IsActive = 1 as
+                        SP_LicenseMyReport_V2 adds. A licence whose status rows carry
+                        no CreatedOn has no latest row there, so RegTrack drops it
+                        (found live: 15 on tenant 5).                               */
+                    AND m.ComplianceScheduleOnID IN (
+                        SELECT lst.ComplianceScheduleOnID
+                        FROM Lic_tbl_LicenseStatusTransaction lst
+                        JOIN Lic_tbl_StatusMaster lsm ON lsm.ID = lst.StatusID
+                        WHERE lst.LicenseID = rl.LicenseId
+                          AND lst.IsActive = 1
+                          AND lst.CreatedOn = (SELECT MAX(l2.CreatedOn) FROM Lic_tbl_LicenseStatusTransaction l2
+                                               WHERE l2.LicenseID = rl.LicenseId))
+                    AND EXISTS (SELECT 1 FROM ComplianceTransaction ct
+                                WHERE ct.ComplianceScheduleOnID = m.ComplianceScheduleOnID));
+
+    DECLARE @noLiveTask INT = (SELECT COUNT(*) FROM #roleLic) - (SELECT COUNT(*) FROM #lic);
 
     CREATE CLUSTERED INDEX IX_lic ON #lic (LicenseTypeID, LicenseId);
 
@@ -213,18 +273,6 @@ BEGIN
     SELECT LicenseID, StatusID, ComplianceScheduleOnID
     INTO #latestStatus
     FROM ranked WHERE rn = 1;
-
-    /*  [ADDED 2026-09-28] Licences whose latest status points at a compliance
-        schedule with NO compliance transaction at all - nobody has ever acted
-        on the linked task. RegTrack's own licence report drops these (it
-        INNER JOINs the latest compliance transaction); they are real licences,
-        so this proc keeps them and declares the count. Found live: 5 on
-        tenant 1285, all expired Transport/BRC/Boiler at two API units.      */
-    DECLARE @taskNeverStarted INT =
-        (SELECT COUNT(*) FROM #latestStatus ls
-         WHERE ls.ComplianceScheduleOnID IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM ComplianceTransaction ct
-                           WHERE ct.ComplianceScheduleOnID = ls.ComplianceScheduleOnID));
 
     /*  Confirmed live: some licences carry a status transaction row for EVERY
         CALENDAR DAY, not just on real status changes - one licence had ~2,500
@@ -469,9 +517,9 @@ BEGIN
         exist ONLY here - attached to no assertion and no finding. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
-                   WHEN 'branch_only_scope'                    THEN 'ScopedLicences'
+                   WHEN 'licence_module_scope'                 THEN 'ScopedLicences'
                    WHEN 'licence_role_scope'                   THEN 'ScopedLicences'
-                   WHEN 'licence_task_never_started'           THEN 'ScopedLicences'
+                   WHEN 'licence_no_live_task'                 THEN 'ScopedLicences'
                    WHEN 'excluded_terminal_states'             THEN 'TenantLapsedPct'
                    WHEN 'untyped_licences'                     THEN 'UntypedLicences'
                    WHEN 'licence_type_retired_still_in_use'    THEN 'LicenceTypesReported'
@@ -480,23 +528,23 @@ BEGIN
                    WHEN 'licence_statuses_unclassified'        THEN 'TenantLapsedPct'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
-        SELECT 'branch_only_scope' AS Issue,
-               N'This dimension scopes by authorised BRANCH only, not the full (branch, category) pair every '
-             + N'other dimension enforces - licences are not linked to ComplianceCategoryId without '
-             + N'Lic_tbl_LicenseComplianceInstanceMapping, which this proc does not yet join.' AS Detail
+        SELECT 'licence_module_scope' AS Issue,
+               N'Licences follow the licence module''s own access rules, the same set RegTrack''s own licence report '
+             + N'shows this user - not the compliance branch and category scope the other dimensions use.' AS Detail
         UNION ALL
         SELECT 'licence_role_scope',
                CASE WHEN @licRole = 'CADMN'
-                    THEN N'Company Admin licence role: every licence in the authorised branches is included.'
-                    ELSE CONCAT(N'', @outsideRole, N' licence(s) in the authorised branches are outside this user''s '
+                    THEN N'Company Admin licence role: every licence at the company''s operating branches is included.'
+                    ELSE CONCAT(N'', @outsideRole, N' licence(s) at the company''s operating branches are outside this user''s '
                          + N'licence role (', @licRole, N') and are not included - the same rule RegTrack''s own '
                          + N'licence report applies. Counts cover only the licences this user is responsible for.') END
         WHERE @licRole = 'CADMN' OR @outsideRole > 0
         UNION ALL
-        SELECT 'licence_task_never_started',
-               CONCAT(N'', @taskNeverStarted, N' licence(s) are linked to a compliance task that has never been '
-                    + N'acted on. They are included here, but RegTrack''s own licence report does not list them.')
-        WHERE @taskNeverStarted > 0
+        SELECT 'licence_no_live_task',
+               CONCAT(N'', @noLiveTask, N' licence(s) in this user''s scope are not counted, the same way RegTrack''s own '
+                    + N'licence report leaves them out: the linked compliance task is inactive, has no active performer '
+                    + N'or has never been acted on, or the licence has no dated latest status record.')
+        WHERE @noLiveTask > 0
         UNION ALL
         SELECT 'excluded_terminal_states',
                CONCAT(N'', @totalExcludedTerminal, N' licence(s) are past EndDate but ended another way - '
@@ -542,7 +590,7 @@ BEGIN
                         AND sm.ID NOT IN (2,4,5,6,7,9,10))
     ) q;
 
-    DROP TABLE #branches; DROP TABLE #branchLic; DROP TABLE #lic; DROP TABLE #latestStatus; DROP TABLE #type;
+    DROP TABLE #branches; DROP TABLE #branchLic; DROP TABLE #roleLic; DROP TABLE #lic; DROP TABLE #latestStatus; DROP TABLE #type;
     DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

@@ -121,13 +121,14 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
     /// tenant 5's own Licence procedure refuses (a licence points to a type missing from the master -
     /// the proc's deliberate fail-closed referential check), so there is nothing to compare against.
     /// [2026-09-28] Licence-role scope (sql/21): (29, 38) removed - user 38 is Management with no licence
-    /// assignments, so the procedure now refuses (51169). (5, 35) added as the Company Admin case; 1285 and
-    /// 1355 are Management.
+    /// assignments, so the procedure now refuses (51169). 1285, 1355 and (5, 36) are Management, (5, 989) is
+    /// an Auditor - all four verified licence-for-licence against RegTrack's own SP_LicenseMyReport_V2.
     /// </summary>
     [Theory]
     [InlineData(1285, 11416)]
     [InlineData(1355, 11885)]
-    [InlineData(5, 35)]
+    [InlineData(5, 36)]
+    [InlineData(5, 989)]
     public async Task Licence_EveryCheckMatchesTheProcedure(int tenantId, int userId)
     {
         var result = await new SqlDimensionRepository(ConnectionString).GetLicenceAsync(userId, tenantId);
