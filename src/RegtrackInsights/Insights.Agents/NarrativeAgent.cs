@@ -51,7 +51,8 @@ public sealed class MafNarrativeAgent(
     IReportEncryptor? memoryEncryptor = null,
     IReportDecryptor? memoryDecryptor = null,
     string? memoryBlobConnectionString = null,
-    string? memoryContainerName = null) : INarrativeAgent
+    string? memoryContainerName = null,
+    ITenantMemorySummarizer? memorySummarizer = null) : INarrativeAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -75,7 +76,7 @@ public sealed class MafNarrativeAgent(
         {
             memoryTool = new TenantMemoryTool(
                 memoryEncryptor, memoryDecryptor, memoryBlobConnectionString, memoryContainerName,
-                tenantId.Value, dimensionNames);
+                tenantId.Value, dimensionNames, memorySummarizer);
             tenantHistory = await memoryTool.ReadSectionsAsync(cancellationToken);
         }
 
@@ -86,6 +87,9 @@ public sealed class MafNarrativeAgent(
                 assertions,
                 findings,
                 tenant_history = tenantHistory,
+                // [ADDED 2026-09-28] Real dates for tenant-memory entry headings - see
+                // MafAnalystNarrativeAgent.RunContext. No window reaches this agent, so period is null.
+                run_context = MafAnalystNarrativeAgent.RunContext(null, null, null),
                 previous_narrative = revision?.PreviousNarrative,
                 reflection_issues = revision?.Issues,
             },

@@ -170,6 +170,31 @@ public class RenderHtmlActivityTests
         Assert.Equal(["1,640"], result.UntracedNumbers);
     }
 
+    /// <summary>
+    /// The narrative is NOT a source of truth for numbers: the publish gate only checks which
+    /// assertion ids it cites, never the numbers in its prose. A number the narrative model made up
+    /// must still be caught when it lands on the page.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_NumberInventedByTheNarrative_IsStillCaught()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var rows = new Dictionary<string, string> { ["Act"] = """[{"ActID":1,"ActName":"Factories Act","Instances":20,"Overdue":15}]""" };
+        var totals = new Dictionary<string, string> { ["Act"] = """{"ScopedInstances":20,"OverdueInstances":15}""" };
+        var narrative = new NarrativeResult([new NarrativeBlockResult("Act", "15 of 20 overdue, and 1,640 penalties were raised.", [])]);
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><p>15 of 20 overdue, and 1,640 penalties were raised.</p></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Act"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(DimensionSelectionComposition.Build(["Act"]), narrative, [], "T",
+            DimensionSelectionComposition.ReportType, new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc),
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Act"));
+
+        Assert.Equal(["1,640"], result.UntracedNumbers);
+    }
+
     /// <summary>Regression guard - today's exact behavior when no dimension-specific agent is registered yet (the real current state for every dimension).</summary>
     [Fact]
     public async Task RunAsync_SingleDimensionRequest_FallsBackToGenericAgentWhenNoDimensionSpecificOneRegistered()

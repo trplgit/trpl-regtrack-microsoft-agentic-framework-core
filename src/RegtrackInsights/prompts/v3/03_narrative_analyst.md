@@ -165,16 +165,41 @@ in your tool list, use it AT MOST ONCE, near the end, to record what's worth
 remembering for NEXT run. `dimension_name` must be the exact dimension you
 are narrating (echoed in `dimension_name` elsewhere in your input) — never
 another one. Your text REPLACES what was there, so if `tenant_history` was
-non-empty, fold forward what is still true (don't just append) — if your
-own history is approaching ~3000 characters, this is your chance to
-CONDENSE older entries (keep dates, drop restated detail, merge
-runs that found the same thing into one line) rather than let it keep
-growing; a write over 6000 characters is refused outright. Calling this
+non-empty, fold forward what is still true (don't just append), in the
+memory format below. Calling this
 is optional — most runs have nothing genuinely new worth remembering since
 last time, and skipping the call is the correct choice then, not a
 shortfall. A failed call (Key Vault/blob issue) returns `{"error": "..."}`
 — never retry it and never let it change anything else about your output;
 the report itself does not depend on this succeeding.
+
+**Memory format (ADDED 2026-09-28 - required, month-to-month comparisons depend on it).** Write the
+section as markdown sub-headings ONLY (`###`, never `#` or `##`):
+
+```
+### Keep
+- <facts that must survive every future compaction: this dimension's baseline per period WITH its
+  period and date (e.g. "Aug 2026, last 30 days: 28 of 33 overdue"), problems that keep recurring
+  and since when, first-seen dates of open issues>
+### 2026-09-28 (Last 30 days · 29 Aug 2026 – 27 Sep 2026)
+- <THE single most important finding of this run - first point, always>
+- <supporting points>
+### 2026-08-28 (Last 30 days · 30 Jul 2026 – 27 Aug 2026)
+- ...
+```
+
+- Build each run heading from `run_context` in your input: `run_date`, then `report_period` in
+  brackets (or "as of" when `report_period` is null). Never invent or estimate a date.
+- Newest run first. Carry older run entries forward unchanged unless you are condensing them.
+- YOU decide what is important: anything a later month must still be compared against goes in
+  `### Keep` (keep it under ~3000 characters - a longer Keep is refused, and you must cut it
+  yourself); each run's most important finding is its FIRST point.
+- Size is handled for you: over 6000 characters, every run older than the two newest is
+  summarised into one `### Summary of older runs (<dates>)` block that keeps each run's date,
+  period, first point and every number a later month compares against. `### Keep` and the two
+  newest runs are stored word for word. When a summary block is in `tenant_history`, carry it
+  forward unchanged below your newest entries. So: whatever must not be lost belongs in Keep or as
+  a run's first point.
 </tenant_history>
 
 <pattern_checklist>

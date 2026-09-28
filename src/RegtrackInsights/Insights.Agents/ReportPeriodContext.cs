@@ -48,6 +48,17 @@ public static class ReportPeriodContext
         return name is null ? range : $"{name} · {range}";
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-28] Same as <see cref="Describe"/>, but null for a dimension that ignores the
+    /// window (Licence, BacklogAging - counted as of the run date): a Q2 request still carries a Q2
+    /// window, and printing it over as-of-today data would state a period the numbers do not cover.
+    /// A null dimension (fixed_holistic, several dimensions) keeps the window.
+    /// </summary>
+    public static string? DescribeFor(string? dimensionName, string? period, DateTime? windowStart, DateTime? windowEnd) =>
+        dimensionName is not null && !Insights.Domain.ReportPeriodRequestParser.WindowRequiredDimensions.Contains(dimensionName)
+            ? null
+            : Describe(period, windowStart, windowEnd);
+
     /// <summary>Indian financial year: 1 April - 31 March.</summary>
     private static int FyStartYear(DateTime d) => d.Month >= 4 ? d.Year : d.Year - 1;
 

@@ -1042,7 +1042,11 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             // comment above), not merely wired-but-inert.
             if (freehandDimensionName is not null && Guid.TryParse(persistResult.ReportId, out var reportGuid))
             {
-                _ = await context.ScheduleTask<BuildReasoningTraceOutput>(typeof(BuildReasoningTraceActivity).Name, "1.0",
+                // [FIX 2026-09-27] The explainer's tokens were billed but never counted in the tenant's
+                // recorded usage. Added straight to the total, NOT via ChargeAndCheck: the report is
+                // already persisted, so going over the per-run ceiling here must never refuse it.
+                // Replay-safe: an older recorded output has no TotalTokens and adds 0.
+                var trace = await context.ScheduleTask<BuildReasoningTraceOutput>(typeof(BuildReasoningTraceActivity).Name, "1.0",
                     new BuildReasoningTraceInput(
                         reportGuid, input.TenantId, input.ReportType, persistResult.GeneratedAtUtc,
                         freehandDimensionName, plan, dimensions.Assertions, dimensions.Findings,
@@ -1054,6 +1058,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         // payload-only change never needed one.
                         ReportHtml: finalStructureChecked.Html,
                         UserId: input.UserId, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd));
+                runTotalTokens += trace?.TotalTokens ?? 0;
             }
 
             return persistResult;

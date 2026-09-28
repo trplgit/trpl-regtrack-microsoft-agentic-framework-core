@@ -68,9 +68,12 @@ public static class PaidReportAgentsRegistration
         var memoryBlobConnectionString = configuration["TenantMemory:BlobConnectionString"] is { Length: > 0 } mbcs
             ? mbcs
             : configuration["Azure:BlobConnectionString"];
+        // [CHANGED 2026-09-28] Default is now the REPORTS container (Azure:BlobContainer), file
+        // {tenantId}/tenant-memory.md.enc in the tenant's own folder beside its reports - was a
+        // separate "insights-tenant-memory" container. TenantMemory:ContainerName still overrides.
         var memoryContainerName = configuration["TenantMemory:ContainerName"] is { Length: > 0 } mcn
             ? mcn
-            : "insights-tenant-memory";
+            : configuration["Azure:BlobContainer"] is { Length: > 0 } rc ? rc : "insights-reports";
 
         // [ADDED 2026-09-14] Vision QA's own deployment - a real, different Azure resource again
         // (trpl-prod-saas-ai-3, not ai-2/sol or the shared Llm:Maf one), same "confirm before
@@ -197,10 +200,17 @@ public static class PaidReportAgentsRegistration
             };
         });
 
+        // [ADDED 2026-09-28] Summarises older tenant-memory entries instead of cutting them - see
+        // ITenantMemorySummarizer. Standard model; runs only when a section outgrows its limit.
+        services.AddSingleton<ITenantMemorySummarizer>(sp => new MafTenantMemorySummarizer(MafAgentFactory.CreateTextAgent(
+            endpoint, model, apiKey, "TenantMemorySummarizer", "Summarises older tenant-memory entries without losing comparison facts.",
+            LoadPromptSync(sp, "09_tenant_memory_summarizer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",
             LoadPromptSync(sp, "03_narrative.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>()),
-            sp.GetService<IReportEncryptor>(), sp.GetService<IReportDecryptor>(), memoryBlobConnectionString, memoryContainerName));
+            sp.GetService<IReportEncryptor>(), sp.GetService<IReportDecryptor>(), memoryBlobConnectionString, memoryContainerName,
+            sp.GetService<ITenantMemorySummarizer>()));
 
         services.AddSingleton<INarrativeReflectionAgent>(sp => new MafNarrativeReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
@@ -227,7 +237,8 @@ public static class PaidReportAgentsRegistration
             memoryEncryptor: sp.GetService<IReportEncryptor>(), memoryDecryptor: sp.GetService<IReportDecryptor>(),
             memoryBlobConnectionString: memoryBlobConnectionString, memoryContainerName: memoryContainerName,
             onMemoryWriteInvoked: (runId, dimensionName, success) =>
-                toolInvocationRecorder.RecordAsync(runId, "analyze_and_narrate", "write_tenant_memory", dimensionName, success, resultLength: null)));
+                toolInvocationRecorder.RecordAsync(runId, "analyze_and_narrate", "write_tenant_memory", dimensionName, success, resultLength: null),
+            memorySummarizer: sp.GetService<ITenantMemorySummarizer>()));
 
         // [ADDED 2026-09-14] Real vision-model gate inside the render-retry loop - see
         // VisionQaActivity's own doc comment for why this is a real gate, not advisory like

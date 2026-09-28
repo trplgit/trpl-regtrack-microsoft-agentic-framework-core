@@ -93,7 +93,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
-        using var _period = ReportPeriodContext.Push(ReportPeriodContext.Describe(input.Period, input.WindowStart, input.WindowEnd));
+        using var _period = ReportPeriodContext.Push(ReportPeriodContext.DescribeFor(input.DimensionName, input.Period, input.WindowStart, input.WindowEnd));
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
             input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.PreviousVisualIssue, CancellationToken.None);
@@ -122,9 +122,13 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
             html = Insights.Presentation.DimensionDataInjector.Inject(html, dimension, rowsJson, totalsJson);
 
             // The fabricated-number check - detection only; the orchestrator decides to re-render
-            // or refuse. The narrative already passed the publish gate, so its numbers count as data.
+            // or refuse. [FIX 2026-09-27] The narrative is deliberately NOT trusted as a source:
+            // PublishGate only checks which assertion ids it cites, never the numbers in its prose,
+            // so trusting it let a number the narrative model invented reach the page unchecked.
+            // Every number traces to rows / totals / assertions only (calibrated that way: 0 false
+            // alarms on 12 real renders).
             var untraced = Insights.Presentation.ReportNumberTracer.FindUntraced(
-                html, rowsJson, totalsJson, input.Assertions, input.Narrative.Blocks.Select(b => b.Prose));
+                html, rowsJson, totalsJson, input.Assertions, trustedTexts: null);
             return new RenderHtmlOutput(html, result.TotalTokens, untraced);
         }
 

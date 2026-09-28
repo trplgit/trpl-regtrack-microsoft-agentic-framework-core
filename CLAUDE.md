@@ -62,8 +62,13 @@ render; deleted along with its class and tests, same as the fixed template's own
 narrate call (v1 `MafNarrativeAgent`, v2 `MafAnalystNarrativeAgent`) can now read its own
 dimension's notes from past runs (`tenant_history`, always injected, never a tool call) and
 optionally save new notes via a real `write_tenant_memory` tool - one blob per tenant
-(`<tenantId>/history.md.enc`, container `insights-tenant-memory`), one `## {Dimension}` markdown
-section per dimension inside it, same envelope encryption as report blobs. Full design:
+(`<tenantId>/tenant-memory.md.enc` in the REPORTS container, the tenant's own folder - moved
+2026-09-28 from `<tenantId>/history.md.enc` in the old `insights-tenant-memory` container), one
+`## {Dimension}` markdown section per dimension inside it, same envelope encryption as report blobs.
+[2026-09-28] Each section = `### Keep` (never altered, max 3000 chars) + `### YYYY-MM-DD (period)`
+run entries (dates from code-built `run_context`); over 6000 chars the runs older than the two
+newest are SUMMARISED by a model call (`ITenantMemorySummarizer`, prompt 09), checked in code
+before storing - the cut-based `TenantMemoryCompactor.Compact` is only the fallback. Full design:
 `docs/superpowers/specs/2026-09-22-tenant-memory-blob-design.md`. Guardrails class:
 `Insights.Agents/TenantMemoryTool.cs` (dimension scope validated against a closed set, size cap,
 optimistic-concurrency retry via blob ETags). **Fails soft by design** - a Key Vault/blob failure

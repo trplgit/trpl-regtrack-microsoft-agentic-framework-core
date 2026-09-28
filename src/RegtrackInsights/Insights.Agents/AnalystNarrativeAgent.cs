@@ -129,7 +129,10 @@ public sealed class MafAnalystNarrativeAgent(
     IReportDecryptor? memoryDecryptor = null,
     string? memoryBlobConnectionString = null,
     string? memoryContainerName = null,
-    Func<string?, string, bool, Task>? onMemoryWriteInvoked = null) : IAnalystNarrativeAgent
+    Func<string?, string, bool, Task>? onMemoryWriteInvoked = null,
+    // [ADDED 2026-09-28] Summarises older memory entries when a section outgrows its limit - see
+    // ITenantMemorySummarizer. Null = the deterministic cut fallback only.
+    ITenantMemorySummarizer? memorySummarizer = null) : IAnalystNarrativeAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -164,7 +167,7 @@ public sealed class MafAnalystNarrativeAgent(
         {
             memoryTool = new TenantMemoryTool(
                 memoryEncryptor, memoryDecryptor, memoryBlobConnectionString, memoryContainerName,
-                customerId.Value, [dimensionName]);
+                customerId.Value, [dimensionName], memorySummarizer);
             var sections = await memoryTool.ReadSectionsAsync(cancellationToken);
             tenantHistory = sections.GetValueOrDefault(dimensionName, "");
         }
@@ -182,6 +185,7 @@ public sealed class MafAnalystNarrativeAgent(
               "dimension_rows": {{dimensionRowsJson}},
               "dimension_control_totals": {{dimensionControlTotalsJson ?? "null"}},
               "tenant_history": {{JsonSerializer.Serialize(tenantHistory)}},
+              "run_context": {{JsonSerializer.Serialize(RunContext(dimensionName, windowStart, windowEnd))}},
               "previous_narrative": {{(revision is null ? "null" : JsonSerializer.Serialize(revision.Value.PreviousNarrative, JsonOptions))}},
               "reflection_issues": {{(revision is null ? "null" : JsonSerializer.Serialize(revision.Value.Issues, JsonOptions))}}
             }
@@ -350,7 +354,7 @@ public sealed class MafAnalystNarrativeAgent(
         {
             memoryTool = new TenantMemoryTool(
                 memoryEncryptor, memoryDecryptor, memoryBlobConnectionString, memoryContainerName,
-                customerId.Value, dimensionNames);
+                customerId.Value, dimensionNames, memorySummarizer);
             tenantHistory = (Dictionary<string, string>)await memoryTool.ReadSectionsAsync(cancellationToken);
         }
 
@@ -478,6 +482,18 @@ public sealed class MafAnalystNarrativeAgent(
     /// or memory note could easily contain the word "error" in its own data without this being a
     /// tool failure.
     /// </summary>
+    /// <summary>
+    /// [ADDED 2026-09-28] Today's date and the report period, built in code, so tenant-memory entry
+    /// headings ("### 2026-09-28 (Last 30 days · 29 Aug 2026 – 27 Sep 2026)") carry REAL dates - the
+    /// model had neither before and month-to-month comparisons depend on them. report_period is null
+    /// when the dimension has no window (counted as of the run date).
+    /// </summary>
+    internal static object RunContext(string? dimensionName, DateTime? windowStart, DateTime? windowEnd) => new
+    {
+        run_date = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        report_period = ReportPeriodContext.DescribeFor(dimensionName, null, windowStart, windowEnd),
+    };
+
     private static bool IsSuccessResult(string toolResultJson)
     {
         try

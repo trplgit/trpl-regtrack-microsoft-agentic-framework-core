@@ -18,7 +18,10 @@ public sealed record BuildReasoningTraceInput(
     // the exact user, tenant and period the report used. Trailing optional: replay-safe.
     int? UserId = null, DateTime? WindowStart = null, DateTime? WindowEnd = null);
 
-public sealed record BuildReasoningTraceOutput(bool Written);
+// [FIX 2026-09-27] TotalTokens: the explainer's real token spend, so the orchestrator can add it to
+// the tenant's recorded usage (it was billed but never counted). Trailing optional: a run recorded
+// before this existed replays with 0 - its old behaviour.
+public sealed record BuildReasoningTraceOutput(bool Written, long TotalTokens = 0);
 
 /// <summary>
 /// [ADDED 2026-09-26] Node 12b - runs after PersistActivity, only for the freehand single-dimension
@@ -52,6 +55,7 @@ public sealed class BuildReasoningTraceActivity(
         if (explainerAgent is null || traceStore is null)
             return new BuildReasoningTraceOutput(Written: false);
 
+        long explainTokens = 0;
         try
         {
             var reasoningLog = reasoningRecorder is null
@@ -79,18 +83,19 @@ public sealed class BuildReasoningTraceActivity(
                 reportText, numbers, databaseChecks);
 
             var explainResult = await explainerAgent.ExplainAsync(bundle);
+            explainTokens = explainResult.TotalTokens;
             var markdown = AppendCompletenessCheck(explainResult.Value, numbers);
 
             var pathContext = new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(input.GeneratedAtUtc), input.ReportId);
             await traceStore.WriteAsync(markdown, pathContext);
 
             logger.LogInformation("BuildReasoningTraceActivity: wrote reasoning trace for report {ReportId} ({Tokens} explainer tokens).", input.ReportId, explainResult.TotalTokens);
-            return new BuildReasoningTraceOutput(Written: true);
+            return new BuildReasoningTraceOutput(Written: true, explainTokens);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "BuildReasoningTraceActivity: failed to build/write the reasoning trace for report {ReportId} - the report itself is unaffected.", input.ReportId);
-            return new BuildReasoningTraceOutput(Written: false);
+            return new BuildReasoningTraceOutput(Written: false, explainTokens);
         }
     }
 
