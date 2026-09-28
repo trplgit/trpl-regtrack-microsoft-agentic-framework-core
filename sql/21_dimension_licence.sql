@@ -460,9 +460,16 @@ BEGIN
            @tenantLapsedPct, LapsedPct - @tenantLapsedPct,
            CASE WHEN LapsedPct > @tenantLapsedPct THEN 'worse' ELSE 'better' END,
            NULLIF(CONCAT(
-               CASE WHEN @rankDegraded = 1
+               /*  [FIX 2026-09-28] Degraded means FEWER THAN TWO types reach the floor, not none -
+                   the old text said "no licence type reaches" while Transport had 97, and the
+                   report repeated the contradiction. Now states the real count.              */
+               CASE WHEN @rankDegraded = 1 AND @materialMembers = 0
                     THEN CONCAT(N'degraded_ranking_sample: no licence type reaches the ', @materialityFloor,
-                                N'-licence materiality floor. ') ELSE N'' END,
+                                N'-licence materiality floor, so every type is ranked regardless of size. ')
+                    WHEN @rankDegraded = 1
+                    THEN CONCAT(N'degraded_ranking_sample: only one licence type reaches the ', @materialityFloor,
+                                N'-licence materiality floor, too few to rank, so every type is ranked regardless of size. ')
+                    ELSE N'' END,
                CASE WHEN @tiedAtTop > 1
                     THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' licence types share this rate - not uniquely the highest. ')
                     ELSE N'' END), N'')
@@ -536,7 +543,9 @@ BEGIN
                CASE WHEN @licRole = 'CADMN'
                     THEN N'Company Admin licence role: every licence at the company''s operating branches is included.'
                     ELSE CONCAT(N'', @outsideRole, N' licence(s) at the company''s operating branches are outside this user''s '
-                         + N'licence role (', @licRole, N') and are not included - the same rule RegTrack''s own '
+                         + N'licence role (', CASE @licRole WHEN 'MGMT' THEN N'Management' WHEN 'AUDT' THEN N'Auditor'
+                                                            WHEN 'EXCT' THEN N'Non-Admin' ELSE @licRole END,
+                         N') and are not included - the same rule RegTrack''s own '
                          + N'licence report applies. Counts cover only the licences this user is responsible for.') END
         WHERE @licRole = 'CADMN' OR @outsideRole > 0
         UNION ALL

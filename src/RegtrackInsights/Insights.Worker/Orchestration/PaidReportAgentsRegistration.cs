@@ -22,9 +22,12 @@ public static class PaidReportAgentsRegistration
 {
     /// <summary>
     /// [ADDED 2026-09-28] The small non-reasoning deployment on the Llm:Maf endpoint - used by the
-    /// reasoning-trace explainer and the tenant-memory summariser (user decision).
+    /// tenant-memory summariser (user decision; its output is checked in code before it is stored).
     /// </summary>
     internal const string SmallModel = "gpt-4o-mini";
+
+    /// <summary>[ADDED 2026-09-28] The testers' reasoning-file explainer (user decision) - see its registration.</summary>
+    internal const string ExplainerModel = "gpt-5.6-luna";
 
     public static IServiceCollection AddInsightsPaidReportAgents(this IServiceCollection services, IConfiguration configuration)
     {
@@ -263,14 +266,16 @@ public static class PaidReportAgentsRegistration
         // on the same real Users report, gpt-4o-mini wrote wrong formulas ("1,102 = count where
         // Instances is 0") and invented report locations ("Section People"); the standard model got
         // every formula and location right. It runs after persist and never delays the report.
-        // [CHANGED 2026-09-28] Back to gpt-4o-mini (user decision), and the testers' SQL section is
-        // gone (testers work from formulas only) - a smaller job than the one 4o-mini got wrong on
-        // 09-27. The code completeness check (BuildReasoningTraceActivity) still lists any number
-        // the file fails to explain.
-        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateSimpleTextAgent(
-            endpoint, SmallModel, apiKey, "ReasoningExplainerAgent",
+        // [CHANGED 2026-09-28] Briefly back on gpt-4o-mini (no SQL section any more). A real deployed
+        // Licence run (report 61d93799) showed it still invents explanations: it called the chart's
+        // "0%" axis label "FSSAI lapse rate = 0 / 9" (real: 1 / 9 = 11.1%) - a wrong claim the code
+        // completeness check cannot catch, because "0%" is on the page. Moved to gpt-5.6-luna (user
+        // decision): same endpoint/key, a reasoning model, so CreateTextAgent with medium effort.
+        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateTextAgent(
+            endpoint, ExplainerModel, apiKey, "ReasoningExplainerAgent",
             "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
-            LoadPromptSync(sp, "08_reasoning_explainer_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "08_reasoning_explainer_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
+            ResponseReasoningEffortLevel.Medium)));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
