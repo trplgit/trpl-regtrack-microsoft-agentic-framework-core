@@ -198,6 +198,38 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
     }
 
+    [Fact]
+    public async Task RunTask_LayoutIssuesOnTheFinalPage_ReRendersWithThoseLabelsNamed()
+    {
+        var (context, capturedRenderInputs) = SetupRenderChain(new RenderHtmlOutput("<html></html>", 1000, []));
+        context.SetupSequence(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>", ["\"Azure Act\" spills outside its tile/box"]))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>", []));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object,
+            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38));
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
+        Assert.Equal(2, capturedRenderInputs.Count);
+        Assert.Contains("\"Azure Act\" spills outside its tile/box", capturedRenderInputs[1].PreviousVisualIssue);
+    }
+
+    /// <summary>Cosmetic, so never a refusal: on the last attempt the report ships with the issues logged.</summary>
+    [Fact]
+    public async Task RunTask_LayoutIssuesOnEveryAttempt_ShipsOnTheLastAttempt()
+    {
+        var (context, capturedRenderInputs) = SetupRenderChain(new RenderHtmlOutput("<html></html>", 1000, []));
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>", ["\"A\" overlaps \"B\""]));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object,
+            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38));
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
+        Assert.Equal(3, capturedRenderInputs.Count);
+        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+    }
+
     private static (Mock<OrchestrationContext> Context, List<RenderHtmlInput> RenderInputs) SetupRenderChain(params RenderHtmlOutput[] renders)
     {
         var context = new Mock<OrchestrationContext>();

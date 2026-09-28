@@ -968,6 +968,26 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     structureChecked = await context.ScheduleTask<ValidateFixedHolisticStructureOutput>(
                         typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", new ValidateFixedHolisticStructureInput(reNormalized.Html, input.ReportType));
 
+                    // [ADDED 2026-09-28] Layout gate (LayoutCollisionChecker, run inside the structure
+                    // step on the FINAL page): overlapping labels, text under icons, text spilling out
+                    // of its tile or cut off - found live on real Act/Location reports. Same retry
+                    // mechanism as the number and vision gates, the labels named in the feedback. It is
+                    // cosmetic, so on the LAST attempt the report ships anyway (the issues are logged by
+                    // the activity) instead of refusing a report whose numbers are correct. Read from
+                    // the activity OUTPUT (replay-safe); older recorded outputs have no LayoutIssues and
+                    // take their old path, so no orchestrator version bump.
+                    if (structureChecked.LayoutIssues is { Count: > 0 } layoutIssues && renderAttempt < maxRenderAttempts)
+                    {
+                        previousVisualIssue =
+                            $"some text on the page cannot be read cleanly: {string.Join("; ", layoutIssues)}. " +
+                            "Follow section 15: shorten long labels with an ellipsis (full name on hover), keep all text inside its own tile/bar/card, " +
+                            "put no text inside tiles too small for it, keep text clear of icons, and never let two labels overlap or be cut off.";
+                        throw new OrchestrationRefusedException(
+                            "LAYOUT_OVERLAP",
+                            "We couldn't generate this report to our accuracy standard. Our team has been notified.",
+                            internalDiagnostics: [$"Render attempt {renderAttempt}: layout issues: {string.Join(" | ", layoutIssues)}"]);
+                    }
+
                     // [REMOVED 2026-09-23, bump 3.8 -> 3.9] ValidateUserDimensionStructureActivity/
                     // UserDimensionStructureGate enforced Sambram's FIXED Users template shape (4
                     // named tabs, a donut, a role strip, a lens toggle) - real gate-worthy while

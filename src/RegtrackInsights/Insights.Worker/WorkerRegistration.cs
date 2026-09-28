@@ -140,7 +140,9 @@ public static class WorkerRegistration
         services.AddTransient(sp => new NormalizeActivity(
             configuration["Reports:LocalFallbackDirectory"], sp.GetRequiredService<ILogger<NormalizeActivity>>()));
         services.AddTransient<SanitizeActivity>();
-        services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient(sp => new ValidateFixedHolisticStructureActivity(
+            sp.GetRequiredService<ILogger<ValidateFixedHolisticStructureActivity>>(),
+            sp.GetService<Insights.Presentation.ILayoutChecker>()));
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory

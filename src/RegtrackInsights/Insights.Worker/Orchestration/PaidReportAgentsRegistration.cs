@@ -399,6 +399,8 @@ public static class PaidReportAgentsRegistration
 
         services.AddSingleton<IDomPurifySanitizer>(sp => new DomPurifySanitizer(sp.GetRequiredService<IBrowser>()));
         services.AddSingleton<IReportQaRunner>(sp => new PlaywrightReportQa(sp.GetRequiredService<IBrowser>()));
+        // [ADDED 2026-09-28] Layout gate on the final page - see LayoutCollisionChecker.
+        services.AddSingleton<ILayoutChecker>(sp => new LayoutCollisionChecker(sp.GetRequiredService<IBrowser>()));
 
         return services;
     }
