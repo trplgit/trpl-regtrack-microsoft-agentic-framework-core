@@ -187,14 +187,15 @@ BEGIN
     /*-- 2. SCOPED LICENCE BASE -------------------------------------------*/
     IF OBJECT_ID('tempdb..#branchLic') IS NOT NULL DROP TABLE #branchLic;
     SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID,
-           NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.StartDate, li.EndDate
+           NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.StartDate, li.EndDate,
+           CAST(ISNULL(li.IsPermanantActive, 0) AS BIT) AS IsPerpetual   -- [TRAP] column is misspelled in the schema
     INTO #branchLic
     FROM Lic_tbl_LicenseInstance li
     JOIN #branches b ON b.BranchID = li.CustomerBranchID
     WHERE li.CustomerID = @CustomerID AND li.IsDeleted = 0;
 
     IF OBJECT_ID('tempdb..#roleLic') IS NOT NULL DROP TABLE #roleLic;
-    SELECT bl.LicenseId, bl.BranchID, bl.LicenseTypeID, bl.StartDate, bl.EndDate
+    SELECT bl.LicenseId, bl.BranchID, bl.LicenseTypeID, bl.StartDate, bl.EndDate, bl.IsPerpetual
     INTO #roleLic
     FROM #branchLic bl
     WHERE @licRole = 'CADMN'
@@ -226,7 +227,7 @@ BEGIN
        RegTrack's report exactly) - and the count is declared in data_quality
        'licence_no_live_task', never silent.                                  */
     IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
-    SELECT rl.LicenseId, rl.BranchID, rl.LicenseTypeID, rl.StartDate, rl.EndDate
+    SELECT rl.LicenseId, rl.BranchID, rl.LicenseTypeID, rl.StartDate, rl.EndDate, rl.IsPerpetual
     INTO #lic
     FROM #roleLic rl
     WHERE EXISTS (SELECT 1
@@ -307,7 +308,14 @@ BEGIN
        ExcludedTerminalState : EndDate has passed but the licence was terminated,
                 rejected, renewed (EndDate superseded) or never applicable. Per
                 the BA ruling these are NOT lapses and get their own bucket.
-       LapsingNext30 : forward window, mirrors sql/06's DueNext30 windowing. */
+       LapsingNext30 : forward window, mirrors sql/06's DueNext30 windowing.
+       [FIX 2026-09-28] A PERPETUAL licence (IsPermanantActive = 1) is ACTIVE and
+                never lapses, whatever EndDate holds - RegTrack's own licence
+                report blanks EndDate for it. Before this, a perpetual licence
+                with no EndDate sat in no bucket (found by the reasoning file on
+                1285: Transport 9 + 76 + 11 = 96 of 97). A NON-perpetual licence
+                with no EndDate still sits in no bucket - that is missing data,
+                declared in data_quality 'licence_no_end_date'.                  */
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         LicenseTypeID          INT            NOT NULL PRIMARY KEY,
@@ -330,16 +338,16 @@ BEGIN
     SELECT
         t.LicenseTypeID, t.LicenseTypeName, t.IsRetired,
         COUNT(l.LicenseId),
-        SUM(CASE WHEN l.EndDate >= @AsOf THEN 1 ELSE 0 END),
-        SUM(CASE WHEN l.EndDate < @AsOf AND ISNULL(CAST(c.LapseEligible AS INT), 1) = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 1 OR l.EndDate >= @AsOf THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 0 AND l.EndDate < @AsOf AND ISNULL(CAST(c.LapseEligible AS INT), 1) = 1 THEN 1 ELSE 0 END),
         /*  ISNULL(..., 1): a licence with NO status transaction row at all is
             still LAPSED if its EndDate has passed. Absence of a record is not
             evidence that it was terminated or renewed, and the BA ruling makes
             the due date the deciding fact. Without this the reconciliation
             drops them silently - 15 licences on the tenant this was built
             against. The count is declared in data_quality.                   */
-        SUM(CASE WHEN l.EndDate < @AsOf AND c.LapseEligible = 0 THEN 1 ELSE 0 END),
-        SUM(CASE WHEN l.EndDate > @AsOf AND l.EndDate <= DATEADD(DAY, 30, @AsOf) THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 0 AND l.EndDate < @AsOf AND c.LapseEligible = 0 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 0 AND l.EndDate > @AsOf AND l.EndDate <= DATEADD(DAY, 30, @AsOf) THEN 1 ELSE 0 END),
         COUNT(DISTINCT l.BranchID)
     FROM #type t
     LEFT JOIN #lic l           ON l.LicenseTypeID = t.LicenseTypeID
@@ -371,6 +379,8 @@ BEGIN
         CASE WHEN @scopedTotal = 0 THEN 0
              ELSE 100.0 * (SELECT ISNULL(SUM(Lapsed),0) FROM #rows) / @scopedTotal END;
     DECLARE @totalExcludedTerminal INT = (SELECT ISNULL(SUM(ExcludedTerminalState),0) FROM #rows);
+    DECLARE @perpetual   INT = (SELECT COUNT(*) FROM #lic WHERE IsPerpetual = 1);
+    DECLARE @noEndDate   INT = (SELECT COUNT(*) FROM #lic WHERE IsPerpetual = 0 AND EndDate IS NULL);
 
     UPDATE #rows SET
         LapsedPct = CASE WHEN TotalLicences = 0 THEN 0
@@ -527,6 +537,8 @@ BEGIN
                    WHEN 'licence_module_scope'                 THEN 'ScopedLicences'
                    WHEN 'licence_role_scope'                   THEN 'ScopedLicences'
                    WHEN 'licence_no_live_task'                 THEN 'ScopedLicences'
+                   WHEN 'perpetual_licences'                   THEN 'ActiveLicences'
+                   WHEN 'licence_no_end_date'                  THEN 'ScopedLicences'
                    WHEN 'excluded_terminal_states'             THEN 'TenantLapsedPct'
                    WHEN 'untyped_licences'                     THEN 'UntypedLicences'
                    WHEN 'licence_type_retired_still_in_use'    THEN 'LicenceTypesReported'
@@ -554,6 +566,15 @@ BEGIN
                     + N'licence report leaves them out: the linked compliance task is inactive, has no active performer '
                     + N'or has never been acted on, or the licence has no dated latest status record.')
         WHERE @noLiveTask > 0
+        UNION ALL
+        SELECT 'perpetual_licences',
+               CONCAT(N'', @perpetual, N' licence(s) are perpetual (no expiry). They are counted as active and never as lapsed.')
+        WHERE @perpetual > 0
+        UNION ALL
+        SELECT 'licence_no_end_date',
+               CONCAT(N'', @noEndDate, N' licence(s) are not perpetual but have no end date recorded, so they are counted in '
+                    + N'the total but not as active, lapsed or ended another way.')
+        WHERE @noEndDate > 0
         UNION ALL
         SELECT 'excluded_terminal_states',
                CONCAT(N'', @totalExcludedTerminal, N' licence(s) are past EndDate but ended another way - '

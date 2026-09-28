@@ -14,7 +14,11 @@
     "--         (branch, licence type) pairs; Non-Admin (EXCT) only licences on compliance tasks assigned to them.",
     "DECLARE @LicRole VARCHAR(10) = (SELECT r.Code FROM [User] u JOIN Role r ON r.ID = u.LicenseRoleID WHERE u.ID = @UserID AND u.IsDeleted = 0);",
     "IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;",
-    "SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID, NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.EndDate INTO #lic",
+    "--         A perpetual licence (IsPermanantActive = 1) has no expiry: its end date is ignored (blanked here, as RegTrack's own",
+    "--         licence report does) and it counts as active, never lapsed.",
+    "SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID, NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID,",
+    "       CASE WHEN ISNULL(li.IsPermanantActive, 0) = 1 THEN NULL ELSE li.EndDate END AS EndDate,",
+    "       CAST(ISNULL(li.IsPermanantActive, 0) AS INT) AS IsPerpetual INTO #lic",
     "FROM Lic_tbl_LicenseInstance li",
     "WHERE li.CustomerID = @CustomerID AND li.IsDeleted = 0",
     "  AND li.CustomerBranchID IN (SELECT cb.ID FROM CustomerBranch cb WHERE cb.CustomerID = @CustomerID AND cb.IsDeleted = 0 AND cb.Status = 1)",
@@ -117,9 +121,9 @@
       "id": "Y2",
       "name": "A licence type's licences still in force",
       "compare": "row|ActiveLicences",
-      "tables": "End date today or later.",
+      "tables": "Perpetual, or end date today or later.",
       "query": [
-        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey} AND EndDate >= a.AsOf;"
+        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey} AND (IsPerpetual = 1 OR EndDate >= a.AsOf);"
       ]
     },
     {
