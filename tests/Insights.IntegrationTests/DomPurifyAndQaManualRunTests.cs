@@ -29,6 +29,52 @@ public sealed class DomPurifyAndQaManualRunTests(ITestOutputHelper output)
     /// itself works fine (proven separately by this same test, pre-fix). Fixed via
     /// DomPurifySanitizer.ReattachCharsetIfMissing, same shape as the doctype fix.
     /// </summary>
+    /// <summary>
+    /// [FOUND LIVE 2026-09-27] Real renders lost their only chart script to DOMPurify because it
+    /// contained "page&lt;pages-1" / "v&lt;0". ScriptComparisonSpacer now runs inside SanitizeAsync.
+    /// </summary>
+    [Fact]
+    public async Task SanitizeAsync_KeepsAScriptContainingALessThanComparison()
+    {
+        const string document =
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><div id=\"c\"></div>" +
+            "<script>var v=-3,page=0,pages=4;if(v<0&&page<pages-1){document.getElementById('c').textContent='ok';}</script>" +
+            "</body></html>";
+
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync();
+        var sanitized = await new DomPurifySanitizer(browser).SanitizeAsync(document);
+
+        Assert.Contains("<script>", sanitized, StringComparison.Ordinal);
+        Assert.Contains("v< 0", sanitized, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-27] DimensionDataInjector's JSON block must survive the real sanitizer intact,
+    /// or every chart that reads it renders empty.
+    /// </summary>
+    [Fact]
+    public async Task SanitizeAsync_KeepsTheInjectedDimensionDataBlock()
+    {
+        var html = DimensionDataInjector.Inject(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><div id=\"c\"></div>" +
+            "<script>var d=JSON.parse(document.getElementById('insights-data').textContent);document.getElementById('c').textContent=d.rows.length;</script></body></html>",
+            "Users", """[{"UserID":1,"UserName":"A<B & C"},{"UserID":2,"UserName":"Zed"}]""", """{"UsersReported":2}""");
+
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync();
+        var sanitized = await new DomPurifySanitizer(browser).SanitizeAsync(html);
+
+        Assert.Contains("id=\"insights-data\"", sanitized, StringComparison.Ordinal);
+        Assert.Contains("type=\"application/json\"", sanitized, StringComparison.Ordinal);
+        Assert.Contains("\"UserName\":\"Zed\"", sanitized, StringComparison.Ordinal);
+        Assert.True(ReportEmitNormalizer.Evaluate(sanitized).Approved, string.Join("; ", ReportEmitNormalizer.Evaluate(sanitized).Violations));
+
+        var page = await browser.NewPageAsync();
+        await page.SetContentAsync(sanitized);
+        Assert.Equal("2", await page.TextContentAsync("#c"));
+    }
+
     [Fact]
     public async Task SanitizeAsync_PreservesTheInjectedPoppinsFontFaceBlockAndTheCharsetMeta()
     {

@@ -24,13 +24,15 @@ public sealed class EfCooldownRepositoryTests
             .Options);
 
     private static GeneratedReport Report(
-        string period, DateTime generatedAtUtc, string status = "complete", string reportType = ReportType) => new()
+        string period, DateTime generatedAtUtc, string status = "complete", string reportType = ReportType,
+        string? requestedDimensions = null) => new()
     {
         Id = Guid.NewGuid(),
         CustomerId = TenantId,
         ScopeDescriptor = Scope,
         ReportType = reportType,
         Period = period,
+        RequestedDimensions = requestedDimensions,
         GeneratedAtUtc = generatedAtUtc,
         GeneratedByUserId = 38,
         BlobContainer = "insights-reports-temp",
@@ -162,5 +164,63 @@ public sealed class EfCooldownRepositoryTests
         var result = await repo.CheckAsync(TenantId, ReportType, Scope, "act");
 
         Assert.True(result.IsOpen);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-25, sql/33 deployed] A row written by the updated PersistActivity carries
+    /// the real RequestedDimensions column - the lookup must use it DIRECTLY, with no dependency on
+    /// the legacy "::dim=" Period suffix at all (Period here is plain, no suffix).
+    /// </summary>
+    [Fact]
+    public async Task CheckAsync_RealColumnPresent_LocksWithoutNeedingTheLegacyPeriodSuffix()
+    {
+        var db = NewInMemoryDb();
+        db.GeneratedReports.Add(Report("last_30_days", DateTime.UtcNow.AddDays(-1), requestedDimensions: "act"));
+        await db.SaveChangesAsync();
+
+        var repo = new EfCooldownRepository(db, CooldownDays, cooldownEnabled: true);
+
+        var result = await repo.CheckAsync(TenantId, ReportType, Scope, "act");
+
+        Assert.False(result.IsOpen);
+    }
+
+    /// <summary>
+    /// The real column is a comma-joined LIST (sql/33's own CK_GeneratedReport_DimensionKeyAgrees
+    /// constraint tests membership, not equality) - a row covering several dimensions must lock
+    /// each one of them individually.
+    /// </summary>
+    [Fact]
+    public async Task CheckAsync_RealColumnListsSeveralDimensions_MatchesEachByMembership()
+    {
+        var db = NewInMemoryDb();
+        db.GeneratedReports.Add(Report("last_30_days", DateTime.UtcNow.AddDays(-1), requestedDimensions: "act,nature"));
+        await db.SaveChangesAsync();
+
+        var repo = new EfCooldownRepository(db, CooldownDays, cooldownEnabled: true);
+
+        var natureResult = await repo.CheckAsync(TenantId, ReportType, Scope, "nature");
+        var internalResult = await repo.CheckAsync(TenantId, ReportType, Scope, "internal");
+
+        Assert.False(natureResult.IsOpen);
+        Assert.True(internalResult.IsOpen);
+    }
+
+    /// <summary>
+    /// Legacy row (RequestedDimensions still NULL, written before sql/33 existed) must keep
+    /// locking correctly off the old Period suffix during the transition.
+    /// </summary>
+    [Fact]
+    public async Task CheckAsync_LegacyRowWithNoRequestedDimensionsColumn_StillFallsBackToPeriodSuffix()
+    {
+        var db = NewInMemoryDb();
+        db.GeneratedReports.Add(Report("last_30_days::dim=risk", DateTime.UtcNow.AddDays(-1), requestedDimensions: null));
+        await db.SaveChangesAsync();
+
+        var repo = new EfCooldownRepository(db, CooldownDays, cooldownEnabled: true);
+
+        var result = await repo.CheckAsync(TenantId, ReportType, Scope, "risk");
+
+        Assert.False(result.IsOpen);
     }
 }

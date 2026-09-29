@@ -97,7 +97,7 @@ already-reconciled SQL output. Everything you state must trace to it.
 `ClosureRiskInstances`, `ImprisonmentSharePct`, `OverdueRank`, `Flags`. A real "Others" row is
 always present — see below.
 
-**Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `SumOfRows`,
+**Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `CategorisedInstances`,
 `Reconciled`, `OverdueInstances`, `TenantOverduePct`, `TenantImprisonmentSharePct`,
 `NaturesReported`, `NaturesWithObligations`, `RetiredNaturesStillInUse`, `OthersBucketInstances`,
 `UntaggedInstances`, `UncategorisedInstances`, `UncategorisedPct`.

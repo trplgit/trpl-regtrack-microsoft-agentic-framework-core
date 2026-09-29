@@ -277,6 +277,53 @@ public class PersistActivityTests
         Assert.Single(verifyDb.GeneratedReports);
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-27, FOUND LIVE] A genuinely NEW run for the same key (cooldown off, or after
+    /// it expires - and "last_30_days" means different data every month) found the old row and
+    /// returned it, discarding the fresh render: tenant 1285's Act report kept serving 25 Sep's
+    /// content. A new orchestration execution must produce a new report.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SameKeyDifferentExecutions_ProducesTwoDistinctRows()
+    {
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(Envelope());
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports", "1285/dimension_selection/2026/09/x.html.enc"));
+
+        var storeName = Guid.NewGuid().ToString();
+        var input = new PersistInput("<html></html>", 1285, "dimension_selection", "last_30_days::dim=act", "tenant", 11416);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+
+        var first = await activity.RunAsync(input, executionId: "exec-25-sep");
+        var second = await activity.RunAsync(input, executionId: "exec-27-sep");
+
+        Assert.NotEqual(first.ReportId, second.ReportId);
+        encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    /// <summary>A redelivered activity within the SAME execution must still reuse its own row.</summary>
+    [Fact]
+    public async Task RunAsync_SameKeySameExecution_ReusesTheRow()
+    {
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(Envelope());
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports", "1285/dimension_selection/2026/09/x.html.enc"));
+
+        var storeName = Guid.NewGuid().ToString();
+        var input = new PersistInput("<html></html>", 1285, "dimension_selection", "last_30_days::dim=act", "tenant", 11416);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+
+        var first = await activity.RunAsync(input, executionId: "exec-1");
+        var redelivered = await activity.RunAsync(input, executionId: "exec-1");
+
+        Assert.Equal(first.ReportId, redelivered.ReportId);
+        encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     /// <summary>Different input (different tenant here) must never collide onto the same row.</summary>
     [Fact]
     public async Task RunAsync_CalledTwiceWithDifferentInput_ProducesTwoDistinctRows()

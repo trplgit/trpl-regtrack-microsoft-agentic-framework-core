@@ -52,7 +52,7 @@ public static class MafAgentFactory
     /// work, no rejection.
     /// </remarks>
     public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High);
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High, supportsReasoning: true);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
@@ -60,9 +60,23 @@ public static class MafAgentFactory
     /// See <see cref="CreateJsonAgent"/>'s own remarks for the real reasoning-summary root cause.
     /// </summary>
     public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High);
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High, supportsReasoning: true);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort)
+    /// <summary>
+    /// [ADDED 2026-09-26] For a genuinely non-reasoning model (gpt-4o-mini, the reasoning-trace
+    /// explainer's own deployment) - CreateJsonAgent/CreateTextAgent both hardcode a
+    /// RawRepresentationFactory that sets ReasoningOptions on EVERY call, defaulting effort to
+    /// High. Found live: gpt-4o-mini rejects that outright with a real HTTP 400
+    /// ("Unsupported parameter: 'reasoning.effort' is not supported with this model") - it has no
+    /// reasoning/effort concept at all, unlike the o-series/gpt-5 family every other agent in this
+    /// file targets. This method reuses the exact same client/pipeline wiring (OTel, metering,
+    /// concurrency gate, network timeout) but never attaches ReasoningOptions - the one real
+    /// difference a non-reasoning model needs.
+    /// </summary>
+    public static AIAgent CreateSimpleTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort: null, supportsReasoning: false);
+
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort, bool supportsReasoning)
     {
         /*  [BUG FOUND LIVE, 2026-09-01] The SDK's own default NetworkTimeout is 100 seconds
             (ClientPipelineOptions.NetworkTimeout - confirmed via the SDK's own
@@ -141,19 +155,27 @@ public static class MafAgentFactory
                 // happened with the summary both on and off, no real correlation). See
                 // NormalizeActivity's own doc comment on the ongoing investigation into the real
                 // trigger (the per-user leaderboard section, real employee names).
-                RawRepresentationFactory = _ => new CreateResponseOptions
-                {
-                    ReasoningOptions = reasoningEffort is null
-                        ? new ResponseReasoningOptions
-                        {
-                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
-                        }
-                        : new ResponseReasoningOptions
-                        {
-                            ReasoningEffortLevel = reasoningEffort.Value,
-                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
-                        },
-                },
+                // [ADDED 2026-09-26] supportsReasoning gates this whole block - a genuinely
+                // non-reasoning model (gpt-4o-mini, CreateSimpleTextAgent) rejects ReasoningOptions
+                // outright (real HTTP 400, "reasoning.effort" not supported), so it must never be
+                // attached at all, not even with a null effort level. Every existing caller
+                // (CreateJsonAgent/CreateTextAgent) always passes supportsReasoning: true, so this
+                // is purely additive - no behaviour change for the o-series/gpt-5 agents.
+                RawRepresentationFactory = supportsReasoning
+                    ? _ => new CreateResponseOptions
+                    {
+                        ReasoningOptions = reasoningEffort is null
+                            ? new ResponseReasoningOptions
+                            {
+                                ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
+                            }
+                            : new ResponseReasoningOptions
+                            {
+                                ReasoningEffortLevel = reasoningEffort.Value,
+                                ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
+                            },
+                    }
+                    : null,
             },
         };
 

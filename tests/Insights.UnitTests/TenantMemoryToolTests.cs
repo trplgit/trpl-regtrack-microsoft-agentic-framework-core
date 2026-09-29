@@ -58,16 +58,45 @@ public sealed class TenantMemoryToolTests
     }
 
     [Fact]
-    public async Task WriteTenantMemoryAsync_ContentOverSizeCap_RejectedBeforeIo()
+    public async Task WriteTenantMemoryAsync_ContentOverInputLimit_RejectedBeforeIo()
     {
         var tool = NewTool(["Internal"]);
-        var tooLong = new string('x', TenantMemoryTool.MaxSectionChars + 1);
+        var tooLong = new string('x', TenantMemoryTool.MaxInputChars + 1);
 
         var result = await tool.WriteTenantMemoryAsync("Internal", tooLong);
 
         using var doc = JsonDocument.Parse(result);
         Assert.True(doc.RootElement.TryGetProperty("error", out var err));
         Assert.Contains("limit", err.GetString());
+    }
+
+    /// <summary>[2026-09-28] Over the section cap is no longer refused - it is compacted, then stored.</summary>
+    [Fact]
+    public async Task WriteTenantMemoryAsync_OverSectionCapButCompactable_PassesValidation_AttemptsRealIo()
+    {
+        var tool = NewTool(["Internal"]);
+        var entries = string.Concat(Enumerable.Range(0, 60).Select(i =>
+            $"### {new DateOnly(2026, 9, 28).AddMonths(-i):yyyy-MM-dd} (last_30_days)\n- headline {i}\n- detail {new string('d', 80)}\n"));
+        Assert.True(entries.Length > TenantMemoryTool.MaxSectionChars);
+
+        var result = await tool.WriteTenantMemoryAsync("Internal", "### Keep\n- baseline\n" + entries);
+
+        using var doc = JsonDocument.Parse(result);
+        Assert.True(doc.RootElement.TryGetProperty("error", out var err));
+        Assert.StartsWith("Memory write failed", err.GetString());   // reached the (throwing) I/O
+    }
+
+    [Fact]
+    public async Task WriteTenantMemoryAsync_KeepBlockTooLarge_RejectedBeforeIo_SoTheModelDecides()
+    {
+        var tool = NewTool(["Internal"]);
+        var keep = "### Keep\n" + string.Concat(Enumerable.Range(0, 90).Select(i => $"- must keep {i} {new string('k', 40)}\n"));
+
+        var result = await tool.WriteTenantMemoryAsync("Internal", keep + "### 2026-09-28 (q2)\n- x");
+
+        using var doc = JsonDocument.Parse(result);
+        Assert.True(doc.RootElement.TryGetProperty("error", out var err));
+        Assert.Contains("Keep", err.GetString());
     }
 
     [Fact]
@@ -112,5 +141,60 @@ public sealed class TenantMemoryToolTests
 
         Assert.Equal("", sections["Internal"]);
         Assert.Equal("", sections["Risk"]);
+    }
+
+    private sealed class RecordingSummarizer(string? reply) : ITenantMemorySummarizer
+    {
+        public string? ReceivedOlderEntries { get; private set; }
+        public int ReceivedBudget { get; private set; }
+        public Task<string?> SummarizeAsync(string dimensionName, string olderEntries, int maxChars, CancellationToken cancellationToken = default)
+        {
+            ReceivedOlderEntries = olderEntries;
+            ReceivedBudget = maxChars;
+            return Task.FromResult(reply);
+        }
+    }
+
+    private static string LongHistory() =>
+        "### Keep\n- Baseline Aug 2026 (last 30 days): 28 of 33 overdue\n" + string.Concat(Enumerable.Range(0, 40).Select(i =>
+            $"### {new DateOnly(2026, 9, 28).AddMonths(-i):yyyy-MM-dd} (last_30_days)\n- headline {i}\n- detail {new string('d', 120)}\n"));
+
+    /// <summary>[2026-09-28] Over the limit the summariser gets ONLY the older runs - never Keep, never the two newest.</summary>
+    [Fact]
+    public async Task WriteTenantMemoryAsync_OverLimit_SummariserSeesOnlyOlderRuns()
+    {
+        var summarizer = new RecordingSummarizer("### Summary of older runs (2023-06-28 – 2026-07-28)\n- headline 2 .. headline 39");
+        var tool = new TenantMemoryTool(new ThrowingEncryptor(), new ThrowingDecryptor(), UnreachableConnectionString, "insights-tenant-memory-test",
+            tenantId: 29, allowedDimensions: ["Internal"], summarizer);
+
+        await tool.WriteTenantMemoryAsync("Internal", LongHistory());
+
+        Assert.NotNull(summarizer.ReceivedOlderEntries);
+        Assert.Contains("headline 2\n", summarizer.ReceivedOlderEntries);
+        Assert.Contains("headline 39", summarizer.ReceivedOlderEntries);
+        Assert.DoesNotContain("headline 0\n", summarizer.ReceivedOlderEntries);
+        Assert.DoesNotContain("headline 1\n", summarizer.ReceivedOlderEntries);
+        Assert.DoesNotContain("Baseline Aug 2026", summarizer.ReceivedOlderEntries);
+        Assert.True(summarizer.ReceivedBudget is > 0 and < TenantMemoryTool.MaxSectionChars);
+    }
+
+    /// <summary>A bad summary (e.g. one that would start another dimension's section) is never stored - the write still goes ahead via the fallback.</summary>
+    [Fact]
+    public async Task WriteTenantMemoryAsync_InvalidSummary_FallsBackAndStillWrites()
+    {
+        var summarizer = new RecordingSummarizer("## Act\n- would overwrite another dimension");
+        var tool = new TenantMemoryTool(new ThrowingEncryptor(), new ThrowingDecryptor(), UnreachableConnectionString, "insights-tenant-memory-test",
+            tenantId: 29, allowedDimensions: ["Internal"], summarizer);
+
+        var result = await tool.WriteTenantMemoryAsync("Internal", LongHistory());
+
+        using var doc = JsonDocument.Parse(result);
+        Assert.StartsWith("Memory write failed", doc.RootElement.GetProperty("error").GetString()); // reached I/O, not refused
+    }
+
+    [Fact]
+    public void BlobFile_LivesInTheTenantsOwnFolder()
+    {
+        Assert.Equal("tenant-memory.md.enc", TenantMemoryTool.BlobFileName);
     }
 }

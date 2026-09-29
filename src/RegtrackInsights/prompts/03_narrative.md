@@ -60,10 +60,38 @@ for a dimension outside this call's plan), near the end, only when there is
 something genuinely worth remembering for next time. `dimension_name` must
 be one of the real dimensions this call covers. Your text REPLACES that
 dimension's history, so fold forward what is still true rather than only
-appending — condense older entries once you are approaching ~3000
-characters (a write over 6000 is refused outright). Skipping the call is
+appending, in the memory format below. Skipping the call is
 correct on most runs; a failed call degrades silently and never affects
 anything else about your output.
+
+**Memory format (ADDED 2026-09-28 - required, month-to-month comparisons depend on it).** Write the
+section as markdown sub-headings ONLY (`###`, never `#` or `##`):
+
+```
+### Keep
+- <facts that must survive every future compaction: this dimension's baseline per period WITH its
+  period and date (e.g. "Aug 2026, last 30 days: 28 of 33 overdue"), problems that keep recurring
+  and since when, first-seen dates of open issues>
+### 2026-09-28 (Last 30 days · 29 Aug 2026 – 27 Sep 2026)
+- <THE single most important finding of this run - first point, always>
+- <supporting points>
+### 2026-08-28 (Last 30 days · 30 Jul 2026 – 27 Aug 2026)
+- ...
+```
+
+- Build each run heading from `run_context` in your input: `run_date`, then `report_period` in
+  brackets (or "as of" when `report_period` is null). Never invent or estimate a date.
+- Newest run first. Carry older run entries forward unchanged unless you are condensing them.
+- YOU decide what is important: anything a later month must still be compared against goes in
+  `### Keep` (keep it under ~3000 characters - a longer Keep is refused, and you must cut it
+  yourself); each run's most important finding is its FIRST point.
+- Size is handled for you: over 6000 characters, every run older than the two newest is
+  summarised into one `### Summary of older runs (<dates>)` block that keeps each run's date,
+  period, first point and every number a later month compares against. `### Keep` and the two
+  newest runs are stored word for word. When a summary block is in `tenant_history`, carry it
+  forward unchanged below your newest entries. So: whatever must not be lost belongs in Keep or as
+  a run's first point.
+
 
 ## Output
 

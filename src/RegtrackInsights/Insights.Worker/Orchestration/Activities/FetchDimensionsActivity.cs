@@ -255,7 +255,18 @@ public sealed class FetchDimensionsActivity(
                 failedDimensions.Add("Event");
             }
         }
-        await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        // [2026-09-29] Licence follows the report period too (RegTrack's end-date filter, sql/v2/24) - same
+        // real-window-required rule as Act above; never silently falls back to "every licence".
+        if (IsRequested("Licence"))
+        {
+            if (input is { WindowStart: { } licWs, WindowEnd: { } licWe })
+                await TryFetchAsync("Licence", () => dimensionRepository.GetLicenceAsync(input.UserId, input.CustomerId, licWs, licWe, cancellationToken: CancellationToken.None));
+            else
+            {
+                logger.LogWarning("Licence requested for tenant {CustomerId} without a resolvable period window - failing this dimension rather than fabricating one.", input.CustomerId);
+                failedDimensions.Add("Licence");
+            }
+        }
         await TryFetchAsync("BacklogAging", () => dimensionRepository.GetBacklogAgingAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("TimelinessFY", () => dimensionRepository.GetTimelinessFYAsync(input.UserId, input.CustomerId, windowStart, windowEnd, cancellationToken: CancellationToken.None));
         await TryFetchAsync("ForwardPipeline", () => dimensionRepository.GetForwardPipelineAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));

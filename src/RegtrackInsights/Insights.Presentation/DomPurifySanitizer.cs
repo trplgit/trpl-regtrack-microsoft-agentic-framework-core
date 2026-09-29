@@ -61,8 +61,10 @@ public sealed class DomPurifySanitizer(IBrowser browser) : IDomPurifySanitizer
             // specifically - only against genuinely malformed/obfuscated variants a regex could
             // miss, its actually-documented job (IDomPurifySanitizer's own doc comment). The
             // literal case stays fully blocked because CheckNoExternalScripts runs first.
+            // [ADDED 2026-09-27] See ScriptComparisonSpacer - without it a plain "v<0" in a script
+            // makes DOMPurify delete that whole script, silently blanking every chart it builds.
             var sanitized = await page.EvaluateAsync<string>(
-                "html => DOMPurify.sanitize(html, { WHOLE_DOCUMENT: true, ADD_TAGS: ['script'] })", html);
+                "html => DOMPurify.sanitize(html, { WHOLE_DOCUMENT: true, ADD_TAGS: ['script'] })", ScriptComparisonSpacer.Apply(html));
 
             return ReattachCharsetIfMissing(ReattachDoctypeIfMissing(sanitized));
         }

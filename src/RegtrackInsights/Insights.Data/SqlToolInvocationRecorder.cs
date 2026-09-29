@@ -28,4 +28,20 @@ public sealed class SqlToolInvocationRecorder(string connectionString) : IToolIn
             new { RunId = runId, Stage = stage, ToolName = toolName, Detail = detail, Success = success, ResultLength = resultLength },
             cancellationToken: cancellationToken));
     }
+
+    public async Task<IReadOnlyList<ToolInvocationLogEntry>> GetForRunAsync(string runId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        const string sql = """
+            SELECT Stage, ToolName, Detail, Success, ResultLength, RecordedAtUtc
+            FROM dbo.InsightsToolInvocationLog
+            WHERE RunId = @RunId
+            ORDER BY Id;
+            """;
+
+        var rows = await connection.QueryAsync<ToolInvocationLogEntry>(
+            new CommandDefinition(sql, new { RunId = runId }, cancellationToken: cancellationToken));
+        return rows.AsList();
+    }
 }

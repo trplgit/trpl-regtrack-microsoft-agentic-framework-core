@@ -598,14 +598,20 @@ SELECT
 
         Emitted ONLY when there is real exposure to rank - an all-zero ranking
         would manufacture a "worst" that means nothing.                        */
+    -- [FIX - found live 2026-09-25, tenant 1285's real ImprisonmentOverdue>0 data] The literal
+    -- below was 205 chars against #assert.Caveat NVARCHAR(200) - a real "String or binary data
+    -- would be truncated" THROW, only reachable via this same tenant/branch CLAUDE.md sec.5
+    -- already documents as the one validated case that exercises this condition. Shortened to
+    -- 173 chars, same meaning preserved. General lesson restated in CLAUDE.md sec.5 still applies:
+    -- re-measure any literal in a fixed-width column before editing it again.
     IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
     INSERT #assert
     SELECT TOP 1 'A-WORST-EXPOSURE','imprisonment_overdue_count', BranchName, ImprisonmentOverdue, NULL,
            (SELECT SUM(ImprisonmentOverdue) FROM #rows),
            NULL, NULL, 'worse',
-           N'ranked by CONSEQUENCE - the count of overdue obligations carrying personal '
-         + N'liability - not by overdue rate. A higher rate elsewhere on a smaller, '
-         + N'liability-free portfolio is a different and lesser problem.'
+           N'ranked by CONSEQUENCE - count of overdue obligations carrying personal '
+         + N'liability, not overdue rate. A higher rate on a smaller, liability-free '
+         + N'portfolio is a lesser problem.'
     FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
 
 

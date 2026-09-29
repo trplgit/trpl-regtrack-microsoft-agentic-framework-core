@@ -42,8 +42,8 @@ half the estate.
   `ImprisonmentOverdue`, `CriticalInstances`, `BranchesCovered`, `PenaltyBearingInstances`,
   `FinancialPenaltyInstances`, `ClosureRiskInstances`, `ImprisonmentSharePct`, `OverdueRank`
   (null for the Others row and anything below the materiality floor), `Flags`.
-- `dimension_control_totals`: `ScopedInstances`, `SumOfRows` (labelled `CategorisedInstances` in
-  the real control-totals — rows alone do NOT sum to `ScopedInstances`, see the trap), `Reconciled`,
+- `dimension_control_totals`: `ScopedInstances`, `CategorisedInstances` (rows alone do NOT sum to
+  `ScopedInstances` — see the trap below), `Reconciled`,
   `OverdueInstances`, `TenantOverduePct`, `TenantImprisonmentSharePct`, `NaturesReported`,
   `NaturesWithObligations`, `RetiredNaturesStillInUse`, `OthersBucketInstances`,
   `UntaggedInstances`, `UncategorisedInstances`, `UncategorisedPct`.

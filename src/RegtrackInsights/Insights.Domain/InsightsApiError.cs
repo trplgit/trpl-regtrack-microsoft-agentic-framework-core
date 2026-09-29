@@ -30,6 +30,13 @@ public enum InsightsErrorCode
     /// is enqueued - the orchestrator's own guard stays as defense-in-depth for direct/CLI callers.
     /// </summary>
     NoDimensionsRequested,
+
+    /// <summary>
+    /// 400. [ADDED 2026-09-27] A requested dimension (or the fixed holistic report) needs a real
+    /// period window, but <c>period</c> is not one of ReportPeriodRequestParser's recognised values.
+    /// Found live: such a request used to return 202 and then fail minutes later in the worker.
+    /// </summary>
+    InvalidPeriod,
 }
 
 /// <summary>
@@ -46,6 +53,7 @@ public sealed record InsightsApiError(string Code, string Message)
         InsightsErrorCode.CooldownActive => "COOLDOWN_ACTIVE",
         InsightsErrorCode.ReportNotVisible => "REPORT_NOT_VISIBLE",
         InsightsErrorCode.NoDimensionsRequested => "NO_DIMENSIONS_REQUESTED",
+        InsightsErrorCode.InvalidPeriod => "INVALID_PERIOD",
         _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unmapped error code."),
     };
 
@@ -56,6 +64,7 @@ public sealed record InsightsApiError(string Code, string Message)
         InsightsErrorCode.CooldownActive => 409,
         InsightsErrorCode.ReportNotVisible => 404,
         InsightsErrorCode.NoDimensionsRequested => 400,
+        InsightsErrorCode.InvalidPeriod => 400,
         _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unmapped error code."),
     };
 }

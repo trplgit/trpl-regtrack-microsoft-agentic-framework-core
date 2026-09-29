@@ -45,6 +45,10 @@ public static class ReportContentEndpoints
                 contentUrl = result.ContentUrl.ToString(),
                 expiresUtc = result.ExpiresUtc,
                 sandboxRequired = result.SandboxRequired,
+                // [ADDED 2026-09-26] Null when this report has no reasoning trace (generated
+                // before this feature shipped, or the trace write failed and was swallowed at
+                // generation time) - see ReportContentResult's own doc comment.
+                reasoningContentUrl = result.ReasoningContentUrl?.ToString(),
             });
         });
 

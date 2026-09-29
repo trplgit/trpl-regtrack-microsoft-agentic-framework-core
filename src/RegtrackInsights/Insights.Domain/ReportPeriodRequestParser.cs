@@ -19,6 +19,19 @@ namespace Insights.Domain;
 /// </summary>
 public static class ReportPeriodRequestParser
 {
+    /// <summary>The exact values <see cref="TryParse"/> recognises, for error messages.</summary>
+    public const string RecognisedValues = "last_30_days, last_60_days, last_90_days, q1, q2, q3, q4";
+
+    /// <summary>
+    /// [ADDED 2026-09-27] Dimensions whose procs REQUIRE a real window and have no fallback - the
+    /// same list FetchDimensionsActivity fails without one. RunEndpoints refuses a request for any
+    /// of these (or the fixed holistic report, which fetches them all) when <see cref="TryParse"/>
+    /// returns null, instead of queuing a run that can only fail. Case-insensitive.
+    /// </summary>
+    public static readonly IReadOnlySet<string> WindowRequiredDimensions = new HashSet<string>(
+        ["Act", "Event", "Location", "Entity", "Risk", "Nature", "Departments", "Users", "Internal", "Licence"],
+        StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Case-insensitive. Matches the real period-picker options (ReportPeriodKind's own doc
     /// comment): rolling day counts, or a quarter of the CURRENT financial year. Returns null for

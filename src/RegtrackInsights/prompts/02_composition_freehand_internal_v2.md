@@ -32,12 +32,12 @@ itself is the only honest hero — do not build a coverage-gap narrative on top 
   and `internal_absent` apply conditionally — include whichever real ones apply in
   `data_quality_to_surface`.
 - `dimension_rows` — one row per real branch, BOTH populations side by side: `BranchID`,
-  `BranchName`, `ApexName`, `StatutoryInstances`, `StatutoryOverdue`, `StatutoryOwnerless`,
-  `InternalInstances`, `InternalOverdue`, `InternalOwnerless`, `StatutoryOwnerlessPct`,
-  `InternalOwnerlessPct`, `Flags`.
+  `BranchName`, `ApexName`, `StatutoryInstances`, `StatutoryOverdue`, `StatutoryNoInstanceOwner`,
+  `InternalInstances`, `InternalOverdue`, `InternalNoInstanceOwner`, `StatutoryNoInstanceOwnerPct`,
+  `InternalNoInstanceOwnerPct`, `Flags`.
 - `dimension_control_totals`: `ScopedInstances`, `SumOfRows`, `Reconciled`, `InternalInstances`,
   `SumOfInternalRows`, `StatutoryOverdueInstances`, `InternalOverdueInstances`,
-  `StatutoryOwnerlessPct`, `InternalOwnerlessPct`, `BranchesWithStatutory`, `BranchesWithInternal`,
+  `StatutoryNoInstanceOwnerPct`, `InternalNoInstanceOwnerPct`, `BranchesWithStatutory`, `BranchesWithInternal`,
   `InternalAbsentEntirely`, `InternalUnmappedStatusRows`.
 
 Every number you use must come from one of these four pools. Nothing else exists.
@@ -75,7 +75,7 @@ internal tracking is not the same finding.
   such computed figure exists; state both populations' real figures separately.
 - **A root-cause or "why" explanation** for why a division lacks internal governance — state the
   structural pattern, never invent a cause (understaffing, priority, etc.).
-- **Treating InternalOwnerlessPct with the "ownership has two mechanisms" caveat missing** — if you
+- **Treating InternalNoInstanceOwnerPct with the "ownership has two mechanisms" caveat missing** — if you
   cite either ownerless percentage, the same two-mechanisms caveat that applies everywhere else in
   this system applies here too (see `data_quality`).
 

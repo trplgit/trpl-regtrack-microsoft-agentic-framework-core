@@ -203,7 +203,7 @@ public sealed class GenerateReportEndpointTests
         // "Entity" deliberately excluded here - see ReportTypeRouterTests and
         // Generate_EntityRequested_RoutesToFixedHolistic below for that redirect.
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: ["Nature", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -231,7 +231,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: ["Entity"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -280,7 +280,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days",
             RequestedDimensions: ["Location", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -306,7 +306,7 @@ public sealed class GenerateReportEndpointTests
 
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
-        var request = new GenerateReportRequest(Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26");
+        var request = new GenerateReportRequest(Tenant, new InsightsScopeRequest("tenant", null), "last_30_days");
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
 
@@ -330,7 +330,7 @@ public sealed class GenerateReportEndpointTests
 
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
-        var rawJson = $$"""{"tenantId": {{Tenant}}, "scope": {"type": "tenant"}, "period": "FY2025-26"}""";
+        var rawJson = $$"""{"tenantId": {{Tenant}}, "scope": {"type": "tenant"}, "period": "last_30_days"}""";
         using var content = new StringContent(rawJson, Encoding.UTF8, "application/json");
 
         var response = await client.PostAsync("/api/insights/reports", content);
@@ -358,7 +358,7 @@ public sealed class GenerateReportEndpointTests
         // explicitly fixed_holistic - the explicit value must win, matching Entity's own
         // redirect precedent of "resolved" always beating "requested".
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days",
             FixedHolisticComposition.ReportType, RequestedDimensions: ["Location"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -387,10 +387,10 @@ public sealed class GenerateReportEndpointTests
         // Generate_EntityRequested_RoutesToFixedHolistic) - "Act" exercises the same
         // different-dimensions-different-periods behaviour without tangling with that redirect.
         var natureRequest = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: ["Nature"]);
         var actRequest = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: ["Act"]);
 
         await client.PostAsJsonAsync("/api/insights/reports", natureRequest);
@@ -398,7 +398,7 @@ public sealed class GenerateReportEndpointTests
 
         Assert.Equal(2, cooldown.Calls.Count);
         Assert.Equal(2, enqueuer.Calls.Count);
-        // Same caller-supplied period ("FY2025-26") for both - the enqueuer's effective period still
+        // Same caller-supplied period ("last_30_days") for both - the enqueuer's effective period still
         // differs per dimension (unchanged, real fix from 2026-09-09). The cooldown check itself
         // [REDESIGNED 2026-09-25] no longer looks at period at all - it is keyed on the raw
         // dimension name directly, which is what must differ here instead.
@@ -489,7 +489,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: ["Location", "Nature", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -528,7 +528,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: []);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -552,7 +552,7 @@ public sealed class GenerateReportEndpointTests
         var enqueuer = new FakeRunEnqueuer("insights-1490-fixed");
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", FixedHolisticComposition.ReportType);
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", FixedHolisticComposition.ReportType);
 
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
@@ -588,7 +588,7 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection",
+            Tenant, new InsightsScopeRequest("tenant", null), "last_30_days", "dimension_selection",
             RequestedDimensions: ["Location", "Nature", "Act"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
@@ -649,6 +649,117 @@ public sealed class GenerateReportEndpointTests
         var call = Assert.Single(enqueuer.Calls);
         Assert.Null(call.WindowStart);
         Assert.Null(call.WindowEnd);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-27, FOUND LIVE] A Users request with an unrecognised period used to return
+    /// 202 "queued" and then fail minutes later in the worker ("All 1 dimensions failed") - the
+    /// dimension needs a real window and the worker (correctly) refuses to invent one. Refuse up
+    /// front instead, before cooldown or enqueue.
+    /// </summary>
+    [Theory]
+    [InlineData("FY2025-26")]
+    [InlineData("30days")]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task Generate_WindowedDimensionWithUnrecognisedPeriod_Returns400BeforeCooldownOrEnqueue(string? period)
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var cooldown = OpenCooldown();
+        var enqueuer = new FakeRunEnqueuer("should-not-be-used");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: cooldown);
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), period!, "dimension_selection", RequestedDimensions: ["Users"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertErrorCodeAsync(response, "INVALID_PERIOD");
+        Assert.Empty(cooldown.Calls);
+        Assert.Empty(enqueuer.Calls);
+    }
+
+    [Fact]
+    public async Task Generate_FixedHolisticWithUnrecognisedPeriod_Returns400()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("should-not-be-used");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", FixedHolisticComposition.ReportType);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertErrorCodeAsync(response, "INVALID_PERIOD");
+        Assert.Empty(enqueuer.Calls);
+    }
+
+    /// <summary>One windowed dimension in the list refuses the whole request - nothing half-queued.</summary>
+    [Fact]
+    public async Task Generate_MixedDimensionsWithUnrecognisedPeriod_RefusesTheWholeRequest()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("should-not-be-used");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection", RequestedDimensions: ["Licence", "act"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertErrorCodeAsync(response, "INVALID_PERIOD");
+        Assert.Empty(enqueuer.Calls);
+    }
+
+    /// <summary>BacklogAging never uses a window - free-text periods stay accepted for it. (Licence follows the
+    /// period since 2026-09-29 - see Generate_LicenceWithFreeTextPeriod_Returns400.)</summary>
+    [Fact]
+    public async Task Generate_NonWindowedDimensionsWithFreeTextPeriod_StillQueue()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-nonwindowed");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection", RequestedDimensions: ["BacklogAging"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Single(enqueuer.Calls);
+    }
+
+    /// <summary>[2026-09-29] Licence counts only licences whose end date falls in the period (sql/v2/24), so a
+    /// period the parser cannot turn into a window is refused before anything is queued.</summary>
+    [Fact]
+    public async Task Generate_LicenceWithFreeTextPeriod_Returns400()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-licence");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection", RequestedDimensions: ["Licence"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertErrorCodeAsync(response, "INVALID_PERIOD");
+        Assert.Empty(enqueuer.Calls);
     }
 
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)

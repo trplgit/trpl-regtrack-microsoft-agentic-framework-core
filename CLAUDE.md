@@ -62,8 +62,13 @@ render; deleted along with its class and tests, same as the fixed template's own
 narrate call (v1 `MafNarrativeAgent`, v2 `MafAnalystNarrativeAgent`) can now read its own
 dimension's notes from past runs (`tenant_history`, always injected, never a tool call) and
 optionally save new notes via a real `write_tenant_memory` tool - one blob per tenant
-(`<tenantId>/history.md.enc`, container `insights-tenant-memory`), one `## {Dimension}` markdown
-section per dimension inside it, same envelope encryption as report blobs. Full design:
+(`<tenantId>/tenant-memory.md.enc` in the REPORTS container, the tenant's own folder - moved
+2026-09-28 from `<tenantId>/history.md.enc` in the old `insights-tenant-memory` container), one
+`## {Dimension}` markdown section per dimension inside it, same envelope encryption as report blobs.
+[2026-09-28] Each section = `### Keep` (never altered, max 3000 chars) + `### YYYY-MM-DD (period)`
+run entries (dates from code-built `run_context`); over 6000 chars the runs older than the two
+newest are SUMMARISED by a model call (`ITenantMemorySummarizer`, prompt 09), checked in code
+before storing - the cut-based `TenantMemoryCompactor.Compact` is only the fallback. Full design:
 `docs/superpowers/specs/2026-09-22-tenant-memory-blob-design.md`. Guardrails class:
 `Insights.Agents/TenantMemoryTool.cs` (dimension scope validated against a closed set, size cap,
 optimistic-concurrency retry via blob ETags). **Fails soft by design** - a Key Vault/blob failure
@@ -228,8 +233,22 @@ Violating any of these is a build-breaking error, not a style preference.
 - Write a detector whose Flagged predicate can match rows outside its Eligible population. `Flagged` and `Eligible` MUST come from the same set. sql/05 flagged `single_point_of_failure` with no `Instances > 0` guard, so all 78 zero-obligation branches flagged too - **120 flagged of 99 eligible, 121.2%**. Every zero-work row will look like a single point of failure, because it has no people on work it does not have. Check every detector: can the flag fire on a row the Eligible count excludes?
 - Leave a temp table unaliased when an inline subquery in the same statement reads it too. `SELECT ... (SELECT COUNT(*) FROM #rows ...) ... FROM #rows ORDER BY col` raises **"Ambiguous column name"** - and it fails at RUN TIME, after earlier result sets have already been emitted, so a caller reading only the first result set never sees it. Alias both.
 - Join `RecentComplianceTransactionView` directly - go through `tvfInsightsLatestStatus`. (See §5.)
-- Drop a past-due schedule because it has no transaction. **BA ruling: never-touched = overdue.**
-  `tvfInsightsOverdueSchedules` includes them with `NeverTouched = 1`.
+- Invent a metric definition. **[2026-09-29] RegTrack's own reports are the reference, not "BA rulings".**
+  The old "never-touched = overdue" and "17 overdue-eligible statuses" rules were never given by a BA.
+  Insights now follows RegTrack's Detailed Report (`Kendo_DetailedReport_Pagination`): overdue = latest
+  status **Open (1)** and due **before today**; a due date with no transaction is not overdue; an
+  obligation needs an **active performer** (`RoleID = 3`), a non-deleted act and a visible compliance;
+  only active due dates count. Changed objects + dictionary v2 + parity proof: `sql/v2/README.md`.
+  Before changing any definition, check what RegTrack's own report SP does.
+  Consequence: ownership / "no owner" is never a finding any more (the fields are always 0). The
+  prompts that mentioned it were versioned (composition `_v4`, render `_v5`, `v4/03_narrative_analyst.md`,
+  `03_narrative_v2.md`, `05_report_html_fixed_holistic_v2.md`, `05_report_html_dimension_selection_v2.md`)
+  and the Coverage tab lost its "Has ownerless" status/KPI/chip. Don't reintroduce ownership findings.
+  Same rule for licences (2026-09-29, head of testing): Active / Expired / ... are the licence's latest status
+  exactly as RegTrack's licence report (`SP_LicenseMyReport_V2`) labels it - dictionary `LicenceReportStatus`,
+  `sql/v2/23` - never worked out from EndDate. Only `EndingNext30` is date-based.
+  The Licence report follows the user's period (`sql/v2/24`): only licences whose END DATE falls in it, exactly
+  RegTrack's date filter (raw EndDate, last day inclusive at 00:00 - a last-day end date with a time is outside).
 - Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
   over a subquery. Use a `LEFT JOIN` and test for `NULL`.
 - Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an
@@ -341,6 +360,8 @@ On one tenant that was a phantom 3,946-instance gap.
 | SQL file encoding | The deployment path is **not** UTF-8 aware. It corrupted a pre-existing RegTrack proc (`USP_GetEscalationCounts_Mobile_Statutory`) as well as ours |
 | Character detection | Default collation is accent-insensitive; `LIKE` gives false positives when detecting non-ASCII |
 | `usp_Insights_Dimension_Location`'s `Caveat` column | **[FOUND LIVE 2026-09-23]** `#assert.Caveat NVARCHAR(200)` - the `A-WORST-EXPOSURE` assertion's hardcoded caveat literal was 205 chars, a real `SqlException 8152 ("String or binary data would be truncated")`. Only reachable when `EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)` - a real, data-dependent branch that none of the five long-standing `DimensionRepositoryTests.ValidatedTenants` ever exercised, so it shipped and sat undetected until a real tenant (1285) hit it live. Fixed (literal shortened to 186 chars, live-verified); tenant 1285 added to the validated set. **General lesson: any hardcoded string literal inserted into a fixed-width temp-table column is a live truncation risk if the literal is ever edited without re-measuring it against the column - and if the INSERT sits behind a conditional, standard single/few-tenant testing will not catch it. Count the characters before widening or rewording a literal like this one.** |
+| Proc column vs C# property names | **[FOUND LIVE 2026-09-27]** Dapper maps result columns to properties by EXACT name and silently leaves a non-matching property at its default. The procs renamed `Ownerless`/`OwnerlessPct` to `NoInstanceOwner`/`NoInstanceOwnerPct` but `LocationRow`, `RiskRow`, `NatureRow` and `DepartmentsRow` kept the old names, so every one of those reports - and the fixed_holistic Coverage tiles (`CoverageGridInjector`) - showed 0 for it. Fixed with write-only `NoInstanceOwner`/`NoInstanceOwnerPct` setters (JSON still says `Ownerless`, so no prompt changed). Same bug class as the 2026-09-25 Internal/Departments totals fix. `SourceMapVerificationTests` now compares every row field against an independent query, which is what caught it - after renaming any proc column, run it. |
+| `User.RoleID` vs `User.LicenseRoleID` | **[2026-09-28]** Two different roles. `RoleID` (compliance module) decides who may use Insights at all: `usp_Insights_EligibleTenants` (sql/17) admits only `Role.Code = 'MGMT'`, active, not deleted (user decision; before this a DELETED user could still generate). `LicenseRoleID` (licence module) decides what the Licence dimension shows (sql/21), which must EQUAL RegTrack's own `SP_LicenseMyReport_V2` for the same user (verified licence-for-licence on 14 users): all operating tenant branches (NOT tvfInsightsScopePairs), then CADMN all, MGMT/AUDT via `LIC_EntitiesAssignment` (branch, licence type) pairs, EXCT via assigned tasks, anything else refused (51168/51169); and only licences whose latest status (MAX `CreatedOn`, as `RecentLicenseTransactionView`) points at a live compliance task (active schedule, active performer, at least one ComplianceTransaction). Resolve both roles by `Role.Code`, never a hardcoded ID. Deliberate difference: a licence with a type missing from the type master still refuses (51161) - RegTrack silently drops it. |
 | `AdalKeyVaultReportEncryptor`'s connection string | **[FOUND LIVE 2026-09-23]** It reads its Key Vault client secret from whatever DB its constructor's connection string points to - construct it with the prod-readonly replica (`regtech_dev01_readonly`, 10.224.254.4) instead of the writable UAT DB and every encrypt/decrypt call fails with a real `AADSTS7000215: Invalid client secret provided` (the replica's copy of that secret is stale). Same fix as `PersistActivity`'s own `RegTrackReportsWrite` split: reads may target the replica, but Key Vault/encryption (and, by the same reasoning, `SqlToolInvocationRecorder`/`SqlAgentReasoningRecorder` writes) must always go through the writable connection string, never the read-only one, even in a lab harness that only reads tenant data from the replica |
 
 ---
@@ -393,8 +414,8 @@ x5 - x9   DICTIONARY / MASTER DATA GAP
 | 51050-51059 | `07` entity | 51170-51176 | `22`-`25` **shared** (see note) |
 | 51060-51069 | `08` risk | 51190-51199 | `26` forward risk |
 | 51070-51079 | `09` nature | 51200-51209 | `27` coverage gaps |
-| 51080-51089 | `10` departments | 51040-51049, 51150-51159, 51177-51189, 51210+ | **free** |
-| 51090-51099 | `11` act | | |
+| 51080-51089 | `10` departments | 51180 | `v2/24` licence: incomplete report period |
+| 51090-51099 | `11` act | 51041-51049, 51181-51188 | **free** (51040 = shared detector code; 51150-51159 used by `28`; 5117x by `22`-`25`; check 5121x+ before use) |
 | 51100-51109 | `12` users | | |
 | 51110-51119 | `13` internal | | |
 

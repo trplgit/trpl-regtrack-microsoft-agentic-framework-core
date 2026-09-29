@@ -117,8 +117,7 @@ public sealed class ReportHtmlAgentTests
         var counts = MafReportHtmlAgent.ComputeCoverageStatusCounts(rows);
 
         Assert.Equal(3, counts!.Total);
-        Assert.Equal(1, counts.Healthy);
-        Assert.Equal(1, counts.HasOwnerless);
+        Assert.Equal(2, counts.Healthy); // [2026-09-29] a stale high_ownerless flag is healthy (RegTrack parity)
         Assert.Equal(1, counts.Unmapped);
         Assert.Equal(0, counts.UnderConfigured);
     }

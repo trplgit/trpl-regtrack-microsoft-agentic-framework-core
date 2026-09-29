@@ -69,6 +69,13 @@ public interface IAnalystNarrativeAgent
     /// DTFx run id, threaded through only so MafAnalystNarrativeAgent's tool-invocation logging
     /// (see its own doc comment) can key its rows by the run they belong to - never used for
     /// anything else, never sent to the model.
+    ///
+    /// <paramref name="windowStart"/>/<paramref name="windowEnd"/> [ADDED 2026-09-25] - optional,
+    /// trailing, same reasoning as userId/customerId. When this dimension's own fetch was scoped to
+    /// a period-picker window, passing the SAME window here narrows ReadOnlySqlFetchTool's #scoped
+    /// population to match - without this, a live SQL tool call would see the tenant's full
+    /// all-time data while dimension_rows describes only the window, a real two-populations-
+    /// disagreeing risk. Never accepted as JSON text the model writes.
     /// </summary>
     Task<AgentCallResult<NarrativeResult>> AnalyzeAndNarrateAsync(
         CompositionPlan plan,
@@ -81,6 +88,8 @@ public interface IAnalystNarrativeAgent
         int? userId = null,
         int? customerId = null,
         string? runId = null,
+        DateTime? windowStart = null,
+        DateTime? windowEnd = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -120,7 +129,10 @@ public sealed class MafAnalystNarrativeAgent(
     IReportDecryptor? memoryDecryptor = null,
     string? memoryBlobConnectionString = null,
     string? memoryContainerName = null,
-    Func<string?, string, bool, Task>? onMemoryWriteInvoked = null) : IAnalystNarrativeAgent
+    Func<string?, string, bool, Task>? onMemoryWriteInvoked = null,
+    // [ADDED 2026-09-28] Summarises older memory entries when a section outgrows its limit - see
+    // ITenantMemorySummarizer. Null = the deterministic cut fallback only.
+    ITenantMemorySummarizer? memorySummarizer = null) : IAnalystNarrativeAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -140,6 +152,8 @@ public sealed class MafAnalystNarrativeAgent(
         int? userId = null,
         int? customerId = null,
         string? runId = null,
+        DateTime? windowStart = null,
+        DateTime? windowEnd = null,
         CancellationToken cancellationToken = default)
     {
         // [ADDED 2026-09-22] Tenant memory read-side: always injected, never a tool call (same
@@ -153,7 +167,7 @@ public sealed class MafAnalystNarrativeAgent(
         {
             memoryTool = new TenantMemoryTool(
                 memoryEncryptor, memoryDecryptor, memoryBlobConnectionString, memoryContainerName,
-                customerId.Value, [dimensionName]);
+                customerId.Value, [dimensionName], memorySummarizer);
             var sections = await memoryTool.ReadSectionsAsync(cancellationToken);
             tenantHistory = sections.GetValueOrDefault(dimensionName, "");
         }
@@ -171,6 +185,7 @@ public sealed class MafAnalystNarrativeAgent(
               "dimension_rows": {{dimensionRowsJson}},
               "dimension_control_totals": {{dimensionControlTotalsJson ?? "null"}},
               "tenant_history": {{JsonSerializer.Serialize(tenantHistory)}},
+              "run_context": {{JsonSerializer.Serialize(RunContext(dimensionName, windowStart, windowEnd))}},
               "previous_narrative": {{(revision is null ? "null" : JsonSerializer.Serialize(revision.Value.PreviousNarrative, JsonOptions))}},
               "reflection_issues": {{(revision is null ? "null" : JsonSerializer.Serialize(revision.Value.Issues, JsonOptions))}}
             }
@@ -187,7 +202,7 @@ public sealed class MafAnalystNarrativeAgent(
         ReadOnlySqlFetchTool? sqlTool = null;
         if (readOnlySqlConnectionString is not null && userId is not null && customerId is not null)
         {
-            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value);
+            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value, windowStart, windowEnd);
 
             // [ADDED 2026-09-22] onSqlToolInvoked is a diagnostic-only hook (null in every real
             // production DI registration today) - a caller that wants to SEE whether the model
@@ -209,9 +224,12 @@ public sealed class MafAnalystNarrativeAgent(
                 "your query runs) - it has columns ComplianceInstanceID, BranchID, BranchName, CategoryId, " +
                 "ComplianceID, RiskType, Imprisonment, NatureOfCompliance, ComplianceType, ActID, " +
                 "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
-                "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
-                "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-                "doing this\", OwnerClass tells you which is true). Only a single SELECT/WITH statement is " +
+                "NoOwnerAnywhere, OwnerClass (the ownership columns carry no finding: every obligation here " +
+                "has an active performer, the same rule RegTrack's own reports use - never build an " +
+                "ownership or missing-owner claim from them). When this run is scoped to a period " +
+                "window, #scoped is ALREADY narrowed to that same window (a real scheduled occurrence " +
+                "inside it) - it reflects the SAME population your dimension_rows describes, never the " +
+                "tenant's full all-time data. Only a single SELECT/WITH statement is " +
                 "allowed - no INSERT/UPDATE/DELETE/DROP/ALTER/EXEC, no semicolons, no comments, no other " +
                 "tables. Returns JSON rows (capped at 200) or {\"error\": \"...\"} - on error, do not retry " +
                 "the same query, fall back to the escape hatch. Do not call this speculatively - only when " +
@@ -323,6 +341,8 @@ public sealed class MafAnalystNarrativeAgent(
         int? userId = null,
         int? customerId = null,
         string? runId = null,
+        DateTime? windowStart = null,
+        DateTime? windowEnd = null,
         CancellationToken cancellationToken = default)
     {
         var dimensionNames = dimensionRowsJsonByDimension.Keys.ToList();
@@ -334,7 +354,7 @@ public sealed class MafAnalystNarrativeAgent(
         {
             memoryTool = new TenantMemoryTool(
                 memoryEncryptor, memoryDecryptor, memoryBlobConnectionString, memoryContainerName,
-                customerId.Value, dimensionNames);
+                customerId.Value, dimensionNames, memorySummarizer);
             tenantHistory = (Dictionary<string, string>)await memoryTool.ReadSectionsAsync(cancellationToken);
         }
 
@@ -370,7 +390,7 @@ public sealed class MafAnalystNarrativeAgent(
         ReadOnlySqlFetchTool? sqlTool = null;
         if (readOnlySqlConnectionString is not null && userId is not null && customerId is not null)
         {
-            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value);
+            sqlTool = new ReadOnlySqlFetchTool(readOnlySqlConnectionString, userId.Value, customerId.Value, windowStart, windowEnd);
 
             [Description(
                 "Runs a real, read-only SQL SELECT against this tenant's own scoped compliance data, when " +
@@ -381,9 +401,12 @@ public sealed class MafAnalystNarrativeAgent(
                 "you before your query runs) - it has columns ComplianceInstanceID, BranchID, BranchName, " +
                 "CategoryId, ComplianceID, RiskType, Imprisonment, NatureOfCompliance, ComplianceType, ActID, " +
                 "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
-                "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
-                "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-                "doing this\", OwnerClass tells you which is true). Only a single SELECT/WITH statement is " +
+                "NoOwnerAnywhere, OwnerClass (the ownership columns carry no finding: every obligation here " +
+                "has an active performer, the same rule RegTrack's own reports use - never build an " +
+                "ownership or missing-owner claim from them). When this run is scoped to a period " +
+                "window, #scoped is ALREADY narrowed to that same window - it reflects the SAME population " +
+                "your dimension_rows_by_dimension describes, never the tenant's full all-time data. Only a " +
+                "single SELECT/WITH statement is " +
                 "allowed - no INSERT/UPDATE/DELETE/DROP/ALTER/EXEC, no semicolons, no comments, no other " +
                 "tables. Returns JSON rows (capped at 200) or {\"error\": \"...\"} - on error, do not retry " +
                 "the same query, fall back to the escape hatch. Do not call this speculatively - only when " +
@@ -459,6 +482,18 @@ public sealed class MafAnalystNarrativeAgent(
     /// or memory note could easily contain the word "error" in its own data without this being a
     /// tool failure.
     /// </summary>
+    /// <summary>
+    /// [ADDED 2026-09-28] Today's date and the report period, built in code, so tenant-memory entry
+    /// headings ("### 2026-09-28 (Last 30 days · 29 Aug 2026 – 27 Sep 2026)") carry REAL dates - the
+    /// model had neither before and month-to-month comparisons depend on them. report_period is null
+    /// when the dimension has no window (counted as of the run date).
+    /// </summary>
+    internal static object RunContext(string? dimensionName, DateTime? windowStart, DateTime? windowEnd) => new
+    {
+        run_date = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        report_period = ReportPeriodContext.DescribeFor(dimensionName, null, windowStart, windowEnd),
+    };
+
     private static bool IsSuccessResult(string toolResultJson)
     {
         try

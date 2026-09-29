@@ -9,6 +9,11 @@ namespace Insights.Worker.Orchestration.Activities;
 /// ReadOnlySqlFetchTool for this call, when that agent was built with a real read-only connection
 /// string. Trailing optional - every existing construction site keeps compiling unchanged.</param>
 /// <param name="CustomerId">Pairs with <paramref name="UserId"/> - same reasoning.</param>
+/// <param name="WindowStart">[ADDED 2026-09-25] Threaded to IAnalystNarrativeAgent so
+/// ReadOnlySqlFetchTool's #scoped narrows to the SAME window this dimension's own data was fetched
+/// with - without this, a live tool call would see the tenant's full all-time data instead. Trailing
+/// optional, null for a non-windowed dimension.</param>
+/// <param name="WindowEnd">Pairs with <paramref name="WindowStart"/> - same reasoning.</param>
 public sealed record AnalyzeAndNarrateInput(
     CompositionPlan Plan, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings,
     string DimensionName, string DimensionRowsJson, string? DimensionControlTotalsJson,
@@ -16,7 +21,9 @@ public sealed record AnalyzeAndNarrateInput(
     LlmCallPriority Priority = LlmCallPriority.Interactive,
     string? ReqId = null,
     int? UserId = null,
-    int? CustomerId = null);
+    int? CustomerId = null,
+    DateTime? WindowStart = null,
+    DateTime? WindowEnd = null);
 
 public sealed record AnalyzeAndNarrateOutput(NarrativeResult Narrative, long TotalTokens);
 
@@ -43,7 +50,8 @@ public sealed class AnalyzeAndNarrateActivity(IAnalystNarrativeAgent analystAgen
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
         var result = await analystAgent.AnalyzeAndNarrateAsync(
             input.Plan, input.Assertions, input.Findings, input.DimensionName, input.DimensionRowsJson,
-            input.DimensionControlTotalsJson, revision, input.UserId, input.CustomerId, runId, CancellationToken.None);
+            input.DimensionControlTotalsJson, revision, input.UserId, input.CustomerId, runId,
+            input.WindowStart, input.WindowEnd, CancellationToken.None);
 
         // Same best-effort stance as NarrateActivity/ReflectOnNarrativeActivity's own recorder call.
         if (runId is not null)

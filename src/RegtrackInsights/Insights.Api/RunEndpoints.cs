@@ -110,6 +110,20 @@ public static class RunEndpoints
                     "At least one dimension must be selected for a dimension_selection report.");
             }
 
+            // [ADDED 2026-09-27, FOUND LIVE] A windowed dimension with an unrecognised period used
+            // to be accepted (202 "queued") and then fail minutes later in the worker - which
+            // correctly refuses to invent a window. Refuse the whole request up front instead,
+            // before cooldown or enqueue, so nothing is half-queued.
+            var needsWindow = request.ReportType == FixedHolisticComposition.ReportType
+                || (request.ReportType == DimensionSelectionComposition.ReportType
+                    && dimensionsToGenerate.Any(d => d is not null && ReportPeriodRequestParser.WindowRequiredDimensions.Contains(d)));
+            if (needsWindow && ReportPeriodRequestParser.TryParse(request.Period) is null)
+            {
+                return InsightsResults.Error(
+                    InsightsErrorCode.InvalidPeriod,
+                    $"period must be one of: {ReportPeriodRequestParser.RecognisedValues}.");
+            }
+
             // [BUG FOUND LIVE, 2026-09-11] Originally Task.WhenAll over the units, reasoning that
             // EnqueueAsync's own idempotency made concurrent calls for the same key safe to race -
             // true for EnqueueAsync, but ICooldownRepository (EfCooldownRepository, EF Core-backed)

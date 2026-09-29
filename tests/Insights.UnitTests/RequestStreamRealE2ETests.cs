@@ -99,7 +99,9 @@ public sealed class RequestStreamRealE2ETests(ITestOutputHelper output)
                 userId, tenants, runs, scope, enqueuer, content: null, cooldown: cooldown, requests: requests);
             client.Timeout = TimeSpan.FromMinutes(20);
 
-            var period = $"e2e-reqid-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            // Risk/Nature need a real window - a free-text period is refused with 400 INVALID_PERIOD
+            // since 2026-09-27. A completed instance with the same run id is simply replaced.
+            const string period = "last_30_days";
             var body = JsonSerializer.Serialize(new
             {
                 tenantId,

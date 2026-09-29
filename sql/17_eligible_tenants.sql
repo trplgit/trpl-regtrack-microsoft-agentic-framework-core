@@ -9,10 +9,18 @@
   scope class. The API MUST call this on every request and reject any
   client-supplied tenant id not in the result - never trust the client.
 
-  Eligibility is the conjunction of three tests (design spec Sec.5.6.2):
+  Eligibility is the conjunction of four tests (design spec Sec.5.6.2):
     1. Customer.IsDeleted = 0
     2. RegInsights product mapped AND enabled (ProductMapping.IsActive = 0 - INVERTED)
     3. The user has scope rows (EntitiesAssignment) on OPERATING branches
+    4. [ADDED 2026-09-28, product decision] The user holds the Management role:
+       User.RoleID -> Role.Code = 'MGMT', and the user is active and not deleted.
+       Company Admins, performers, reviewers etc. are NOT eligible, even with
+       EntitiesAssignment rows (on tenant 1285, 4 of the 13 users with scope rows
+       were not Management). Resolved by Role.Code, never by a hardcoded RoleID.
+       This is User.RoleID (the compliance module role), NOT User.LicenseRoleID -
+       the licence module's own role only narrows what the Licence dimension
+       shows (sql/21), it does not decide who may use Insights.
 
   No error block: this proc never THROWs - an ineligible tenant is simply
   absent from the result, and an empty result means DENY.
@@ -30,6 +38,21 @@ CREATE PROCEDURE dbo.usp_Insights_EligibleTenants
 AS
 BEGIN
     SET NOCOUNT ON;
+
+    /*-- 0. Management role only - see header test 4. Not Management = empty
+       result = DENY, same as every other failed test here (no THROW).      */
+    IF NOT EXISTS (SELECT 1 FROM [User] u
+                   JOIN Role r ON r.ID = u.RoleID
+                   WHERE u.ID = @UserID
+                     AND u.IsDeleted = 0
+                     AND u.IsActive = 1
+                     AND r.Code = 'MGMT')
+    BEGIN
+        SELECT CAST(NULL AS INT) AS TenantId, CAST(NULL AS NVARCHAR(200)) AS Name,
+               CAST(NULL AS VARCHAR(10)) AS Tier, CAST(NULL AS VARCHAR(20)) AS ScopeClass
+        WHERE 1 = 0;
+        RETURN;
+    END
 
     /*-- 1. The user's scope footprint, per customer. Active branches only. --*/
     CREATE TABLE #scope (

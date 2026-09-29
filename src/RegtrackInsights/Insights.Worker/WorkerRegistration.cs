@@ -140,7 +140,9 @@ public static class WorkerRegistration
         services.AddTransient(sp => new NormalizeActivity(
             configuration["Reports:LocalFallbackDirectory"], sp.GetRequiredService<ILogger<NormalizeActivity>>()));
         services.AddTransient<SanitizeActivity>();
-        services.AddTransient<ValidateFixedHolisticStructureActivity>();
+        services.AddTransient(sp => new ValidateFixedHolisticStructureActivity(
+            sp.GetRequiredService<ILogger<ValidateFixedHolisticStructureActivity>>(),
+            sp.GetService<Insights.Presentation.ILayoutChecker>()));
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
@@ -154,6 +156,19 @@ public static class WorkerRegistration
             sp.GetRequiredService<ILogger<PersistActivity>>(),
             sp.GetRequiredService<ITenantReportLock>(),
             configuration["Reports:LocalFallbackDirectory"]));
+
+        // [ADDED 2026-09-26] Node 12b - see BuildReasoningTraceActivity's own doc comment. All
+        // four collaborators resolved with GetService (never GetRequiredService) so a host that
+        // has not called AddInsightsAgentReasoning/AddInsightsPaidReportAgents's reasoning-explainer
+        // registration/RegisterReportCodec still starts - the activity's own RunAsync treats a
+        // null explainerAgent/traceStore as "feature not configured here" and returns Written:false,
+        // never throws.
+        services.AddTransient(sp => new BuildReasoningTraceActivity(
+            sp.GetRequiredService<ILogger<BuildReasoningTraceActivity>>(),
+            sp.GetService<IReasoningExplainerAgent>(),
+            sp.GetService<IAgentReasoningRecorder>(),
+            sp.GetService<IToolInvocationRecorder>(),
+            sp.GetService<IReasoningTraceStore>()));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
         RegisterReportCodec(services, configuration);
@@ -220,6 +235,7 @@ public static class WorkerRegistration
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
+                ActivityCreator<BuildReasoningTraceActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
                 ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),
@@ -313,7 +329,8 @@ public static class WorkerRegistration
             sp.GetRequiredService<IReportBlobReader>(),
             sp.GetRequiredService<IReportViewPublisher>(),
             sasLifetime,
-            sp.GetRequiredService<ILogger<ReportContentService>>()));
+            sp.GetRequiredService<ILogger<ReportContentService>>(),
+            sp.GetService<IReasoningTraceStore>()));
 
         // API_CONTRACTS.md Sec.3 step 3 (design doc Sec.2.4's 30-day cooldown) - RunEndpoints
         // needs this on the SAME host that generates reports, and it depends on
@@ -366,6 +383,13 @@ public static class WorkerRegistration
         services.TryAddSingleton(_ => new AzureReportBlobWriter(blobConnectionString, blobContainer));
         services.TryAddSingleton<IReportBlobWriter>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
         services.TryAddSingleton<IReportBlobReader>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
+
+        // [ADDED 2026-09-26] Reasoning-trace Markdown - SAME blobConnectionString/blobContainer as
+        // the report's own encrypted blob above, deliberately NOT a new container (user's explicit
+        // instruction). TryAdd, same reasoning as the other three registrations in this method:
+        // both the worker (write, BuildReasoningTraceActivity) and the API host (read,
+        // ReportContentService) call this same method.
+        services.TryAddSingleton<IReasoningTraceStore>(_ => new AzureReasoningTraceStore(blobConnectionString, blobContainer));
     }
 
     /// <summary>

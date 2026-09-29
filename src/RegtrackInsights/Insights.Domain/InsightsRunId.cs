@@ -70,7 +70,15 @@ public static class InsightsRunId
     /// instead of a new one - the whole point being the SAME one-key-one-identity guarantee this
     /// class already provides for the orchestration instance itself.
     /// </summary>
-    public static Guid ReportId(int tenantId, string scopeDescriptor, string reportType, string period)
+    /// <param name="executionId">
+    /// [ADDED 2026-09-27, FOUND LIVE] The orchestration's DTFx ExecutionId. Without it, a genuinely
+    /// NEW run for the same key (cooldown off, or after it expires - and "last_30_days" means
+    /// different data every month) resolved to the old row and PersistActivity discarded the fresh
+    /// render. A redelivered activity shares its execution's ExecutionId, so redelivery stays
+    /// idempotent; a new run gets a new ExecutionId and therefore a new report. Null keeps the
+    /// original key-only identity.
+    /// </param>
+    public static Guid ReportId(int tenantId, string scopeDescriptor, string reportType, string period, string? executionId = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tenantId);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeDescriptor);
@@ -82,6 +90,8 @@ public static class InsightsRunId
             scopeDescriptor.Trim().ToLowerInvariant(),
             reportType.Trim().ToLowerInvariant(),
             period.Trim().ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(executionId))
+            canonical += "|exec:" + executionId.Trim();
 
         // First 16 bytes of the same SHA-256 this class already uses for `For` - not RFC 4122
         // UUIDv5 (no namespace byte-mixing), just a deterministic 128 bits. Nothing here needs

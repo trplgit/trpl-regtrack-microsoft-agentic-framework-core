@@ -24,8 +24,21 @@ public sealed record RenderHtmlInput(
     // [ADDED 2026-09-14] Set only when this attempt is a retry triggered by VisionQaActivity
     // finding a real visual defect in the PREVIOUS attempt - see IReportHtmlAgent.RenderAsync's
     // own doc comment on this same field.
-    string? PreviousVisualIssue = null);
-public sealed record RenderHtmlOutput(string Html, long TotalTokens);
+    string? PreviousVisualIssue = null,
+    // [ADDED 2026-09-27] The report period, for the header's "Last 30 days · 29 Aug – 27 Sep 2026"
+    // line (ReportPeriodContext.Describe). Trailing optional fields - replay-safe.
+    string? Period = null,
+    DateTime? WindowStart = null,
+    DateTime? WindowEnd = null,
+    // [ADDED 2026-09-28] The dimension's data_quality notes (JSON array, SQL-written). Their
+    // numbers count as data for the fabricated-number check - see RunAsync. Trailing optional.
+    string? DataQualityJson = null);
+public sealed record RenderHtmlOutput(
+    string Html, long TotalTokens,
+    // [ADDED 2026-09-27] Numbers the model typed into the page that do not trace to the real data
+    // (ReportNumberTracer) - single-dimension reports only, null otherwise. A trailing optional
+    // field: a run recorded before this existed replays with null, i.e. exactly its old path.
+    IReadOnlyList<string>? UntracedNumbers = null);
 
 /// <summary>
 /// Node 7, runs AFTER the publish gate (spec 3) - no point rendering a refused narrative.
@@ -83,6 +96,7 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
+        using var _period = ReportPeriodContext.Push(ReportPeriodContext.DescribeFor(input.DimensionName, input.Period, input.WindowStart, input.WindowEnd));
         var result = await htmlAgent.RenderAsync(
             input.Plan, input.Narrative, input.Assertions, input.TenantName, input.ReportType, input.GeneratedAt,
             input.LocationRows, input.DimensionRowsJson, input.DimensionControlTotalsJson, input.PreviousVisualIssue, CancellationToken.None);
@@ -99,6 +113,51 @@ public sealed class RenderHtmlActivity(IReadOnlyDictionary<string, IReportHtmlAg
             }
         }
 
-        return new RenderHtmlOutput(result.Value, result.TotalTokens);
+        // [ADDED 2026-09-27] Real rows written by code, not re-typed by the model - see
+        // DimensionDataInjector. Single-dimension reports only; fixed_holistic is unchanged.
+        var html = result.Value;
+        if (input.DimensionName is { } dimension
+            && input.DimensionRowsJson is not null
+            && input.DimensionRowsJson.TryGetValue(dimension, out var rowsJson))
+        {
+            string? totalsJson = null;
+            input.DimensionControlTotalsJson?.TryGetValue(dimension, out totalsJson);
+            html = Insights.Presentation.DimensionDataInjector.Inject(html, dimension, rowsJson, totalsJson);
+
+            // The fabricated-number check - detection only; the orchestrator decides to re-render
+            // or refuse. [FIX 2026-09-27] The narrative is deliberately NOT trusted as a source:
+            // PublishGate only checks which assertion ids it cites, never the numbers in its prose,
+            // so trusting it let a number the narrative model invented reach the page unchecked.
+            // Every number traces to rows / totals / assertions only (calibrated that way: 0 false
+            // alarms on 12 real renders).
+            // [FIX 2026-09-28, found live] The data_quality notes ARE trusted: the SQL procedure
+            // writes them (e.g. "99.8% populated"), no model does - flagging them re-rendered a
+            // correct Departments page for nothing.
+            var untraced = Insights.Presentation.ReportNumberTracer.FindUntraced(
+                html, rowsJson, totalsJson, input.Assertions, trustedTexts: DataQualityDetails(input.DataQualityJson));
+            return new RenderHtmlOutput(html, result.TotalTokens, untraced);
+        }
+
+        return new RenderHtmlOutput(html, result.TotalTokens);
+    }
+
+    private static IReadOnlyList<string> DataQualityDetails(string? dataQualityJson)
+    {
+        if (string.IsNullOrWhiteSpace(dataQualityJson))
+            return [];
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(dataQualityJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return [];
+            return doc.RootElement.EnumerateArray()
+                .Where(e => e.ValueKind == System.Text.Json.JsonValueKind.Object && e.TryGetProperty("Detail", out _))
+                .Select(e => e.GetProperty("Detail").GetString() ?? "")
+                .ToList();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return [];
+        }
     }
 }

@@ -90,12 +90,12 @@ The data given to you (`assertions`, `dimension_rows`, `dimension_control_totals
 already-reconciled SQL output. Everything you state must trace to it.
 
 **Every real field on a branch row** (`dimension_rows`): `BranchID`, `BranchName`, `ApexName`,
-`StatutoryInstances`, `StatutoryOverdue`, `StatutoryOwnerless`, `InternalInstances`,
-`InternalOverdue`, `InternalOwnerless`, `StatutoryOwnerlessPct`, `InternalOwnerlessPct`, `Flags`.
+`StatutoryInstances`, `StatutoryOverdue`, `StatutoryNoInstanceOwner`, `InternalInstances`,
+`InternalOverdue`, `InternalNoInstanceOwner`, `StatutoryNoInstanceOwnerPct`, `InternalNoInstanceOwnerPct`, `Flags`.
 
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `SumOfRows`,
 `Reconciled`, `InternalInstances`, `SumOfInternalRows`, `StatutoryOverdueInstances`,
-`InternalOverdueInstances`, `StatutoryOwnerlessPct`, `InternalOwnerlessPct`,
+`InternalOverdueInstances`, `StatutoryNoInstanceOwnerPct`, `InternalNoInstanceOwnerPct`,
 `BranchesWithStatutory`, `BranchesWithInternal`, `InternalAbsentEntirely`,
 `InternalUnmappedStatusRows`.
 
@@ -106,7 +106,7 @@ already-reconciled SQL output. Everything you state must trace to it.
 | "No internal compliance exists for this tenant" | **REAL, only when `InternalAbsentEntirely` is true** — if so, this is the ENTIRE finding for this dimension; do not also build a coverage-gap ranking on top of zero data. |
 | "Internal figures cover the same scope as statutory figures" | **NOT AVAILABLE as an unqualified claim** — internal is branch-only scoped (no category axis), genuinely wider than statutory. State this wherever both appear together. |
 | A root cause for why a branch/division lacks internal governance | **NOT AVAILABLE** — state the structural pattern, never infer why. |
-| "{X}% ownerless" for either population, without the two-mechanisms caveat | **NOT AVAILABLE as a bare figure** — the same ownership-has-two-mechanisms caveat that applies everywhere else applies to `StatutoryOwnerlessPct`/`InternalOwnerlessPct` too. |
+| "{X}% ownerless" for either population, without the two-mechanisms caveat | **NOT AVAILABLE as a bare figure** — the same ownership-has-two-mechanisms caveat that applies everywhere else applies to `StatutoryNoInstanceOwnerPct`/`InternalNoInstanceOwnerPct` too. |
 
 ## The `window` data_quality entry — read this before writing the scope line, ADDED 2026-09-25
 
@@ -125,7 +125,7 @@ already written for you — **use it**, do not paraphrase it into something vagu
   reformatted for readability, never invented)
 
 State this near the top of the page (it changes what every other number here means, including
-both `StatutoryOwnerlessPct` and `InternalOwnerlessPct`) — a caller comparing two runs needs to know
+both `StatutoryNoInstanceOwnerPct` and `InternalNoInstanceOwnerPct`) — a caller comparing two runs needs to know
 they may be looking at two different windows, not two different tenants.
 
 ## Self-check before returning

@@ -123,6 +123,104 @@ public class RenderHtmlActivityTests
         genericAgent.Verify(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-27] Single-dimension render: the real rows/totals are injected by code into
+    /// the returned page (DimensionDataInjector), so the model never has to re-type them.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SingleDimensionWithRows_InjectsTheRealDataBlock()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var plan = DimensionSelectionComposition.Build(["Users"]);
+        var narrative = new NarrativeResult([]);
+        var generatedAt = new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc);
+        IReadOnlyList<Assertion> assertions = [];
+        var rows = new Dictionary<string, string> { ["Users"] = """[{"UserID":7,"UserName":"Asha"}]""" };
+        var totals = new Dictionary<string, string> { ["Users"] = """{"UsersReported":1}""" };
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><script>draw()</script></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Users"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(plan, narrative, assertions, "T", DimensionSelectionComposition.ReportType, generatedAt,
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Users"));
+
+        Assert.Contains("id=\"insights-data\"", result.Html);
+        Assert.Contains("\"UserName\":\"Asha\"", result.Html);
+        Assert.Contains("\"UsersReported\":1", result.Html);
+    }
+
+    [Fact]
+    public async Task RunAsync_SingleDimension_ListsTypedNumbersThatDoNotTraceToTheData()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var rows = new Dictionary<string, string> { ["Act"] = """[{"ActID":1,"ActName":"Factories Act","Instances":20,"Overdue":15},{"ActID":2,"ActName":"Gratuity Act","Instances":13,"Overdue":13}]""" };
+        var totals = new Dictionary<string, string> { ["Act"] = """{"ScopedInstances":33,"OverdueInstances":28}""" };
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><p>28 of 33 overdue (84.8%)</p><p>1,640 penalties</p></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Act"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(DimensionSelectionComposition.Build(["Act"]), new NarrativeResult([]), [], "T",
+            DimensionSelectionComposition.ReportType, new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc),
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Act"));
+
+        Assert.Equal(["1,640"], result.UntracedNumbers);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE 2026-09-28] Departments was re-rendered because "99.8%" was flagged - a fact the
+    /// SQL itself writes into its data-quality notes ("ComplianceScheduleOn.Performerid, 99.8%
+    /// populated"). Those notes are written by code, so their numbers count as data; anything else
+    /// is still caught.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_NumberFromTheSqlsDataQualityNotes_IsTraced_OthersStillCaught()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var rows = new Dictionary<string, string> { ["Departments"] = """[{"DepartmentID":1,"DepartmentName":"HR","Instances":20,"Overdue":15}]""" };
+        var totals = new Dictionary<string, string> { ["Departments"] = """{"ScopedInstances":20,"OverdueInstances":15}""" };
+        const string dataQuality = """[{"Issue":"ownership_has_two_mechanisms","AppliesToMetric":"NoInstanceOwner","Detail":"Performerid on each occurrence, 99.8% populated."}]""";
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><p>15 of 20 overdue. A performer is named on 99.8% of due dates. 1,640 penalties.</p></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Departments"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(DimensionSelectionComposition.Build(["Departments"]), new NarrativeResult([]), [], "T",
+            DimensionSelectionComposition.ReportType, new DateTime(2026, 9, 28, 0, 0, 0, DateTimeKind.Utc),
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Departments", DataQualityJson: dataQuality));
+
+        Assert.Equal(["1,640"], result.UntracedNumbers);
+    }
+
+    /// <summary>
+    /// The narrative is NOT a source of truth for numbers: the publish gate only checks which
+    /// assertion ids it cites, never the numbers in its prose. A number the narrative model made up
+    /// must still be caught when it lands on the page.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_NumberInventedByTheNarrative_IsStillCaught()
+    {
+        var agent = new Mock<IReportHtmlAgent>();
+        var rows = new Dictionary<string, string> { ["Act"] = """[{"ActID":1,"ActName":"Factories Act","Instances":20,"Overdue":15}]""" };
+        var totals = new Dictionary<string, string> { ["Act"] = """{"ScopedInstances":20,"OverdueInstances":15}""" };
+        var narrative = new NarrativeResult([new NarrativeBlockResult("Act", "15 of 20 overdue, and 1,640 penalties were raised.", [])]);
+
+        agent.Setup(a => a.RenderAsync(It.IsAny<CompositionPlan>(), It.IsAny<NarrativeResult>(), It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<IReadOnlyList<LocationRow>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AgentCallResult<string>("<!DOCTYPE html><html><body><p>15 of 20 overdue, and 1,640 penalties were raised.</p></body></html>", 100));
+
+        var activity = new RenderHtmlActivity(new Dictionary<string, IReportHtmlAgent> { [$"{DimensionSelectionComposition.ReportType}:Act"] = agent.Object });
+
+        var result = await activity.RunAsync(new RenderHtmlInput(DimensionSelectionComposition.Build(["Act"]), narrative, [], "T",
+            DimensionSelectionComposition.ReportType, new DateTime(2026, 9, 27, 0, 0, 0, DateTimeKind.Utc),
+            DimensionRowsJson: rows, DimensionControlTotalsJson: totals, DimensionName: "Act"));
+
+        Assert.Equal(["1,640"], result.UntracedNumbers);
+    }
+
     /// <summary>Regression guard - today's exact behavior when no dimension-specific agent is registered yet (the real current state for every dimension).</summary>
     [Fact]
     public async Task RunAsync_SingleDimensionRequest_FallsBackToGenericAgentWhenNoDimensionSpecificOneRegistered()

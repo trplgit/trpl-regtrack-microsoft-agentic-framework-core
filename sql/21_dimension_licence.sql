@@ -63,14 +63,31 @@
   (Semantic='LicenceStatus', Meaning='Expired', RawValue=<verified ID>) once
   the ID is confirmed live - that is a data change, not a code change.
 
-  -- SCOPE - BRANCH-ONLY, NOT FULL 2-D --------------------------------------
-  Licences are not linked to ComplianceCategoryId without
-  Lic_tbl_LicenseComplianceInstanceMapping, which this proc does not join
-  (not yet needed for the fields below). Scope is therefore the DISTINCT
-  branch set from tvfInsightsScopePairs, not the full (branch, category) pair.
-  A recipient still never sees a licence outside their authorised branches,
-  but this is a narrower scope guarantee than every other dimension gives and
-  must be called out as such - see data_quality.
+  -- SCOPE - THE LICENCE MODULE'S OWN RULE, NOT THE COMPLIANCE SCOPE --------
+  [CHANGED 2026-09-28, user decision] The result must equal RegTrack's own
+  licence report (SP_LicenseMyReport_V2) for the same user - verified
+  licence-for-licence on 14 users. Step 1 = every operating branch of the
+  tenant (no longer tvfInsightsScopePairs - see step 1's note).
+  Step 2 mirrors RegTrack's own licence module
+  (SP_LicenseMyReport_V2), which decides visibility by User.LicenseRoleID -
+  NOT by User.RoleID:
+    CADMN (Company Admin)      -> every licence in the authorised branches
+    MGMT / AUDT                -> only the (BranchID, LicenseTypeID) pairs the
+                                  user holds in LIC_EntitiesAssignment
+    EXCT (Non-Admin)           -> only licences whose linked compliance
+                                  instance is assigned to the user
+    anything else / no role    -> THROW 51168 (no licence access)
+    MGMT/AUDT/EXCT with nothing in scope -> THROW 51169
+  Found live on tenant 1285 / user 11416 (MGMT): the branch-only scope showed
+  214 licences where RegTrack's own licence report shows that user 180 - 29
+  of the 34 were licence types / branches the user was never assigned.
+  [CHANGED 2026-09-28, user decision] The other 5 are dropped too, as RegTrack
+  does: a licence only counts when its linked compliance task is live (step 2b)
+  - 214 -> 180, identical to RegTrack's report. Declared in data_quality
+  'licence_no_live_task'.
+  Error codes 51168/51169 sit in the x5-x9 part of this file's block because
+  51160 (x0) is already the compliance-scope denial; each condition still has
+  its own code.
 
   IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
 ===========================================================================*/
@@ -140,32 +157,121 @@ BEGIN
                  AND NOT EXISTS (SELECT 1 FROM #licStatus ls WHERE ls.StatusId = sm.ID))
         THROW 51167, N'DICTIONARY GAP - Lic_tbl_StatusMaster contains active statuses absent from the LicenceStatus classification. Refusing to guess whether they are lapse-eligible. Seed them and re-run.', 1;
 
-    /*-- 1. SCOPED BRANCH SET - see header: branch-only, not full 2-D ----*/
+    /*-- 1. BRANCH SET - [CHANGED 2026-09-28, user decision: match RegTrack's
+       own licence report exactly]. Every OPERATING branch of the tenant, as
+       SP_LicenseMyReport_V2 uses; the licence role in 1b/2 then narrows it
+       (MGMT/AUDT to their own LIC_EntitiesAssignment pairs, EXCT to their own
+       tasks). Previously the user's COMPLIANCE branches (tvfInsightsScopePairs)
+       were intersected first, which hid licences the licence module itself
+       grants: 5 of 12 Management/Auditor users measured saw fewer licences than
+       RegTrack shows them (one saw 49 of 404, one was refused outright). Still
+       server-derived from the user's own assignment rows - never client input.
+       The pre-flight above still requires the user to be an Insights user.  */
     IF OBJECT_ID('tempdb..#branches') IS NOT NULL DROP TABLE #branches;
-    SELECT DISTINCT sp.BranchID
+    SELECT cb.ID AS BranchID
     INTO #branches
-    FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp;
+    FROM CustomerBranch cb
+    WHERE cb.CustomerID = @CustomerID
+      AND cb.IsDeleted = 0
+      AND cb.Status = 1;
+
+    /*-- 1b. LICENCE ROLE - see header. Same rule RegTrack's licence module
+       applies (SP_LicenseMyReport_V2 @IsFlag), read from User.LicenseRoleID. */
+    DECLARE @licRole VARCHAR(10) =
+        (SELECT r.Code FROM [User] u JOIN Role r ON r.ID = u.LicenseRoleID
+         WHERE u.ID = @UserID AND u.IsDeleted = 0);
+
+    IF @licRole IS NULL OR @licRole NOT IN ('CADMN', 'MGMT', 'AUDT', 'EXCT')
+        THROW 51168, N'SCOPE DENIED - user has no licence-module role (User.LicenseRoleID is not Company Admin, Management, Auditor or Non-Admin). Refusing to compute.', 1;
 
     /*-- 2. SCOPED LICENCE BASE -------------------------------------------*/
-    IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
+    IF OBJECT_ID('tempdb..#branchLic') IS NOT NULL DROP TABLE #branchLic;
     SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID,
-           NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.StartDate, li.EndDate
-    INTO #lic
+           NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID, li.StartDate, li.EndDate,
+           CAST(ISNULL(li.IsPermanantActive, 0) AS BIT) AS IsPerpetual   -- [TRAP] column is misspelled in the schema
+    INTO #branchLic
     FROM Lic_tbl_LicenseInstance li
     JOIN #branches b ON b.BranchID = li.CustomerBranchID
     WHERE li.CustomerID = @CustomerID AND li.IsDeleted = 0;
+
+    IF OBJECT_ID('tempdb..#roleLic') IS NOT NULL DROP TABLE #roleLic;
+    SELECT bl.LicenseId, bl.BranchID, bl.LicenseTypeID, bl.StartDate, bl.EndDate, bl.IsPerpetual
+    INTO #roleLic
+    FROM #branchLic bl
+    WHERE @licRole = 'CADMN'
+       OR (@licRole IN ('MGMT', 'AUDT')
+           AND EXISTS (SELECT 1 FROM LIC_EntitiesAssignment ea
+                       WHERE ea.UserID = @UserID
+                         AND ea.BranchID = bl.BranchID
+                         AND ea.LicenseTypeID = bl.LicenseTypeID))
+       OR (@licRole = 'EXCT'
+           AND EXISTS (SELECT 1 FROM Lic_tbl_LicenseComplianceInstanceScheduleOnMapping m
+                       JOIN ComplianceAssignment ca ON ca.ComplianceInstanceID = m.ComplianceInstanceID
+                       WHERE m.LicenseID = bl.LicenseId AND ca.UserID = @UserID));
+
+    /*  Outside-role count is declared in data_quality, never silent. */
+    DECLARE @outsideRole INT = (SELECT COUNT(*) FROM #branchLic) - (SELECT COUNT(*) FROM #roleLic);
+
+    IF @licRole <> 'CADMN' AND NOT EXISTS (SELECT 1 FROM #roleLic)
+        THROW 51169, N'SCOPE DENIED - the user''s licence role grants no licences in their authorised branches (no LIC_EntitiesAssignment pair or assigned licence task). Refusing to compute.', 1;
+
+    /*-- 2b. LIVE COMPLIANCE TASK - [CHANGED 2026-09-28, user decision] ----
+       Same rule as RegTrack's own licence report (SP_LicenseMyReport_V2): a
+       licence counts only when the compliance schedule its LATEST status points
+       at is (a) mapped to the licence, (b) active and not deleted
+       (IsActive = 1, IsUpcomingNotDeleted = 1), (c) on a compliance instance
+       with an active performer (ComplianceAssignment RoleID 3, user active and
+       not deleted, this tenant) and (d) has been acted on at least once (a
+       ComplianceTransaction row exists). Licences failing this are NOT counted
+       - on tenant 1285 / user 11416 this is 5 licences (185 -> 180, matching
+       RegTrack's report exactly) - and the count is declared in data_quality
+       'licence_no_live_task', never silent.                                  */
+    IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
+    SELECT rl.LicenseId, rl.BranchID, rl.LicenseTypeID, rl.StartDate, rl.EndDate, rl.IsPerpetual
+    INTO #lic
+    FROM #roleLic rl
+    WHERE EXISTS (SELECT 1
+                  FROM Lic_tbl_LicenseComplianceInstanceScheduleOnMapping m
+                  JOIN ComplianceScheduleOn cso ON cso.ID = m.ComplianceScheduleOnID
+                                               AND cso.IsActive = 1
+                                               AND cso.IsUpcomingNotDeleted = 1
+                  JOIN ComplianceAssignment ca ON ca.ComplianceInstanceID = m.ComplianceInstanceID
+                                              AND ca.RoleID = 3
+                  JOIN [User] pu ON pu.ID = ca.UserID
+                                AND pu.IsDeleted = 0
+                                AND pu.IsActive = 1
+                                AND pu.CustomerID = @CustomerID
+                  WHERE m.LicenseID = rl.LicenseId
+                    /*  "Latest" exactly as RegTrack's RecentLicenseTransactionView
+                        defines it: the row(s) at MAX(CreatedOn) - NOT StatusChangeOn -
+                        with a status in Lic_tbl_StatusMaster, and IsActive = 1 as
+                        SP_LicenseMyReport_V2 adds. A licence whose status rows carry
+                        no CreatedOn has no latest row there, so RegTrack drops it
+                        (found live: 15 on tenant 5).                               */
+                    AND m.ComplianceScheduleOnID IN (
+                        SELECT lst.ComplianceScheduleOnID
+                        FROM Lic_tbl_LicenseStatusTransaction lst
+                        JOIN Lic_tbl_StatusMaster lsm ON lsm.ID = lst.StatusID
+                        WHERE lst.LicenseID = rl.LicenseId
+                          AND lst.IsActive = 1
+                          AND lst.CreatedOn = (SELECT MAX(l2.CreatedOn) FROM Lic_tbl_LicenseStatusTransaction l2
+                                               WHERE l2.LicenseID = rl.LicenseId))
+                    AND EXISTS (SELECT 1 FROM ComplianceTransaction ct
+                                WHERE ct.ComplianceScheduleOnID = m.ComplianceScheduleOnID));
+
+    DECLARE @noLiveTask INT = (SELECT COUNT(*) FROM #roleLic) - (SELECT COUNT(*) FROM #lic);
 
     CREATE CLUSTERED INDEX IX_lic ON #lic (LicenseTypeID, LicenseId);
 
     /*-- 3. LATEST STATUS PER LICENCE - the corroboration check ----------*/
     IF OBJECT_ID('tempdb..#latestStatus') IS NOT NULL DROP TABLE #latestStatus;
     ;WITH ranked AS (
-        SELECT lst.LicenseID, lst.StatusID,
+        SELECT lst.LicenseID, lst.StatusID, lst.ComplianceScheduleOnID,
                ROW_NUMBER() OVER (PARTITION BY lst.LicenseID ORDER BY lst.StatusChangeOn DESC) AS rn
         FROM Lic_tbl_LicenseStatusTransaction lst
         JOIN #lic l ON l.LicenseId = lst.LicenseID
     )
-    SELECT LicenseID, StatusID
+    SELECT LicenseID, StatusID, ComplianceScheduleOnID
     INTO #latestStatus
     FROM ranked WHERE rn = 1;
 
@@ -202,7 +308,14 @@ BEGIN
        ExcludedTerminalState : EndDate has passed but the licence was terminated,
                 rejected, renewed (EndDate superseded) or never applicable. Per
                 the BA ruling these are NOT lapses and get their own bucket.
-       LapsingNext30 : forward window, mirrors sql/06's DueNext30 windowing. */
+       LapsingNext30 : forward window, mirrors sql/06's DueNext30 windowing.
+       [FIX 2026-09-28] A PERPETUAL licence (IsPermanantActive = 1) is ACTIVE and
+                never lapses, whatever EndDate holds - RegTrack's own licence
+                report blanks EndDate for it. Before this, a perpetual licence
+                with no EndDate sat in no bucket (found by the reasoning file on
+                1285: Transport 9 + 76 + 11 = 96 of 97). A NON-perpetual licence
+                with no EndDate still sits in no bucket - that is missing data,
+                declared in data_quality 'licence_no_end_date'.                  */
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         LicenseTypeID          INT            NOT NULL PRIMARY KEY,
@@ -225,16 +338,16 @@ BEGIN
     SELECT
         t.LicenseTypeID, t.LicenseTypeName, t.IsRetired,
         COUNT(l.LicenseId),
-        SUM(CASE WHEN l.EndDate >= @AsOf THEN 1 ELSE 0 END),
-        SUM(CASE WHEN l.EndDate < @AsOf AND ISNULL(CAST(c.LapseEligible AS INT), 1) = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 1 OR l.EndDate >= @AsOf THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 0 AND l.EndDate < @AsOf AND ISNULL(CAST(c.LapseEligible AS INT), 1) = 1 THEN 1 ELSE 0 END),
         /*  ISNULL(..., 1): a licence with NO status transaction row at all is
             still LAPSED if its EndDate has passed. Absence of a record is not
             evidence that it was terminated or renewed, and the BA ruling makes
             the due date the deciding fact. Without this the reconciliation
             drops them silently - 15 licences on the tenant this was built
             against. The count is declared in data_quality.                   */
-        SUM(CASE WHEN l.EndDate < @AsOf AND c.LapseEligible = 0 THEN 1 ELSE 0 END),
-        SUM(CASE WHEN l.EndDate > @AsOf AND l.EndDate <= DATEADD(DAY, 30, @AsOf) THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 0 AND l.EndDate < @AsOf AND c.LapseEligible = 0 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN l.IsPerpetual = 0 AND l.EndDate > @AsOf AND l.EndDate <= DATEADD(DAY, 30, @AsOf) THEN 1 ELSE 0 END),
         COUNT(DISTINCT l.BranchID)
     FROM #type t
     LEFT JOIN #lic l           ON l.LicenseTypeID = t.LicenseTypeID
@@ -266,6 +379,8 @@ BEGIN
         CASE WHEN @scopedTotal = 0 THEN 0
              ELSE 100.0 * (SELECT ISNULL(SUM(Lapsed),0) FROM #rows) / @scopedTotal END;
     DECLARE @totalExcludedTerminal INT = (SELECT ISNULL(SUM(ExcludedTerminalState),0) FROM #rows);
+    DECLARE @perpetual   INT = (SELECT COUNT(*) FROM #lic WHERE IsPerpetual = 1);
+    DECLARE @noEndDate   INT = (SELECT COUNT(*) FROM #lic WHERE IsPerpetual = 0 AND EndDate IS NULL);
 
     UPDATE #rows SET
         LapsedPct = CASE WHEN TotalLicences = 0 THEN 0
@@ -355,9 +470,16 @@ BEGIN
            @tenantLapsedPct, LapsedPct - @tenantLapsedPct,
            CASE WHEN LapsedPct > @tenantLapsedPct THEN 'worse' ELSE 'better' END,
            NULLIF(CONCAT(
-               CASE WHEN @rankDegraded = 1
+               /*  [FIX 2026-09-28] Degraded means FEWER THAN TWO types reach the floor, not none -
+                   the old text said "no licence type reaches" while Transport had 97, and the
+                   report repeated the contradiction. Now states the real count.              */
+               CASE WHEN @rankDegraded = 1 AND @materialMembers = 0
                     THEN CONCAT(N'degraded_ranking_sample: no licence type reaches the ', @materialityFloor,
-                                N'-licence materiality floor. ') ELSE N'' END,
+                                N'-licence materiality floor, so every type is ranked regardless of size. ')
+                    WHEN @rankDegraded = 1
+                    THEN CONCAT(N'degraded_ranking_sample: only one licence type reaches the ', @materialityFloor,
+                                N'-licence materiality floor, too few to rank, so every type is ranked regardless of size. ')
+                    ELSE N'' END,
                CASE WHEN @tiedAtTop > 1
                     THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' licence types share this rate - not uniquely the highest. ')
                     ELSE N'' END), N'')
@@ -412,7 +534,11 @@ BEGIN
         exist ONLY here - attached to no assertion and no finding. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
-                   WHEN 'branch_only_scope'                    THEN 'ScopedLicences'
+                   WHEN 'licence_module_scope'                 THEN 'ScopedLicences'
+                   WHEN 'licence_role_scope'                   THEN 'ScopedLicences'
+                   WHEN 'licence_no_live_task'                 THEN 'ScopedLicences'
+                   WHEN 'perpetual_licences'                   THEN 'ActiveLicences'
+                   WHEN 'licence_no_end_date'                  THEN 'ScopedLicences'
                    WHEN 'excluded_terminal_states'             THEN 'TenantLapsedPct'
                    WHEN 'untyped_licences'                     THEN 'UntypedLicences'
                    WHEN 'licence_type_retired_still_in_use'    THEN 'LicenceTypesReported'
@@ -421,10 +547,34 @@ BEGIN
                    WHEN 'licence_statuses_unclassified'        THEN 'TenantLapsedPct'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
-        SELECT 'branch_only_scope' AS Issue,
-               N'This dimension scopes by authorised BRANCH only, not the full (branch, category) pair every '
-             + N'other dimension enforces - licences are not linked to ComplianceCategoryId without '
-             + N'Lic_tbl_LicenseComplianceInstanceMapping, which this proc does not yet join.' AS Detail
+        SELECT 'licence_module_scope' AS Issue,
+               N'Licences follow the licence module''s own access rules, the same set RegTrack''s own licence report '
+             + N'shows this user - not the compliance branch and category scope the other dimensions use.' AS Detail
+        UNION ALL
+        SELECT 'licence_role_scope',
+               CASE WHEN @licRole = 'CADMN'
+                    THEN N'Company Admin licence role: every licence at the company''s operating branches is included.'
+                    ELSE CONCAT(N'', @outsideRole, N' licence(s) at the company''s operating branches are outside this user''s '
+                         + N'licence role (', CASE @licRole WHEN 'MGMT' THEN N'Management' WHEN 'AUDT' THEN N'Auditor'
+                                                            WHEN 'EXCT' THEN N'Non-Admin' ELSE @licRole END,
+                         N') and are not included - the same rule RegTrack''s own '
+                         + N'licence report applies. Counts cover only the licences this user is responsible for.') END
+        WHERE @licRole = 'CADMN' OR @outsideRole > 0
+        UNION ALL
+        SELECT 'licence_no_live_task',
+               CONCAT(N'', @noLiveTask, N' licence(s) in this user''s scope are not counted, the same way RegTrack''s own '
+                    + N'licence report leaves them out: the linked compliance task is inactive, has no active performer '
+                    + N'or has never been acted on, or the licence has no dated latest status record.')
+        WHERE @noLiveTask > 0
+        UNION ALL
+        SELECT 'perpetual_licences',
+               CONCAT(N'', @perpetual, N' licence(s) are perpetual (no expiry). They are counted as active and never as lapsed.')
+        WHERE @perpetual > 0
+        UNION ALL
+        SELECT 'licence_no_end_date',
+               CONCAT(N'', @noEndDate, N' licence(s) are not perpetual but have no end date recorded, so they are counted in '
+                    + N'the total but not as active, lapsed or ended another way.')
+        WHERE @noEndDate > 0
         UNION ALL
         SELECT 'excluded_terminal_states',
                CONCAT(N'', @totalExcludedTerminal, N' licence(s) are past EndDate but ended another way - '
@@ -470,7 +620,7 @@ BEGIN
                         AND sm.ID NOT IN (2,4,5,6,7,9,10))
     ) q;
 
-    DROP TABLE #branches; DROP TABLE #lic; DROP TABLE #latestStatus; DROP TABLE #type;
+    DROP TABLE #branches; DROP TABLE #branchLic; DROP TABLE #roleLic; DROP TABLE #lic; DROP TABLE #latestStatus; DROP TABLE #type;
     DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

@@ -79,6 +79,9 @@ public static class ObservabilityRegistration
                 // FilterInstrumentationScopes documents the INTENT; there is nothing left for code
                 // to filter until/unless a broader auto-instrumentation package is added later.
                 .AddSource(MafAgentFactory.ChatClientActivitySourceName)
+                // [ADDED 2026-09-28] Before the exporter, so thinking tokens reach LangFuse inside
+                // output rather than as an unpriceable dotted usage key - see the class comment.
+                .AddProcessor(new LangfuseUsageNormalizingProcessor())
                 .AddOtlpExporter(o =>
                 {
                     o.Endpoint = new Uri($"{baseUri}/api/public/otel/v1/traces");

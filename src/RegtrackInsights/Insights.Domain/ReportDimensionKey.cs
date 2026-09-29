@@ -44,8 +44,22 @@ public static class ReportDimensionKey
     /// </summary>
     public static string ForCooldownAndRunId(string period, IReadOnlyList<string>? requestedDimensions)
     {
+        var joined = Normalize(requestedDimensions);
+        return joined is null ? period : $"{period}{Separator}{joined}";
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-25] The same trim/lowercase/comma-join normalisation as
+    /// <see cref="ForCooldownAndRunId"/>'s suffix, exposed on its own for
+    /// GeneratedReport.RequestedDimensions (sql/33) - the real column, populated with the SAME
+    /// normalised value the Period suffix already carries, so the two agree by construction (and
+    /// so sql/33's own CK_GeneratedReport_DimensionKeyAgrees constraint has nothing to disagree
+    /// with). Null for null/empty input, matching the null-means-all convention.
+    /// </summary>
+    public static string? Normalize(IReadOnlyList<string>? requestedDimensions)
+    {
         if (requestedDimensions is not { Count: > 0 })
-            return period;
+            return null;
 
         var names = requestedDimensions
             .Select(d => d.Trim())
@@ -53,6 +67,6 @@ public static class ReportDimensionKey
             .Select(d => d.ToLowerInvariant());
 
         var joined = string.Join(',', names);
-        return joined.Length == 0 ? period : $"{period}{Separator}{joined}";
+        return joined.Length == 0 ? null : joined;
     }
 }
