@@ -39,6 +39,7 @@ ClosureClass / Timeliness (open/closed/on-time metrics keep their meaning).
 | 22_licence_report_status_dictionary_v2.sql | dictionary | Semantic `LicenceReportStatus`: each `Lic_tbl_StatusMaster` id -> the label RegTrack's licence report shows (seeded into dictionary v1 and v2, so re-running 01 keeps it) |
 | 23_usp_Insights_Dimension_Licence_v2.sql | usp_Insights_Dimension_Licence | Active / Expired / ... = the licence's latest RegTrack status, one column per label (was: worked out from EndDate) |
 | 24_usp_Insights_Dimension_Licence_window_v2.sql | usp_Insights_Dimension_Licence | supersedes 23: counts only licences whose END DATE falls in the report period (RegTrack's own licence-report date filter, raw EndDate, inclusive last day at 00:00); `AllLicences/AllActiveLicences/AllExpiredLicences` context; NULL period = every licence |
+| 25_usp_Insights_Dimension_Licence_window_text_v2.sql | usp_Insights_Dimension_Licence | supersedes 24 with IDENTICAL numbers; only reader-facing text changed (no "RegTrack shows ...", no "not worked out from the end date" notes, finding guard forbids validity speculation) |
 | 99_rollback_v2.sql | all of the above | restores the pre-v2 definitions (as deployed 2026-09-29) and makes dictionary v1 current |
 
 Every procedure/function file is built from the definition **deployed on UAT** on 2026-09-29 (not the
