@@ -183,17 +183,17 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-27] v3 - richer interactive charts, each with a "How to read"
                 // guide the render step turns into an "i" panel. Lab-verified on real UAT data.
                 ["Act"] = Build("Act", "02_composition_freehand_act_v3.md"),
-                ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging_v3.md"),
+                ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging_v4.md"),
                 // [ADDED 2026-09-25] v2 - Departments got the same @WindowStart/@WindowEnd hard
                 // population gate as Act/Event this session; its own "window" data_quality entry
                 // needed the same real-detail-text fix, not the generic-filler default.
                 // [ADDED 2026-09-29] v4 on Departments/Location/Risk/Nature/Internal - ownership is no
                 // longer a finding (RegTrack parity: every obligation has an active performer, so the
                 // ownership fields are always 0). v3 files stay untouched.
-                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v4.md"),
-                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v7.md"),
+                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v5.md"),
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v8.md"),
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
-                ["Location"] = Build("Location", "02_composition_freehand_location_v4.md"),
+                ["Location"] = Build("Location", "02_composition_freehand_location_v5.md"),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // pattern as the five above, not a new mechanism.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same window data_quality fix.
@@ -208,7 +208,7 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as the others above.
                 // [ADDED 2026-09-27] v3 - same "How to read" / interactive-chart change as Act.
                 // Lab-verified on real Minda data.
-                ["Users"] = Build("Users", "02_composition_freehand_users_v3.md"),
+                ["Users"] = Build("Users", "02_composition_freehand_users_v4.md"),
             };
         });
 
@@ -331,7 +331,7 @@ public static class PaidReportAgentsRegistration
             {
                 ["fixed_holistic"] = Build(
                     "ReportHtmlAgent", "Renders the fixed 6-tab Holistic Insights report as self-contained HTML.",
-                    "05_report_html_fixed_holistic_v2.md"),
+                    "05_report_html_fixed_holistic_v3.md"),
                 ["dimension_selection"] = Build(
                     "DimensionSelectionReportHtmlAgent", "Renders a caller-selected subset of dimensions as self-contained HTML, no fixed tabs.",
                     "05_report_html_dimension_selection_v2.md"),
@@ -350,7 +350,7 @@ public static class PaidReportAgentsRegistration
                 // own render prompt - see that file's own header for what changed and why.
                 ["dimension_selection:Location"] = Build(
                     "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_location_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_location_v6.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED 2026-09-09, REPLACED AGAIN 2026-09-23] Dimension-
                 // specific override for a single-"Users" request - RenderHtmlActivity's own doc
                 // comment explains the "{ReportType}:{DimensionName}" key-preference rule this
@@ -366,7 +366,7 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Users"] = Build(
                     "DimensionSelectionUserReportHtmlAgent", "Renders a freehand-composed Users insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_user_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_user_v5.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Same reasoning as the Users entry
                 // immediately above. The Concentration tab and closure-status strip the earlier
                 // Angular-mirroring version carried (both honest not-available blocks, no real
@@ -381,10 +381,10 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v6.md", freehandModel),
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_backlogaging_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_backlogaging_v5.md", freehandModel),
                 // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix (Act's own
                 // period-scoping change) - see that file's own header for what changed and why.
                 // [ADDED 2026-09-27] v3 - "i" / "How to read this chart" panel on every chart,
@@ -394,7 +394,7 @@ public static class PaidReportAgentsRegistration
                     "05_report_html_dimension_selection_act_v4.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v8.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v9.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
