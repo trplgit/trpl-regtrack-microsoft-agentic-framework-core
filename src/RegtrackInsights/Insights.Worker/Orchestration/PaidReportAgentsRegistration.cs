@@ -7,6 +7,7 @@ using Insights.Presentation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
 using OpenAI.Responses;
 
@@ -28,6 +29,15 @@ public static class PaidReportAgentsRegistration
 
     /// <summary>[ADDED 2026-09-28] The testers' reasoning-file explainer (user decision) - see its registration.</summary>
     internal const string ExplainerModel = "gpt-5.6-luna";
+
+    /// <summary>
+    /// [DIAG - temporary, ADDED 2026-09-29] One shared logger for every real LLM call this file
+    /// wires up - passed into MafAgentFactory so MeteredChatClient can log the call actually
+    /// starting and either returning or throwing. See MafAgentFactory.Create's own doc comment on
+    /// `logger` for why: real Compose calls hung with zero signal anywhere - no exception, no
+    /// timeout - for over an hour, and this is the fix for that blind spot.
+    /// </summary>
+    private static ILogger? LlmLogger(IServiceProvider sp) => sp.GetService<ILoggerFactory>()?.CreateLogger("Insights.Agents.Llm");
 
     public static IServiceCollection AddInsightsPaidReportAgents(this IServiceCollection services, IConfiguration configuration)
     {
@@ -172,7 +182,7 @@ public static class PaidReportAgentsRegistration
             IFreehandDimensionCompositionAgent Build(string dimension, string promptFile) =>
                 new MafFreehandDimensionCompositionAgent(MafAgentFactory.CreateJsonAgent(
                     freehandEndpoint, freehandModel, freehandApiKey, $"FreehandComposition{dimension}Agent", $"Decides structure/hero/emphasis for a freehand {dimension} insight from real tenant data.",
-                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate, freehandReasoningEffort));
+                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate, freehandReasoningEffort, LlmLogger(sp)));
 
             // [ADDED 2026-09-27] Every freehand dimension now loads its v3 prompt pair: richer interactive
             // charts, each with an "i" / "How to read this chart" panel. Previous versions stay on disk untouched.
@@ -219,18 +229,18 @@ public static class PaidReportAgentsRegistration
         // The summary is still checked in code before it is stored (TenantMemoryCompactor.IsValidSummary).
         services.AddSingleton<ITenantMemorySummarizer>(sp => new MafTenantMemorySummarizer(MafAgentFactory.CreateSimpleTextAgent(
             endpoint, SmallModel, apiKey, "TenantMemorySummarizer", "Summarises older tenant-memory entries without losing comparison facts.",
-            LoadPromptSync(sp, "09_tenant_memory_summarizer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "09_tenant_memory_summarizer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",
             // [CHANGED 2026-09-29] 03_narrative.md -> 03_narrative_v2.md (no ownership findings, RegTrack parity).
-            LoadPromptSync(sp, "03_narrative_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>()),
+            LoadPromptSync(sp, "03_narrative_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp)),
             sp.GetService<IReportEncryptor>(), sp.GetService<IReportDecryptor>(), memoryBlobConnectionString, memoryContainerName,
             sp.GetService<ITenantMemorySummarizer>()));
 
         services.AddSingleton<INarrativeReflectionAgent>(sp => new MafNarrativeReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
-            LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
         // [ADDED 2026-09-20] v2 of Narrate+Reflect for the 5 freehand dimensions, behind
         // InsightsReportOrchestrationInput.UseAnalystNarrative - see AnalyzeAndNarrateActivity's own
@@ -244,7 +254,7 @@ public static class PaidReportAgentsRegistration
         services.AddSingleton<IAnalystNarrativeAgent>(sp => new MafAnalystNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             freehandEndpoint, freehandModel, freehandApiKey, "AnalystNarrativeAgent", "Traces root cause from typed assertions and raw dimension rows.",
             // [CHANGED 2026-09-29] v3/ -> v4/ (no ownership findings, RegTrack parity) -> v5/ (Expired licences stated plainly, no "may no longer be valid", source system never named) -> v6/ (plain language for a compliance manager).
-            LoadPromptSync(sp, "v6/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
+            LoadPromptSync(sp, "v6/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort, LlmLogger(sp)),
             readOnlySqlConnectionString,
             // [WAS null, FIXED 2026-09-23] This was the real gap: the hook existed but nothing
             // durable ever recorded a call. Now every real fetch_scoped_sql_data/write_tenant_memory
@@ -263,7 +273,7 @@ public static class PaidReportAgentsRegistration
         // {has_visual_defect, issue}, same JSON-mode reasoning as every other structured agent.
         services.AddSingleton<IVisionQaAgent>(sp => new MafVisionQaAgent(MafAgentFactory.CreateJsonAgent(
             visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
-            LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
         // [ADDED 2026-09-26] Reasoning-trace explainer, same Llm:Maf endpoint/apikey as the other
         // non-freehand agents in this file.
@@ -280,7 +290,7 @@ public static class PaidReportAgentsRegistration
             endpoint, ExplainerModel, apiKey, "ReasoningExplainerAgent",
             "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
             LoadPromptSync(sp, "08_reasoning_explainer_v3.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
-            ResponseReasoningEffortLevel.Medium)));
+            ResponseReasoningEffortLevel.Medium, LlmLogger(sp))));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
@@ -320,7 +330,7 @@ public static class PaidReportAgentsRegistration
                 new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
                     modelOverride is null ? endpoint : freehandEndpoint, modelOverride ?? model, modelOverride is null ? apiKey : freehandApiKey, name, description,
                     LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate,
-                    modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort));
+                    modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort, LlmLogger(sp)));
 
             // [ADDED 2026-09-27] Every freehand render prompt is now v4 (v3 + section 10 "Atmosphere":
             // hero wash, one corner shape, tinted plot areas). Composition prompts stay v3.
