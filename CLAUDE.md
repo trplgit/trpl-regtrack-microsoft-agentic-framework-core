@@ -233,8 +233,13 @@ Violating any of these is a build-breaking error, not a style preference.
 - Write a detector whose Flagged predicate can match rows outside its Eligible population. `Flagged` and `Eligible` MUST come from the same set. sql/05 flagged `single_point_of_failure` with no `Instances > 0` guard, so all 78 zero-obligation branches flagged too - **120 flagged of 99 eligible, 121.2%**. Every zero-work row will look like a single point of failure, because it has no people on work it does not have. Check every detector: can the flag fire on a row the Eligible count excludes?
 - Leave a temp table unaliased when an inline subquery in the same statement reads it too. `SELECT ... (SELECT COUNT(*) FROM #rows ...) ... FROM #rows ORDER BY col` raises **"Ambiguous column name"** - and it fails at RUN TIME, after earlier result sets have already been emitted, so a caller reading only the first result set never sees it. Alias both.
 - Join `RecentComplianceTransactionView` directly - go through `tvfInsightsLatestStatus`. (See §5.)
-- Drop a past-due schedule because it has no transaction. **BA ruling: never-touched = overdue.**
-  `tvfInsightsOverdueSchedules` includes them with `NeverTouched = 1`.
+- Invent a metric definition. **[2026-09-29] RegTrack's own reports are the reference, not "BA rulings".**
+  The old "never-touched = overdue" and "17 overdue-eligible statuses" rules were never given by a BA.
+  Insights now follows RegTrack's Detailed Report (`Kendo_DetailedReport_Pagination`): overdue = latest
+  status **Open (1)** and due **before today**; a due date with no transaction is not overdue; an
+  obligation needs an **active performer** (`RoleID = 3`), a non-deleted act and a visible compliance;
+  only active due dates count. Changed objects + dictionary v2 + parity proof: `sql/v2/README.md`.
+  Before changing any definition, check what RegTrack's own report SP does.
 - Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
   over a subquery. Use a `LEFT JOIN` and test for `NULL`.
 - Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an
