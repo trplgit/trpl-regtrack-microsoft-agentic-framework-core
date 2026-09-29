@@ -87,9 +87,9 @@ public sealed class FreeDigestArtifactSampleTests(ITestOutputHelper output)
         var resolved = await sp.GetRequiredService<ResolveDigestRecipientsActivity>()
             .RunAsync(new ResolveDigestRecipientsInput(TenantId, asOf));
 
-        output.WriteLine($"Resolve: proceed={resolved.ShouldProceed}, groups={resolved.Groups.Count}, weekEnding={resolved.WeekEnding}");
+        output.WriteLine($"Resolve: proceed={resolved.ShouldProceed}, scopeGroups={resolved.Groups.Count}, withoutScope={resolved.RecipientsWithoutScope}, weekEnding={resolved.WeekEnding}");
         Assert.True(resolved.ShouldProceed, $"Gate refused: {resolved.Reason}");
-        Assert.True(resolved.Groups.Count > 0, "No scope groups resolved - nothing to sample.");
+        Assert.True(resolved.Groups.Count > 0, "No scope groups - nothing to sample.");
 
         var group = resolved.Groups[0];
         var composed = await sp.GetRequiredService<ComposeDigestActivity>()

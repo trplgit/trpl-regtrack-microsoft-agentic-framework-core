@@ -21,12 +21,15 @@ public sealed record ResolveDigestRecipientsInput(
 public sealed record DigestRecipientRef(long UserId, string Email, string? Name);
 
 /// <summary>
-/// Recipients who share an identical authorised scope, and therefore share one generated digest.
-/// <paramref name="RepresentativeUserId"/> is the user the aggregates are computed for - every
-/// member of the group would produce the same fifteen numbers.
+/// Recipients who share an identical (branch, category) scope, and therefore share one generated
+/// digest. <paramref name="RepresentativeUserId"/> is the user the procs read as; every member of
+/// the group would produce the same numbers.
 /// </summary>
-public sealed record DigestScopeGroup(string ScopeSignature, int RepresentativeUserId, IReadOnlyList<DigestRecipientRef> Recipients);
+public sealed record DigestScopeGroup(
+    string ScopeSignature, int RepresentativeUserId, IReadOnlyList<DigestRecipientRef> Recipients);
 
+/// <param name="Groups">Recipients grouped by the signature of their SQL scope pairs, in first-seen order.</param>
+/// <param name="RecipientsWithoutScope">Recipients dropped because they hold no EntitiesAssignment pair on this tenant.</param>
 public sealed record ResolveDigestRecipientsOutput(
     bool ShouldProceed,
     string Decision,
@@ -37,18 +40,21 @@ public sealed record ResolveDigestRecipientsOutput(
     int RecipientsWithoutScope);
 
 /// <summary>
-/// Node 1 of the free digest orchestration: gate the tenant, resolve its recipients, and group
-/// them by authorised scope.
+/// Node 1 of the free digest orchestration: gate the tenant, resolve its recipients, and group them
+/// by scope.
 ///
-/// Everything non-deterministic for the whole run happens HERE - the entitlement gate, the
-/// recipient query, the scope lookups, and the clock read that fixes the week-ending date. The
-/// orchestrator body downstream is pure control flow over what this returns, which is what makes
-/// replay safe (CLAUDE.md 6).
+/// Everything non-deterministic about WHO for the whole run happens HERE - the entitlement gate,
+/// the recipient query, the already-claimed filter, each recipient's scope pairs, and the clock
+/// read that fixes the week-ending date. Recipients are grouped by the signature of their SQL
+/// scope (EntitiesAssignment pairs), so the orchestrator composes once per distinct scope.
+///
+/// <para>[2026-09-29] The RegTrack show-entitlements API check added 2026-09-27 was removed on the
+/// product owner's instruction; a recipient's scope is again their plain SQL scope.</para>
 /// </summary>
 public sealed class ResolveDigestRecipientsActivity(
     IFreeDigestRepository repository,
     IInsightJsonRepository insightJsonRepository,
-    IScopeRepository scope,
+    IScopeRepository scopeRepository,
     FreeDigestMetrics metrics,
     ILogger<ResolveDigestRecipientsActivity> logger)
     : AsyncTaskActivity<ResolveDigestRecipientsInput, ResolveDigestRecipientsOutput>
@@ -127,53 +133,64 @@ public sealed class ResolveDigestRecipientsActivity(
                 tenant.TenantName, weekEnding, [], 0);
         }
 
-        var groups = new Dictionary<string, (int RepresentativeUserId, List<DigestRecipientRef> Members)>(StringComparer.Ordinal);
+        var (groups, withoutScope) = await GroupByScopeAsync(
+            scopeRepository, input.TenantId, recipients.Select(r => new DigestRecipientRef(r.UserId, r.Email, r.Name)));
+
+        for (var i = 0; i < withoutScope; i++)
+            metrics.RecordSkipped(FreeDigestSkipReason.NoScope);
+
+        logger.LogInformation(
+            "ResolveDigestRecipientsActivity: tenant {TenantId} - {GroupCount} scope group(s), {WithoutScope} recipient(s) without scope, for week ending {WeekEnding}.",
+            input.TenantId, groups.Count, withoutScope, weekEnding);
+
+        return new ResolveDigestRecipientsOutput(
+            true, gate.Decision.ToString(), gate.Reason, tenant.TenantName, weekEnding, groups, withoutScope);
+    }
+
+    /// <summary>
+    /// Groups recipients by the signature of their SQL scope pairs (<see cref="ScopeSignature"/>),
+    /// in first-seen order; the first member of each group is its representative. A recipient with
+    /// no pair is counted, never grouped - an empty scope is DENY, never "unrestricted"
+    /// (<see cref="IScopeRepository.GetScopePairsAsync"/>).
+    ///
+    /// <para>Shared with the Monday re-resolve (<see cref="ResolveDigestDispatchActivity"/>) and the
+    /// preview workers, so every caller groups exactly as the Sunday run does.</para>
+    /// </summary>
+    public static async Task<(IReadOnlyList<DigestScopeGroup> Groups, int WithoutScope)> GroupByScopeAsync(
+        IScopeRepository scopeRepository, int tenantId, IEnumerable<DigestRecipientRef> recipients,
+        CancellationToken cancellationToken = default)
+    {
+        var members = new Dictionary<string, List<DigestRecipientRef>>(StringComparer.Ordinal);
+        var order = new List<string>();
         var withoutScope = 0;
 
         foreach (var recipient in recipients)
         {
-            /*  [FAIL CLOSED] A recipient with no authorised pairs would otherwise receive a
-                perfectly well-formed email full of zeros - sql/06 returns nothing for an empty
-                scope rather than throwing, and an all-zero digest looks fine. Dropped here, and
-                counted so the run reports it.                                                   */
-            var scopedUserId = checked((int)recipient.UserId);
-            var pairs = await scope.GetScopePairsAsync(scopedUserId, input.TenantId);
+            var pairs = await scopeRepository.GetScopePairsAsync(checked((int)recipient.UserId), tenantId, cancellationToken);
             var signature = ScopeSignature.For(pairs);
-
             if (signature.Length == 0)
             {
                 withoutScope++;
-                metrics.RecordSkipped(FreeDigestSkipReason.NoScope);
                 continue;
             }
 
-            if (!groups.TryGetValue(signature, out var group))
+            if (!members.TryGetValue(signature, out var list))
             {
-                group = (scopedUserId, []);
-                groups[signature] = group;
+                list = [];
+                members[signature] = list;
+                order.Add(signature);
             }
 
-            group.Members.Add(new DigestRecipientRef(recipient.UserId, recipient.Email, recipient.Name));
+            list.Add(recipient);
         }
 
-        var result = groups
-            .Select(kv => new DigestScopeGroup(kv.Key, kv.Value.RepresentativeUserId, kv.Value.Members))
+        var groups = order
+            .Select(signature => new DigestScopeGroup(signature, checked((int)members[signature][0].UserId), members[signature]))
             .ToList();
 
-        /*  Scope resolution is the one place that determines LLM call COUNT (one per distinct
-            signature, never per recipient - see ComposeDigestActivity's own doc comment on why).
-            Logged here, not computed after the fact from HTTP traffic, because this is the only
-            place that actually knows the recipient-to-group shape - by the time ComposeDigestActivity
-            runs, all it has is one representative user id, with no visibility into how many real
-            people share that signature or how skewed the distribution is.                        */
-        var groupSizes = string.Join(", ", result.Select(g => g.Recipients.Count).OrderDescending());
-        logger.LogInformation(
-            "ResolveDigestRecipientsActivity: tenant {TenantId} - {RecipientCount} recipients resolved into {GroupCount} distinct scope group(s) (sizes: {GroupSizes}), {WithoutScope} recipient(s) dropped with no scope. {GroupCount} scope group(s) means at most {GroupCount} LLM call(s) this run, not {RecipientCount}.",
-            input.TenantId, recipients.Count, result.Count, groupSizes, withoutScope, result.Count, result.Count, recipients.Count);
-
-        return new ResolveDigestRecipientsOutput(
-            true, gate.Decision.ToString(), gate.Reason, tenant.TenantName, weekEnding, result, withoutScope);
+        return (groups, withoutScope);
     }
+
     /// <summary>Maps the gate's verdict onto the closed set of skip reasons the metric carries.</summary>
     private static FreeDigestSkipReason SkipReasonFor(EntitlementDecision decision) => decision switch
     {

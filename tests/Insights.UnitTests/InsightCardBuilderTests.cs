@@ -249,6 +249,34 @@ public sealed class InsightCardBuilderTests
         Assert.Equal("diagnostic", InsightCardRules.TypeForFact("stock", "overdue_now", "od_total"));
     }
 
+    /// <summary>[OWNER, 2026-09-27] A live Act card said "personal criminal liability" three times. Banned from every card field.</summary>
+    [Fact]
+    public void Card_NeverSaysCriminalLiability_WhateverWroteTheText()
+    {
+        static IEnumerable<string> Texts(InsightCard card) =>
+            new[] { card.Title, card.Headline, card.Narrative, card.PrimaryMetric.Label }
+                .Concat(card.SupportingMetrics.Select(m => m.Label));
+
+        // The model's own lines, as they shipped this week.
+        var data = MonthlyExamples.Act();
+        var card = InsightCardBuilder.Build(InsightCardInput.Build(data), 1403, 88214, data.Edition.Sunday,
+            new InsightCardText(
+                "47 laws have overdue obligations that carry personal criminal liability.",
+                "31 laws have an unusually high share of overdue work carrying personal Criminal Liability. 97 laws have obligations overdue for more than 90 days.",
+                "llm", null, true, 10, 20, string.Empty));
+
+        Assert.All(Texts(card), t => Assert.DoesNotContain("criminal", t, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("47 laws have overdue obligations that carry personal liability.", card.Headline);
+        Assert.StartsWith("31 laws have an unusually high share of overdue work carrying personal liability.", card.Narrative, StringComparison.Ordinal);
+
+        // The fallback and the metric labels are built from the proc labels, which still say it.
+        foreach (var name in new[] { "overview", "users", "location", "act", "licence" })
+            Assert.All(Texts(Build(MonthlyExamples.ByName(name))), t => Assert.DoesNotContain("criminal", t, StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal("Personal liability applies.", InsightCardBuilder.WithoutBannedPhrases("Personal criminal liability applies."));
+        Assert.Equal("carry personal liability", InsightCardBuilder.WithoutBannedPhrases("carry criminal liability"));
+    }
+
     [Fact]
     public void Vocabulary_NeverSaysTasksStoresOrAccounts()
     {

@@ -29,15 +29,24 @@ public sealed record InsightCardResult(
 /// <para>A SQL refusal (<see cref="FreeMonthlyDigestRefusedException"/>) is not caught: when the
 /// data layer refuses, nothing is posted (CLAUDE.md non-negotiable 2). An LLM-side failure falls
 /// back to deterministic text built from the same procedure values, and the card still ships.</para>
+///
+/// <para>One writer call: a draft that passes the card checks ships (<see cref="InsightCardWriter.Finish"/>),
+/// anything else ships the deterministic card (<see cref="InsightCardWriter.Fallback"/>). [2026-09-29]
+/// The reflection critic/rewrite pass (2026-09-27) was removed on the product owner's instruction.</para>
 /// </summary>
 public sealed class InsightCardComposer(
     IFreeMonthlyDigestRepository repository,
     InsightCardWriter writer,
     FreeMonthlySettings monthlySettings,
     FreeDigestSettings digestSettings,
-    ILogger<InsightCardComposer> logger)
+    ILogger<InsightCardComposer> logger,
+    FreeDigestMetrics? metrics = null)
 {
-    public async Task<InsightCardResult> ComposeAsync(int tenantId, int representativeUserId, DateOnly weekEnding, string? asOfOverride, CancellationToken cancellationToken = default)
+    private const string Lane = "card";
+
+    public async Task<InsightCardResult> ComposeAsync(
+        int tenantId, int representativeUserId, DateOnly weekEnding, string? asOfOverride,
+        CancellationToken cancellationToken = default)
     {
         /*  Refuse here rather than letting MonthlyDigestCalendar.For throw an ArgumentException
             inside an activity retry loop, where it would be retried three times and logged as an
@@ -63,18 +72,35 @@ public sealed class InsightCardComposer(
         MonthlyDigestData data, int tenantId, long userId, DateOnly weekEnding, CancellationToken cancellationToken = default)
     {
         var input = InsightCardInput.Build(data);
-        var text = await writer.WriteAsync(input, digestSettings.InsightJsonTokenCap, cancellationToken);
+        var cap = digestSettings.InsightJsonTokenCap;
+
+        // One writer call. A draft that passed every card check ships; anything else is the deterministic card.
+        var draft = await writer.DraftAsync(input, input.UserMessage, cap, cancellationToken);
+
+        var text = draft.IsValid
+            ? InsightCardWriter.Finish(input, draft.Headline!, draft.Narrative!, draft.InputTokens, draft.OutputTokens, draft.RawText)
+            : InsightCardWriter.Fallback(input, draft.FailureReason!, draft.InputTokens, draft.OutputTokens, draft.RawText);
 
         if (text.Source != "llm")
+        {
+            if (!text.NumbersVerified)
+            {
+                metrics?.RecordFallbackFloor(Lane);
+                logger.LogError(
+                    "InsightCardComposer: tenant {TenantId} user {UserId} {Subject} - the send-quality card fallback FAILED its own checks, legacy floor shipped. {Reason}",
+                    tenantId, userId, input.Subject, text.Reason);
+            }
+
             logger.LogWarning(
                 "InsightCardComposer: tenant {TenantId} user {UserId} {Subject} - card text fell back to the deterministic build. Tokens spent anyway: {In} in / {Out} out. {Reason}",
                 tenantId, userId, input.Subject, text.InputTokens, text.OutputTokens, text.Reason);
+        }
         else
             logger.LogInformation(
                 "InsightCardComposer: tenant {TenantId} user {UserId} {Subject} - card text accepted. Tokens: {In} in / {Out} out.",
                 tenantId, userId, input.Subject, text.InputTokens, text.OutputTokens);
 
         var card = InsightCardBuilder.Build(input, tenantId, userId, weekEnding, text);
-        return new InsightCardResult(card, input.Subject, text.InputTokens, text.OutputTokens, text.Source, text.Reason, input.UserMessage, text.RawDraft);
+        return new InsightCardResult(card, input.Subject, text.InputTokens, text.OutputTokens, text.Source, text.Reason, input.UserMessage, draft.RawText);
     }
 }

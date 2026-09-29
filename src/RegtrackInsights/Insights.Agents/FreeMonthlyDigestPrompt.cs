@@ -54,8 +54,12 @@ public sealed record MonthlyBoundExample(int Number, MonthlyExample Example)
 /// <para>The fix is not to map one word onto the other: that would make the two units MORE alike,
 /// which is the false-equivalence CLAUDE.md Sec.4a exists to prevent. Each label is instead made to
 /// name its own unit. Overridden here rather than in SQL because the procs are deployed.</para>
+///
+/// <para>Internal, not file-scoped: <see cref="FreeMonthlyFallbackBody"/> states facts in the same
+/// reader wording the model is given, so a fallback email and a written one describe a figure
+/// the same way.</para>
 /// </summary>
-file static partial class FactLabels
+internal static partial class FactLabels
 {
     /*  Schedule-level counts: one obligation can appear many times. "Item" is replaced because it
         names nothing a reader recognises - the user's own complaint was "if it says 13 items, tell
@@ -567,6 +571,9 @@ public sealed partial class FreeMonthlyDigestPrompt
     {
         "licences_without_end_date",   // cannot be assessed for lapse, so excluded from every licence fact
     };
+
+    /// <summary>Whether a data-quality code limits a figure the reader sees - the fallback states exactly these.</summary>
+    internal static bool BoundsAFigureCode(string code) => BoundsAFigure.Contains(code);
 
     /// <summary>
     /// The consequence sentences this email's own input supports - nothing else may be written.

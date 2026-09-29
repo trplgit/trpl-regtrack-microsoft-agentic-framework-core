@@ -2037,11 +2037,11 @@ public sealed class FreeMonthlyFallbackBodyTests
     [InlineData("location")]
     [InlineData("act")]
     [InlineData("licence")]
-    public void Fallback_UsesOnlyFactNumbers_AndNamesNothing(string example)
+    public void LegacyFloor_UsesOnlyFactNumbers_AndNamesNothing(string example)
     {
         var data = MonthlyExamples.ByName(example);
 
-        var body = FreeMonthlyFallbackBody.Build(data);
+        var body = FreeMonthlyFallbackBody.BuildLegacy(data);
 
         Assert.StartsWith("Good morning,", body);
         Assert.DoesNotContain("{{", body);
@@ -2051,11 +2051,86 @@ public sealed class FreeMonthlyFallbackBodyTests
     }
 
     [Fact]
-    public void Fallback_BoldsTheHeadlineFact()
+    public void LegacyFloor_BoldsTheHeadlineFact()
     {
-        var body = FreeMonthlyFallbackBody.Build(MonthlyExamples.Overview());
+        var body = FreeMonthlyFallbackBody.BuildLegacy(MonthlyExamples.Overview());
 
         Assert.Contains("**5** still-open items from last month", body);
+    }
+
+    /// <summary>
+    /// ADR 2026-09-27 Sec.4.13 item 6: the send-quality fallback passes the SAME validator a model
+    /// draft does, on every slot - never the legacy floor.
+    /// </summary>
+    [Theory]
+    [InlineData("overview")]
+    [InlineData("users")]
+    [InlineData("location")]
+    [InlineData("act")]
+    [InlineData("licence")]
+    public void SendQualityFallback_PassesTheValidator_OnEverySlot(string example)
+    {
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName(example));
+
+        var draft = FreeMonthlyFallbackBody.Draft(prompt);
+        var review = FreeMonthlyDigestValidator.Validate(draft, prompt);
+        var fallback = FreeMonthlyFallbackBody.Build(prompt);
+
+        Assert.True(review.IsValid, string.Join("; ", review.FailedChecks) + "\n" + draft);
+        Assert.False(fallback.UsedFloor, string.Join("; ", fallback.FloorReasons));
+        Assert.StartsWith("Good morning,", fallback.Body);
+        Assert.DoesNotContain("{{", fallback.Body);
+        Assert.Contains("Next Monday", fallback.Body);
+    }
+
+    /// <summary>It reads like the email: it names the findings the email would name, bound from the data.</summary>
+    [Theory]
+    [InlineData("overview")]
+    [InlineData("users")]
+    [InlineData("location")]
+    [InlineData("act")]
+    [InlineData("licence")]
+    public void SendQualityFallback_NamesAFinding_WheneverOneIsNameable(string example)
+    {
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName(example));
+        var nameable = prompt.NamedFindings.Where(n => n.NamePlaceholder is not null && DetectorSentences.For(n, prompt) is not null).ToList();
+
+        var body = FreeMonthlyFallbackBody.Build(prompt).Body;
+
+        if (nameable.Count > 0)
+            Assert.Contains(nameable, n => body.Contains(prompt.Bindings[n.NamePlaceholder!], StringComparison.Ordinal));
+    }
+
+    /// <summary>The body is built in period order already - arranging it again changes nothing.</summary>
+    [Theory]
+    [InlineData("overview")]
+    [InlineData("location")]
+    [InlineData("licence")]
+    public void SendQualityFallback_IsAlreadyInPeriodOrder(string example)
+    {
+        var draft = FreeMonthlyFallbackBody.Draft(FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName(example)));
+
+        Assert.Equal(draft, FreeMonthlyParagraphOrder.Arrange(draft));
+    }
+
+    /// <summary>Every detector the slot procs emit has a sentence, keyed on its real metric; anything else names nothing.</summary>
+    [Fact]
+    public void DetectorSentences_CoverEveryDetector_AndRefuseAnUnexpectedMetric()
+    {
+        string[] detectors =
+        [
+            "last_month_slippage", "liability_share", "chronic_backlog", "overdue_concentration", "liability_overdue_location",
+            "category_overdue_skew", "deactivated_owner", "self_review", "single_point_of_failure", "ghost_location",
+            "multi_location_pattern", "licence_expiring_unrenewed", "licence_lapsed_recent_unrenewed",
+            "expired_unrenewed_location", "licence_type_lapse_rate",
+        ];
+        Assert.Equal(detectors.OrderBy(d => d), DetectorSentences.KnownMetrics.Keys.OrderBy(d => d));
+
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.Users());
+        var finding = prompt.NamedFindings.First(n => n.NamePlaceholder is not null);
+        var wrongMetric = finding with { Candidate = finding.Candidate with { Metric = "something_else" } };
+
+        Assert.Null(DetectorSentences.For(wrongMetric, prompt));
     }
 }
 
@@ -2341,6 +2416,7 @@ public sealed class MonthlyDigestSubjectTests
 internal static class MonthlyExamples
 {
     private static readonly DateTime AsOf = new(2026, 10, 4, 6, 0, 0);
+
     /// <summary>Settings as appsettings.json ships them - there are no defaults in code to fall back on.</summary>
     public static readonly FreeMonthlySettings Settings = new()
     {
@@ -2363,19 +2439,23 @@ internal static class MonthlyExamples
     public static MonthlyFact Fact(string key, int value, bool asAt = false, bool headline = false, string label = "items", string window = "stock") =>
         new(key, value, label, "section", 100, window, "volume", 3, asAt, headline);
 
+    /// <summary>The Metric the slot procs actually emit for this detector (sql/36-41) - fixtures carry the real one, as production does.</summary>
+    private static string RealMetric(string detector) =>
+        DetectorSentences.KnownMetrics.TryGetValue(detector, out var metric) ? metric : "metric";
+
     private static MonthlyCandidate Candidate(
         int slot, string detector, string kind, string label, int problem, int population,
         int? item = null, int? baseCount = null, int? metricPct = null, int? tenantPct = null,
         string? context = null, DateTime? eventDate = null, bool asAt = false) =>
         new(slot, detector, slot, 1, 1, kind, 1000 + slot, label, context is null ? null : "location", context,
-            "metric", metricPct, tenantPct, item, baseCount, eventDate, asAt, problem, population, problem - 1);
+            RealMetric(detector), metricPct, tenantPct, item, baseCount, eventDate, asAt, problem, population, problem - 1);
 
     /// <summary>A candidate the proc returned WITHOUT a DefaultSlot - ranked, but not one of its two defaults.</summary>
     public static MonthlyCandidate Unslotted(
         string detector, string kind, long entityId, string? label, int rank, int priority,
         int? item = null, int? baseCount = null, int problem = 3, int population = 20) =>
         new(null, detector, priority, 2, rank, kind, entityId, label, null, null,
-            "metric", null, null, item, baseCount, null, false, problem, population, problem - 1);
+            RealMetric(detector), null, null, item, baseCount, null, false, problem, population, problem - 1);
 
     /// <summary>The Location slot with one aggregate-mode pattern and three examples attached to it.</summary>
     public static MonthlyDigestData LocationWithAggregateExamples()

@@ -16,6 +16,14 @@ namespace Insights.Agents;
 /// </summary>
 public static class FreeMonthlyRedraft
 {
+    /// <summary>The closing instruction of every rewrite request: fix what was named, keep everything else.</summary>
+    public const string ChangeNothingElse =
+        """
+        Change nothing else that was working: keep the same structure and the same findings, and do not replace
+        a rejected sentence with a vaguer one - if a figure or a phrase is not allowed, say the
+        thing that IS supported by the input, or leave that sentence out entirely.
+        """;
+
     public static string Message(string originalUserMessage, string rejectedDraft, IReadOnlyList<string> failedChecks) =>
         $"""
          {originalUserMessage}
@@ -30,9 +38,7 @@ public static class FreeMonthlyRedraft
 
          {string.Join("\n", failedChecks.Select(f => "- " + f))}
 
-         Write the email again from the same input above. Fix every point listed. Change nothing
-         else that was working: keep the same structure and the same findings, and do not replace
-         a rejected sentence with a vaguer one - if a figure or a phrase is not allowed, say the
-         thing that IS supported by the input, or leave that sentence out entirely.
+         Write the email again from the same input above. Fix every point listed.
+         {ChangeNothingElse}
          """;
 }

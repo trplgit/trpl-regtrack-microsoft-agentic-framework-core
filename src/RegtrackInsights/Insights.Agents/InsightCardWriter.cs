@@ -9,21 +9,35 @@ namespace Insights.Agents;
 /// The two lines of text on an insight card, after validation and placeholder binding.
 /// <see cref="Source"/> is <c>llm</c> or <c>fallback</c>; <see cref="Reason"/> says why a draft
 /// was not used. <see cref="NumbersVerified"/> is true only when the text that ships passed the
-/// closed-set check - a fallback is built from proc values and passes by construction.
+/// closed-set check - since 2026-09-27 the fallback is checked too, rather than asserted.
 /// </summary>
 public sealed record InsightCardText(
     string Headline, string Narrative, string Source, string? Reason, bool NumbersVerified,
     int InputTokens, int OutputTokens, string RawDraft);
 
 /// <summary>
+/// One card draft from one model call, validated, still in PLACEHOLDER form.
+/// <see cref="FailureReason"/> is null when the draft passed every card check.
+/// </summary>
+public sealed record InsightCardDraft(
+    string? Headline, string? Narrative, string? FailureReason, int InputTokens, int OutputTokens, string RawText)
+{
+    public bool IsValid => FailureReason is null;
+}
+
+/// <summary>
 /// Writes the insight card's headline and narrative (ADR-0004) from the JSON lane's own closed
 /// input - <see cref="InsightCardInput.UserMessage"/> - with its own short prompt
-/// (07b_insight_card.md). One capped, non-reflective call; a rejected or skipped draft falls back
-/// to a deterministic build from the headline fact, never throws.
+/// (07b_insight_card.md). A rejected or skipped draft falls back to a deterministic build from the
+/// headline fact, never throws.
 ///
 /// <para>Validated with <see cref="FreeMonthlyDigestValidator.ProseProblems"/> against the data
 /// layer's closed sets (<see cref="InsightCardInput.Guardrails"/>), NOT <see cref="FreeDigestValidator"/>:
 /// the old weekly validator bans the words this lane must use (spec 8.1).</para>
+///
+/// <para>Split into <see cref="DraftAsync"/> (one call, validated, placeholder form),
+/// <see cref="Finish"/> (bind) and <see cref="Fallback"/>; <see cref="WriteAsync"/> is those three
+/// in sequence.</para>
 /// </summary>
 public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoader promptLoader)
 {
@@ -44,27 +58,70 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
 
     public async Task<InsightCardText> WriteAsync(InsightCardInput input, int tokenCap, CancellationToken cancellationToken = default)
     {
+        var draft = await DraftAsync(input, input.UserMessage, tokenCap, cancellationToken);
+        return draft.IsValid
+            ? Finish(input, draft.Headline!, draft.Narrative!, draft.InputTokens, draft.OutputTokens, draft.RawText)
+            : Fallback(input, draft.FailureReason!, draft.InputTokens, draft.OutputTokens, draft.RawText);
+    }
+
+    /// <summary>
+    /// One capped model call and the card checks. <paramref name="userMessage"/> is the card input.
+    /// </summary>
+    public async Task<InsightCardDraft> DraftAsync(InsightCardInput input, string userMessage, int tokenCap, CancellationToken cancellationToken = default)
+    {
         var prompt = input.Guardrails;
         var systemPrompt = await promptLoader.LoadAsync(PromptFileName, cancellationToken);
         var completionBudget = Math.Clamp(
-            tokenCap - (int)Math.Ceiling((systemPrompt.Length + input.UserMessage.Length) / CharsPerToken),
+            tokenCap - (int)Math.Ceiling((systemPrompt.Length + userMessage.Length) / CharsPerToken),
             MinCompletionTokens, MaxCompletionTokens);
 
-        var result = await client.CompleteAsync(systemPrompt, input.UserMessage, completionBudget, cancellationToken);
+        var result = await client.CompleteAsync(systemPrompt, userMessage, completionBudget, cancellationToken);
         var total = result.InputTokens + result.OutputTokens;
 
+        InsightCardDraft Fail(string reason) => new(null, null, reason, result.InputTokens, result.OutputTokens, result.Text);
+
         if (result.WasTruncated)
-            return Fallback(prompt, "response truncated at the token cap", result);
+            return Fail("response truncated at the token cap");
         if (total > tokenCap)
-            return Fallback(prompt, $"token usage {total} exceeded cap {tokenCap}", result);
+            return Fail($"token usage {total} exceeded cap {tokenCap}");
 
         var parsed = Parse(result.Text);
         if (parsed is null)
-            return Fallback(prompt, "response was not a JSON object with headline and narrative", result);
+            return Fail("response was not a JSON object with headline and narrative");
 
         // Plain text only: the hub renders these as-is, so the model's own emphasis markers are removed, never rejected.
-        var headline = parsed.Value.Headline.Replace("**", string.Empty).Replace("per cent", "%", StringComparison.OrdinalIgnoreCase).Trim();
-        var narrative = parsed.Value.Narrative.Replace("**", string.Empty).Replace("per cent", "%", StringComparison.OrdinalIgnoreCase).Trim();
+        var headline = Clean(parsed.Value.Headline);
+        var narrative = Clean(parsed.Value.Narrative);
+
+        var problems = CardProblems(headline, narrative, prompt);
+        if (problems.Count > 0)
+            return Fail("validator rejected the draft: " + string.Join("; ", problems));
+
+        return new InsightCardDraft(headline, narrative, null, result.InputTokens, result.OutputTokens, result.Text);
+    }
+
+    /// <summary>A validated placeholder-form card, bound and made plain for the hub.</summary>
+    public static InsightCardText Finish(InsightCardInput input, string headline, string narrative, int inputTokens, int outputTokens, string rawDraft) =>
+        // The binder emphasises names for the email ("**A**"); the hub renders plain text.
+        new(PlainText(FreeMonthlyPlaceholderBinder.Bind(headline.Trim(), input.Guardrails.Bindings)),
+            PlainText(FreeMonthlyPlaceholderBinder.Bind(narrative.Trim(), input.Guardrails.Bindings)),
+            "llm", null, NumbersVerified: true, inputTokens, outputTokens, rawDraft);
+
+    /// <summary>The deterministic card text, with the given reason. Never throws.</summary>
+    public static InsightCardText Fallback(InsightCardInput input, string reason, int inputTokens, int outputTokens, string rawDraft)
+    {
+        var fallback = InsightCardFallback.BuildChecked(input.Guardrails, input.NamedFindings);
+        var why = fallback.UsedFloor ? $"{reason}; send-quality fallback refused ({string.Join("; ", fallback.FloorReasons)}), legacy floor used" : reason;
+        return new InsightCardText(fallback.Headline, fallback.Narrative, "fallback", why, NumbersVerified: !fallback.UsedFloor, inputTokens, outputTokens, rawDraft);
+    }
+
+    /// <summary>
+    /// Every card rule: the closed-set prose checks on both fields, the headline figure or name in
+    /// the headline, nothing empty, and a 2-3 sentence narrative. Shared by the model's drafts and
+    /// the deterministic fallback, so both meet the same bar.
+    /// </summary>
+    internal static List<string> CardProblems(string headline, string narrative, FreeMonthlyDigestPrompt prompt)
+    {
         var problems = new List<string>();
         problems.AddRange(FreeMonthlyDigestValidator.ProseProblems(headline, prompt).Select(p => "headline " + p));
         problems.AddRange(FreeMonthlyDigestValidator.ProseProblems(narrative, prompt).Select(p => "narrative " + p));
@@ -79,21 +136,11 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
         if (sentences is < MinNarrativeSentences or > MaxNarrativeSentences)
             problems.Add($"narrative has {sentences} sentences, not {MinNarrativeSentences} to {MaxNarrativeSentences}");
 
-        if (problems.Count > 0)
-            return Fallback(prompt, "validator rejected the draft: " + string.Join("; ", problems), result);
-
-        // The binder emphasises names for the email ("**A**"); the hub renders plain text.
-        return new InsightCardText(
-            PlainText(FreeMonthlyPlaceholderBinder.Bind(headline.Trim(), prompt.Bindings)),
-            PlainText(FreeMonthlyPlaceholderBinder.Bind(narrative.Trim(), prompt.Bindings)),
-            "llm", null, NumbersVerified: true, result.InputTokens, result.OutputTokens, result.Text);
+        return problems;
     }
 
-    private static InsightCardText Fallback(FreeMonthlyDigestPrompt prompt, string reason, ClaudeCompletionResult result)
-    {
-        var (headline, narrative) = InsightCardFallback.Build(prompt);
-        return new InsightCardText(PlainText(headline), PlainText(narrative), "fallback", reason, NumbersVerified: true, result.InputTokens, result.OutputTokens, result.Text);
-    }
+    private static string Clean(string text) =>
+        text.Replace("**", string.Empty).Replace("per cent", "%", StringComparison.OrdinalIgnoreCase).Trim();
 
     internal static string PlainText(string text) => text.Replace("**", string.Empty).Trim();
 
@@ -140,8 +187,11 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
     }
 
     /// <summary>Sentences end at . ! or ? followed by whitespace and a capital or placeholder - "1,234." mid-number never splits.</summary>
-    internal static int SentenceCount(string text) =>
-        SentenceBreak().Split(text.Trim()).Count(s => s.Trim().Length > 0);
+    internal static int SentenceCount(string text) => SplitSentences(text).Count;
+
+    /// <summary>The narrative's sentences, by the same rule <see cref="SentenceCount"/> counts with.</summary>
+    internal static IReadOnlyList<string> SplitSentences(string text) =>
+        SentenceBreak().Split(text.Trim()).Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
 
     [GeneratedRegex(@"\d{1,3}(?:,\d{3})+|\d+")]
     private static partial Regex NumberToken();
@@ -150,40 +200,131 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
     private static partial Regex SentenceBreak();
 }
 
+/// <summary>The card's deterministic text, and whether the send-quality build gave way to the legacy floor.</summary>
+public sealed record InsightCardFallbackText(string Headline, string Narrative, bool UsedFloor, IReadOnlyList<string> FloorReasons);
+
 /// <summary>
-/// The deterministic card text: the headline fact or finding stated from its own label, and a
-/// narrative from the next most material fact. Every number is a proc value, every name is bound
-/// from the same bindings the model would have used, so it passes the same checks by construction.
+/// The deterministic card text.
+///
+/// <para><b>[REBUILT 2026-09-27, ADR 2026-09-27-free-digest-reflection-design Sec.4.13]</b> The old
+/// build broke the card's own rules (ADR C12): it repeated the headline as the narrative when no
+/// support fact existed, wrote a one-sentence narrative when one did, printed a raw detector name,
+/// and asserted <c>NumbersVerified</c> without checking. Now:</para>
+/// <list type="bullet">
+/// <item>the headline is the lead finding's <see cref="DetectorSentences"/> sentence, or the headline
+/// fact from its own label;</item>
+/// <item>the narrative is always 2-3 sentences - other named findings, then the most material
+/// facts, each opening with a capital so the card's sentence rule counts it - and never the headline
+/// again;</item>
+/// <item>the result is checked with <see cref="InsightCardWriter.CardProblems"/>, the model's own bar,
+/// before it is bound; if it fails, <see cref="BuildLegacy"/> ships as the floor and the caller is
+/// told.</item>
+/// </list>
 /// </summary>
 public static class InsightCardFallback
 {
+    /// <summary>Bound text only - for callers that need a well-formed card and nothing else.</summary>
     public static (string Headline, string Narrative) Build(FreeMonthlyDigestPrompt prompt)
+    {
+        var text = BuildChecked(prompt);
+        return (text.Headline, text.Narrative);
+    }
+
+    /// <param name="named">The card's own named findings (InsightCardInput.NamedFindings drops those that read the same on a card); the guardrails' list when null.</param>
+    public static InsightCardFallbackText BuildChecked(FreeMonthlyDigestPrompt prompt, IReadOnlyList<MonthlyNamedFinding>? named = null)
+    {
+        named ??= prompt.NamedFindings;
+        List<string> problems;
+        try
+        {
+            var (headline, narrative) = Draft(prompt, named);
+
+            problems = headline is null || narrative is null
+                ? new List<string> { "no headline sentence could be stated" }
+                : InsightCardWriter.CardProblems(headline, narrative, prompt);
+
+            if (problems.Count == 0)
+                return new InsightCardFallbackText(
+                    InsightCardWriter.PlainText(FreeMonthlyPlaceholderBinder.Bind(headline!, prompt.Bindings)),
+                    InsightCardWriter.PlainText(FreeMonthlyPlaceholderBinder.Bind(narrative!, prompt.Bindings)),
+                    false, []);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Runs after billed calls; an escaping exception would re-bill them on the activity retry.
+            problems = [$"{ex.GetType().Name}: {ex.Message}"];
+        }
+
+        var (legacyHeadline, legacyNarrative) = BuildLegacy(prompt);
+        return new InsightCardFallbackText(InsightCardWriter.PlainText(legacyHeadline), InsightCardWriter.PlainText(legacyNarrative), true, problems);
+    }
+
+    /// <summary>Placeholder form, before validation and binding.</summary>
+    internal static (string? Headline, string? Narrative) Draft(FreeMonthlyDigestPrompt prompt, IReadOnlyList<MonthlyNamedFinding> named)
     {
         var data = prompt.Data;
         var facts = data.Facts.OrderBy(f => f.DisplayOrder).ToList();
         var headlineFact = facts.FirstOrDefault(f => f.IsHeadline);
-        var headlineFinding = prompt.NamedFindings.FirstOrDefault(n => n.Slot == 1);
+        var candidateLeads = string.Equals(data.HeadlineSource, "candidate", StringComparison.Ordinal);
+        var leadFinding = candidateLeads ? named.FirstOrDefault(n => n.Slot == 1) : null;
 
-        string headline;
-        if (string.Equals(data.HeadlineSource, "candidate", StringComparison.Ordinal) && headlineFinding is not null)
-            headline = FindingSentence(headlineFinding, prompt);
-        else if (headlineFact is not null)
-            headline = FactSentence(headlineFact, facts, data.Edition.Slot);
-        else
-            headline = "No material change to report this week.";
+        bool Fits(string sentence) => FreeMonthlyDigestValidator.ProseProblems(sentence, prompt).Count == 0;
 
-        var support = facts
-            .Where(f => !f.IsHeadline && f.FactValue > 0 && f.SeverityTier <= 3 && f.ImpactClass != "volume")
-            .OrderBy(f => f.SeverityTier).ThenBy(f => f.DisplayOrder)
-            .Take(2)
-            .Select(f => FactSentence(f, facts, data.Edition.Slot))
-            .ToList();
+        string? headline = null;
+        if (leadFinding is not null && DetectorSentences.For(leadFinding, prompt) is { } findingHeadline && Fits(findingHeadline))
+            headline = findingHeadline;
+        else if (headlineFact is not null && FactSentence(headlineFact, facts, data.Edition.Slot) is var factHeadline && Fits(factHeadline))
+            headline = factHeadline;
 
-        var narrative = support.Count > 0
-            ? string.Join(" ", support)
-            : headline;
+        if (headline is null)
+            return (null, null);
 
-        return (headline, narrative);
+        var narrative = new List<string>();
+        void Add(string? sentence)
+        {
+            if (sentence is null || narrative.Count >= InsightCardWriter.MaxNarrativeSentences || !Fits(sentence)
+                || string.Equals(sentence, headline, StringComparison.Ordinal) || narrative.Contains(sentence, StringComparer.Ordinal)
+                || InsightCardWriter.SentenceCount(sentence) != 1)
+                return;
+            narrative.Add(sentence);
+        }
+
+        foreach (var finding in named.Where(n => !ReferenceEquals(n, leadFinding)))
+            Add(DetectorSentences.For(finding, prompt));
+
+        foreach (var f in facts
+                     .Where(f => !f.IsHeadline && f.FactValue > 0 && f.SeverityTier <= 3 && f.ImpactClass != "volume" && f.WindowScope != "ctx")
+                     .Where(f => prompt.AllowedNumbers.Contains(f.FactValue))
+                     .OrderBy(f => f.SeverityTier).ThenBy(f => f.DisplayOrder))
+            Add(PeriodSentence(f, facts, data.Edition.Slot));
+
+        // Never below the card's two-sentence floor: the date the figures stand at is always true.
+        if (narrative.Count < InsightCardWriter.MinNarrativeSentences)
+            Add("These figures are as at {{AS_AT}}.");
+        if (narrative.Count < InsightCardWriter.MinNarrativeSentences)
+            Add("Your monthly email for {{CURR_MONTH}} carries the full picture behind this card.");
+
+        return (headline, string.Join(" ", narrative));
+    }
+
+    /// <summary>
+    /// A support fact that opens with a capital, so the card's sentence rule counts it: "Of the N
+    /// ..., M ..." when it nests, otherwise the fact prefixed with the period it covers.
+    /// </summary>
+    private static string PeriodSentence(MonthlyFact fact, IReadOnlyList<MonthlyFact> facts, MonthlyDigestSlot slot)
+    {
+        var sentence = FactSentence(fact, facts, slot);
+        if (sentence.Length > 0 && char.IsUpper(sentence[0]))
+            return sentence;
+
+        var lead = fact.WindowScope switch
+        {
+            "prev" => "For {{PREV_MONTH}}, ",
+            "curr" when fact.Section == "rest_of_month" || fact.FactKey.StartsWith("rm_", StringComparison.Ordinal) => "Before {{CURR_MONTH}} ends, ",
+            "curr" => "So far in {{CURR_MONTH}}, ",
+            _ => "As at {{AS_AT}}, ",
+        };
+        return lead + sentence;
     }
 
     private static string FactSentence(MonthlyFact fact, IReadOnlyList<MonthlyFact> facts, MonthlyDigestSlot slot)
@@ -207,7 +348,40 @@ public static class InsightCardFallback
         return $"{value} {label}.";
     }
 
-    private static string FindingSentence(MonthlyNamedFinding finding, FreeMonthlyDigestPrompt prompt)
+    /// <summary>
+    /// The pre-2026-09-27 card fallback, kept UNCHANGED as the floor under <see cref="BuildChecked"/>
+    /// (bound text). It ships only when the send-quality build fails its own checks.
+    /// </summary>
+    public static (string Headline, string Narrative) BuildLegacy(FreeMonthlyDigestPrompt prompt)
+    {
+        var data = prompt.Data;
+        var facts = data.Facts.OrderBy(f => f.DisplayOrder).ToList();
+        var headlineFact = facts.FirstOrDefault(f => f.IsHeadline);
+        var headlineFinding = prompt.NamedFindings.FirstOrDefault(n => n.Slot == 1);
+
+        string headline;
+        if (string.Equals(data.HeadlineSource, "candidate", StringComparison.Ordinal) && headlineFinding is not null)
+            headline = LegacyFindingSentence(headlineFinding, prompt);
+        else if (headlineFact is not null)
+            headline = FactSentence(headlineFact, facts, data.Edition.Slot);
+        else
+            headline = "No material change to report this week.";
+
+        var support = facts
+            .Where(f => !f.IsHeadline && f.FactValue > 0 && f.SeverityTier <= 3 && f.ImpactClass != "volume")
+            .OrderBy(f => f.SeverityTier).ThenBy(f => f.DisplayOrder)
+            .Take(2)
+            .Select(f => FactSentence(f, facts, data.Edition.Slot))
+            .ToList();
+
+        var narrative = support.Count > 0
+            ? string.Join(" ", support)
+            : headline;
+
+        return (headline, narrative);
+    }
+
+    private static string LegacyFindingSentence(MonthlyNamedFinding finding, FreeMonthlyDigestPrompt prompt)
     {
         var c = finding.Candidate;
         var name = finding.NamePlaceholder is { } p && prompt.Bindings.TryGetValue(p, out var bound) ? bound : $"One {c.EntityKind}";
@@ -233,11 +407,9 @@ public static class InsightCardFallback
                 $"{InsightCardRules.Count(item)} open obligations are held by {name}, who is no longer an active user of RegTrack.",
             _ when c.ItemCount is { } item =>
                 $"{name}: {InsightCardRules.Count(item)} {unit} {InsightCardRules.ShortNounForDetector(c.Detector)}.".Replace(" .", "."),
-            _ => $"{name}: {DetectorPlain(c.Detector)}.",
+            _ => $"{name}: {c.Detector.Replace('_', ' ')}.",
         };
     }
-
-    private static string DetectorPlain(string detector) => detector.Replace('_', ' ');
 
     /// <summary>
     /// The proc labels are definitions, written for the model; the fallback prints them to a

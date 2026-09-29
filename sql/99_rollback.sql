@@ -102,8 +102,11 @@ GO
 
 /*   Free-tier MONTHLY edition (sql/34 - sql/41). Callers first, then the
      helpers they call. To remove ONLY the monthly tier, run just this
-     batch (the eight DROP lines below, up to the next GO) - nothing else
-     in this file depends on them.                                            */
+     batch (the ten DROP lines below, up to the next GO) - nothing else
+     in this file depends on them. tvfInsightsEntitledScopePairs was retired
+     2026-09-29 (sql/34 drops it too); the line stays to clean up a database
+     that received the 2026-09-27 revision. InsightsFreeDashboardStatusRule
+     (sql/34, 2026-09-29) is dropped after the loader that reads it.          */
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Overview',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Overview;
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Users',           'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Users;
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Location',        'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_Location;
@@ -112,6 +115,8 @@ IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_Licence',         'P') IS NOT NULL DR
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_MemberDetectors', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_MemberDetectors;
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadLicences',    'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_LoadLicences;
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadFacts',       'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_FreeMonthly_LoadFacts;
+IF OBJECT_ID('dbo.tvfInsightsEntitledScopePairs',            'IF') IS NOT NULL DROP FUNCTION dbo.tvfInsightsEntitledScopePairs;
+IF OBJECT_ID('dbo.InsightsFreeDashboardStatusRule',          'U')  IS NOT NULL DROP TABLE dbo.InsightsFreeDashboardStatusRule;
 GO
 
 /*   Metric snapshot procedures (sql/33)  */

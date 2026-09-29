@@ -10,8 +10,10 @@ using Xunit;
 namespace Insights.UnitTests;
 
 /// <summary>
-/// 1.1 (2026-09-25): one recipient failing on every retry is recorded and skipped past - it no
-/// longer faults the orchestration and costs every later recipient their week's email.
+/// (2026-09-25, changed in place at 1.0): one recipient failing on every retry is recorded and
+/// skipped past - it no longer faults the orchestration and costs every later recipient their
+/// week's email. [2026-09-29, 1.1] The entitlement API step was removed; the dispatch activity now
+/// returns the matched groups itself.
 /// </summary>
 public sealed class FreeDigestSendOrchestratorTests
 {
@@ -19,15 +21,16 @@ public sealed class FreeDigestSendOrchestratorTests
         Guid.Parse("11111111-1111-1111-1111-111111111111"), 23, new DateOnly(2026, 8, 23), "sig", 1, "ABC Training",
         DateTime.UtcNow, DateTime.UtcNow, "llm", "c", "p", [], "k", "v");
 
-    private static Mock<OrchestrationContext> Context(int recipientCount, int? gatewayId, out List<SendDigestFromArtifactInput> sendInputs)
+    private static Mock<OrchestrationContext> Context(
+        int recipientCount, int? gatewayId, out List<SendDigestFromArtifactInput> sendInputs, int skippedNoMatchingArtifact = 0)
     {
         var recipients = Enumerable.Range(1, recipientCount)
             .Select(i => new DispatchRecipientRef(i, $"user{i}@example.com", null)).ToList();
 
         var context = new Mock<OrchestrationContext>();
         context.Setup(c => c.ScheduleWithRetry<ResolveDigestDispatchOutput>(typeof(ResolveDigestDispatchActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
-            .ReturnsAsync(new ResolveDigestDispatchOutput(true, "Proceed", "ok", "ABC Training",
-                [new DispatchGroup(Artifact(), recipients)], 0, 0, gatewayId));
+            .ReturnsAsync(new ResolveDigestDispatchOutput(
+                true, "Proceed", "ok", "ABC Training", [new DispatchGroup(Artifact(), recipients)], skippedNoMatchingArtifact, 0, gatewayId));
         context.Setup(c => c.ScheduleWithRetry<FetchDigestArtifactOutput>(typeof(FetchDigestArtifactActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
             .ReturnsAsync(new FetchDigestArtifactOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<object?>(typeof(MarkDigestArtifactDispatchedActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -118,5 +121,17 @@ public sealed class FreeDigestSendOrchestratorTests
 
         Assert.Equal(ResolveDigestDispatchActivity.EmailGatewayRefusedDecision, result.Decision);
         Assert.Equal(0, result.Sent);
+    }
+
+    /// <summary>The dispatch activity's skip count (a recipient whose scope changed since Sunday) reaches the output unchanged.</summary>
+    [Fact]
+    public async Task RecipientsWithoutAMatchingArtifact_AreReportedNotSent()
+    {
+        var context = Context(4, (int)EmailGateway.SendGrid, out var sendInputs, skippedNoMatchingArtifact: 1);
+
+        var result = await new FreeDigestSendOrchestrator().RunTask(context.Object, new FreeDigestSendOrchestrationInput(23, 3));
+
+        Assert.Equal(4, sendInputs.Count);
+        Assert.Equal(1, result.RecipientsSkippedNoMatchingArtifact);
     }
 }

@@ -283,7 +283,7 @@ BEGIN
     /*===================================================================
       3. LICENCES
     ===================================================================*/
-    DECLARE @licTotal INT, @licValid INT, @licLapsed INT, @licEndedOther INT, @licNoEnd INT,
+    DECLARE @licTotal INT, @licValid INT, @licLapsed INT, @licEndedOther INT, @licNoEnd INT, @licOtherStatus INT,
             @licLapsingRom INT, @licLapsingUnrenewed INT, @licLapsedLastMonth INT,
             @licLapsedThisMonth INT, @licLapsedUnrenewed INT;
 
@@ -292,6 +292,7 @@ BEGIN
            @licLapsed           = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed'      THEN 1 ELSE 0 END), 0),
            @licEndedOther       = ISNULL(SUM(CASE WHEN LicenceState = 'ended_other' THEN 1 ELSE 0 END), 0),
            @licNoEnd            = ISNULL(SUM(CASE WHEN LicenceState = 'no_end_date' THEN 1 ELSE 0 END), 0),
+           @licOtherStatus      = ISNULL(SUM(CASE WHEN LicenceState = 'other_status' THEN 1 ELSE 0 END), 0),   -- 2026-09-29, sql/35
            @licLapsingRom       = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 THEN 1 ELSE 0 END), 0),
            @licLapsingUnrenewed = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
            @licLapsedLastMonth  = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 THEN 1 ELSE 0 END), 0),
@@ -299,16 +300,19 @@ BEGIN
            @licLapsedUnrenewed  = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0)
     FROM #lic;
 
-    IF @licTotal <> @licValid + @licLapsed + @licEndedOther + @licNoEnd
+    IF @licTotal <> @licValid + @licLapsed + @licEndedOther + @licNoEnd + @licOtherStatus
         THROW 51253, N'FREE MONTHLY OVERVIEW RECONCILIATION FAILED - licence states do not partition the scoped licence set. Refusing to publish.', 1;
 
     /*===================================================================
       4. ESTATE CONTEXT
     ===================================================================*/
     DECLARE @obligations      INT = (SELECT COUNT(*) FROM #inst);
-    DECLARE @locationsInScope INT = (SELECT COUNT(DISTINCT sp.BranchID)
-                                     FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp);
-    DECLARE @locationsWithObl INT = (SELECT COUNT(DISTINCT BranchID) FROM #inst);
+    /*  [2026-09-29 RegTrack parity] The dashboard lists a location only when it
+        holds at least one counted obligation (SP_GetEntitySummary), so the
+        location count comes from #inst, not from the raw scope pairs. Both
+        facts keep their keys for the C# contract; they are now equal.       */
+    DECLARE @locationsInScope INT = (SELECT COUNT(DISTINCT BranchID) FROM #inst);
+    DECLARE @locationsWithObl INT = @locationsInScope;
 
     /*===================================================================
       5. DETECTORS - instance level: an obligation is "overdue" when it has

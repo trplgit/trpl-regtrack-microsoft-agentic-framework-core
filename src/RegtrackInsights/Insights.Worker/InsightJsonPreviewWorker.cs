@@ -120,7 +120,8 @@ public sealed class InsightJsonPreviewWorker(
                 sp.GetRequiredService<Insights.Agents.InsightCardWriter>(),
                 sp.GetRequiredService<FreeMonthlySettings>(),
                 settings,
-                sp.GetRequiredService<ILogger<InsightCardComposer>>());
+                sp.GetRequiredService<ILogger<InsightCardComposer>>(),
+                sp.GetService<FreeDigestMetrics>());
 
         logger.LogInformation(
             "Insight JSON preview: tenant {TenantId}, {GroupCount} scope group(s), week ending {WeekEnding}, output {Dir}. No email is composed; nothing is posted.",
@@ -207,6 +208,7 @@ public sealed class InsightJsonPreviewWorker(
         }
 
         var digestRepository = sp.GetRequiredService<IFreeDigestRepository>();
+        var scopeRepository = sp.GetRequiredService<IScopeRepository>();
 
         var gate = await digestRepository.EvaluateGateAsync(tenantId, cancellationToken);
         summary.AppendLine($"gate: {gate.Decision} - {gate.Reason} (recipients: {gate.RecipientCount})");
@@ -214,20 +216,20 @@ public sealed class InsightJsonPreviewWorker(
         var resolve = new ResolveDigestRecipientsActivity(
             digestRepository,
             sp.GetRequiredService<IInsightJsonRepository>(),
-            sp.GetRequiredService<IScopeRepository>(),
+            scopeRepository,
             sp.GetRequiredService<FreeDigestMetrics>(),
             sp.GetRequiredService<ILogger<ResolveDigestRecipientsActivity>>());
 
         var resolved = await resolve.RunAsync(new ResolveDigestRecipientsInput(tenantId, null, DigestClaimDomain.InsightJson));
         summary.AppendLine($"resolve: proceed={resolved.ShouldProceed}, decision={resolved.Decision}, "
-                           + $"{resolved.Groups.Count} scope group(s), {resolved.RecipientsWithoutScope} recipient(s) dropped with no scope");
+                           + $"{resolved.Groups.Count} scope group(s), {resolved.RecipientsWithoutScope} recipient(s) without scope");
 
         var forcedUser = configuration.GetValue<int?>("FreeDigest:UserId");
+        if (resolved.ShouldProceed && forcedUser is { } user)
+            return [await FreeMonthlyPreviewWorker.PreviewGroupForUserAsync(digestRepository, scopeRepository, tenantId, user, cancellationToken)];
+
         if (resolved.ShouldProceed && resolved.Groups.Count > 0)
         {
-            if (forcedUser is { } user)
-                return [resolved.Groups.FirstOrDefault(g => g.RepresentativeUserId == user) ?? new DigestScopeGroup("forced-user", user, [])];
-
             // COST CONTROL: every group is a set of five proc reads and one LLM call. First group by default.
             var limit = configuration["FreeDigest:InsightPreview:Groups"];
             var take = string.Equals(limit, "all", StringComparison.OrdinalIgnoreCase)
@@ -242,21 +244,9 @@ public sealed class InsightJsonPreviewWorker(
                 + "Pass --FreeDigest:InsightPreview:IgnoreClaims=true to preview anyway.");
 
         summary.AppendLine("IgnoreClaims: the pipeline would have exited here; previewing the first recipient with scope instead.");
-        var userId = forcedUser ?? await FirstScopedRecipientAsync(sp, digestRepository, tenantId, cancellationToken);
-        return [new DigestScopeGroup("preview", userId, [])];
-    }
-
-    private static async Task<int> FirstScopedRecipientAsync(IServiceProvider sp, IFreeDigestRepository repository, int tenantId, CancellationToken cancellationToken)
-    {
-        var scopeRepository = sp.GetRequiredService<IScopeRepository>();
-        foreach (var recipient in await repository.GetRecipientsAsync(tenantId, cancellationToken))
-        {
-            var id = checked((int)recipient.UserId);
-            if ((await scopeRepository.GetScopePairsAsync(id, tenantId, cancellationToken)).Count > 0)
-                return id;
-        }
-
-        throw new InvalidOperationException($"Tenant {tenantId} has no digest recipient with scope - pass --FreeDigest:UserId.");
+        return [forcedUser is { } previewUser
+            ? await FreeMonthlyPreviewWorker.PreviewGroupForUserAsync(digestRepository, scopeRepository, tenantId, previewUser, cancellationToken)
+            : await FreeMonthlyPreviewWorker.FirstPreviewGroupWithScopeAsync(digestRepository, scopeRepository, tenantId, cancellationToken)];
     }
 
     private static DateOnly MostRecentSunday(DateOnly today) =>

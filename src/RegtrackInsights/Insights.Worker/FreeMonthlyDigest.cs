@@ -89,6 +89,10 @@ public sealed class FreeMonthlySettings
     /// <summary>
     /// The least a slot needs for the current prompts: ~7.5k input plus reasoning and a 700-word
     /// body for the Overview, ~7k plus a 620-word body for the rest, with headroom for a redraft.
+    ///
+    /// <para>[RESTORED 2026-09-29, 15,000 -> 14,000 for the non-Overview slots] The 2026-09-27 raise
+    /// existed only for the reflection rewrite, which was removed on the product owner's
+    /// instruction.</para>
     /// </summary>
     public static int MinimumTokenCapFor(MonthlyDigestSlot slot) =>
         slot == MonthlyDigestSlot.Overview ? 16_000 : 14_000;
@@ -106,16 +110,24 @@ public sealed class FreeMonthlySettings
 /// A SQL refusal (<see cref="FreeMonthlyDigestRefusedException"/>) is NOT caught here - it is a
 /// different failure class from an LLM rejection. The fallback exists so an email always goes out
 /// when the DATA is good; when SQL refuses the data, nothing may go out (CLAUDE.md non-negotiable 2).
+///
+/// <para>A draft the validator passes ships; a rejected one falls back to the deterministic body.
+/// [2026-09-29] The reflection critic/rewrite pass (2026-09-27) was removed on the product owner's
+/// instruction.</para>
 /// </summary>
 public sealed class FreeMonthlyDigestComposer(
     IFreeMonthlyDigestRepository repository,
     FreeMonthlyDigestWriter writer,
     FreeMonthlySettings monthlySettings,
     FreeDigestSettings digestSettings,
-    ILogger<FreeMonthlyDigestComposer> logger)
+    ILogger<FreeMonthlyDigestComposer> logger,
+    FreeDigestMetrics? metrics = null)
 {
+    private const string Lane = "email";
+
     public async Task<ComposeDigestOutput> ComposeAsync(
-        int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride, CancellationToken cancellationToken = default) =>
+        int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride,
+        CancellationToken cancellationToken = default) =>
         (await ComposeWithDiagnosticsAsync(tenantId, representativeUserId, edition, asOfOverride, cancellationToken)).Output;
 
     /// <summary>
@@ -123,7 +135,8 @@ public sealed class FreeMonthlyDigestComposer(
     /// FreeMonthlyPreviewWorker, where tuning a prompt means reading exactly that.
     /// </summary>
     public async Task<MonthlyComposeDiagnostics> ComposeWithDiagnosticsAsync(
-        int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride, CancellationToken cancellationToken = default)
+        int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride,
+        CancellationToken cancellationToken = default)
     {
         /*  ONE clock read, clamped into the edition's month. CurrMonthStart comes from the Sunday
             (the claim key), @AsOf from now - sql/34 refuses 51237 if the two disagree, so the clamp
@@ -155,11 +168,13 @@ public sealed class FreeMonthlyDigestComposer(
         var inputTokens = 0;
         var outputTokens = 0;
         var attempt = 0;
+        var writerTokenCap = monthlySettings.TokenCapFor(edition.Slot);
+        var maxAttempts = monthlySettings.MaxDraftAttempts;
 
         while (true)
         {
             attempt++;
-            draft = await writer.WriteAsync(systemPrompt, userMessage, monthlySettings.TokenCapFor(edition.Slot), cancellationToken);
+            draft = await writer.WriteAsync(systemPrompt, userMessage, writerTokenCap, cancellationToken);
             inputTokens += draft.InputTokens;
             outputTokens += draft.OutputTokens;
 
@@ -172,35 +187,24 @@ public sealed class FreeMonthlyDigestComposer(
                 break;
             }
 
-            /*  Presentation is fixed, never rejected: normalise emphasis, then delete the sentences
-                that comment on the figures instead of stating them. Only then is what remains
-                checked for truth. Deleting can never add a claim, so the order is safe.        */
-            var headlineFigure = prompt.HeadlineMarker is { } marker && !marker.StartsWith("{{", StringComparison.Ordinal) ? marker : null;
-            var normalized = FreeMonthlyDraftNormalizer.Normalize(draft.Body, headlineFigure);
-            var repaired = FreeMonthlyDraftRepair.Apply(normalized, prompt);
+            var prepared = FreeMonthlyDraftPipeline.Prepare(draft.Body, prompt);
 
-            /*  [OWNER, 2026-09-24] Paragraphs of the same period sit together: lead, then last
-                month, this month so far, the standing position, what is still to come. Only the
-                order of whole paragraphs changes, so what was true before is true after.      */
-            repaired = repaired with { Body = FreeMonthlyParagraphOrder.Arrange(repaired.Body) };
-
-            if (repaired.Removed.Count > 0)
+            if (prepared.Removed.Count > 0)
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - removed {Count} sentence(s) before validating: {Removed}",
-                    tenantId, representativeUserId, edition.Slot, repaired.Removed.Count, string.Join(" | ", repaired.Removed));
+                    tenantId, representativeUserId, edition.Slot, prepared.Removed.Count, string.Join(" | ", prepared.Removed));
 
-            var validation = FreeMonthlyDigestValidator.Validate(repaired.Body, prompt);
+            var validation = prepared.Review;
 
             if (validation.Advisories.Count > 0)
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - advisories (email still sent): {Advisories}",
                     tenantId, representativeUserId, edition.Slot, string.Join("; ", validation.Advisories));
 
-
             if (validation.IsValid)
             {
-                // The repaired text is what was validated, so it is what the reader gets.
-                var body = FreeMonthlyPlaceholderBinder.Bind(repaired.Body, prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition);
+                // The validated text is what the reader gets.
+                var body = FreeMonthlyPlaceholderBinder.Bind(prepared.Body, prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition);
 
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body accepted on attempt {Attempt}. Tokens: {InputTokens} in / {OutputTokens} out.",
@@ -211,26 +215,48 @@ public sealed class FreeMonthlyDigestComposer(
 
             reason = "validator rejected the LLM body: " + string.Join("; ", validation.FailedChecks);
 
-            if (attempt >= monthlySettings.MaxDraftAttempts)
+            if (attempt >= maxAttempts)
             {
                 logger.LogWarning(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body REJECTED on attempt {Attempt} of {MaxAttempts}, falling back. Tokens spent anyway: {InputTokens} in / {OutputTokens} out. {Reason}\nRejected body was:\n{Body}",
-                    tenantId, representativeUserId, edition.Slot, attempt, monthlySettings.MaxDraftAttempts, inputTokens, outputTokens, reason, draft.Body);
+                    tenantId, representativeUserId, edition.Slot, attempt, maxAttempts, inputTokens, outputTokens, reason, draft.Body);
                 break;
             }
 
             logger.LogInformation(
                 "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - attempt {Attempt} of {MaxAttempts} rejected, redrafting. {Reason}",
-                tenantId, representativeUserId, edition.Slot, attempt, monthlySettings.MaxDraftAttempts, reason);
+                tenantId, representativeUserId, edition.Slot, attempt, maxAttempts, reason);
 
             userMessage = FreeMonthlyRedraft.Message(prompt.UserMessage, draft.Body, validation.FailedChecks);
         }
 
+        return Fallback(prompt, reason, draft.Body, inputTokens, outputTokens, tenantId, representativeUserId);
+    }
+
+    /// <summary>
+    /// The deterministic body. If the send-quality build ever fails its own validation, the legacy
+    /// floor ships - loudly: an error log and a metric, because a silently degrading fallback is the
+    /// one failure this path must not have.
+    /// </summary>
+    private MonthlyComposeDiagnostics Fallback(
+        FreeMonthlyDigestPrompt prompt, string reason, string rawDraft, int inputTokens, int outputTokens, int tenantId, int userId)
+    {
+        var fallback = FreeMonthlyFallbackBody.Build(prompt);
+        if (fallback.UsedFloor)
+        {
+            metrics?.RecordFallbackFloor(Lane);
+            logger.LogError(
+                "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - the send-quality fallback FAILED its own validation, legacy floor shipped. {Problems}",
+                tenantId, userId, prompt.Data.Edition.Slot, string.Join("; ", fallback.FloorReasons));
+        }
+
         return new MonthlyComposeDiagnostics(
-            new ComposeDigestOutput(FreeMonthlyFallbackBody.Build(prompt.Data), "Fallback", reason, inputTokens, outputTokens),
-            prompt.Data, prompt.UserMessage, draft.Body);
+            new ComposeDigestOutput(fallback.Body, "Fallback", reason, inputTokens, outputTokens),
+            prompt.Data, prompt.UserMessage, rawDraft, fallback.UsedFloor);
     }
 }
 
 /// <summary>A composed monthly body plus its inputs and the model's raw draft (accepted or rejected).</summary>
-public sealed record MonthlyComposeDiagnostics(ComposeDigestOutput Output, MonthlyDigestData Data, string UserMessage, string RawDraft);
+/// <param name="FallbackFloorUsed">True when the send-quality fallback failed its own validation and the legacy body shipped.</param>
+public sealed record MonthlyComposeDiagnostics(
+    ComposeDigestOutput Output, MonthlyDigestData Data, string UserMessage, string RawDraft, bool FallbackFloorUsed = false);

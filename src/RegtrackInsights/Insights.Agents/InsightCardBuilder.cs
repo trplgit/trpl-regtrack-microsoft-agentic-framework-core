@@ -54,7 +54,9 @@ public static partial class InsightCardBuilder
         if (headlineChip.Length == 0)
             headlineChip = primary.Unit;
 
-        var supporting = SupportingMetrics(facts, primary, headlineChip, slot);
+        var supporting = SupportingMetrics(facts, primary, headlineChip, slot)
+            .Select(m => m with { Label = WithoutBannedPhrases(m.Label) })
+            .ToList();
 
         return new InsightCard(
             InsightId: InsightCardRules.InsightId(customerId, userId, weekOf),
@@ -62,12 +64,26 @@ public static partial class InsightCardBuilder
             Type: input.HeadlineType,
             Severity: InsightCardRules.Severity(severityTier),
             WeekOf: InsightCardRules.Date(weekOf),
-            Title: input.Title,
-            Headline: text.Headline,
-            Narrative: text.Narrative,
-            PrimaryMetric: primary,
+            Title: WithoutBannedPhrases(input.Title),
+            Headline: WithoutBannedPhrases(text.Headline),
+            Narrative: WithoutBannedPhrases(text.Narrative),
+            PrimaryMetric: primary with { Label = WithoutBannedPhrases(primary.Label) },
             SupportingMetrics: supporting);
     }
+
+    /// <summary>
+    /// [OWNER, 2026-09-27] "personal criminal liability" is banned from the card outright. A live
+    /// Act card said it three times - headline, narrative and metric label - because it reaches the
+    /// card by three routes: the model copies it from the proc labels, the fallback prints those
+    /// labels directly, and the metric label is built from them. A prompt rule covers only the
+    /// first, and a validator rejection only swaps it for the fallback, which says it too. So it
+    /// is rewritten here, on every text field, whatever wrote it. Email is unaffected.
+    /// </summary>
+    internal static string WithoutBannedPhrases(string text) =>
+        CriminalLiability().Replace(text, m => char.IsUpper(m.Value[0]) ? "Personal liability" : "personal liability");
+
+    [GeneratedRegex(@"\b(?:personal\s+)?criminal\s+liability\b", RegexOptions.IgnoreCase)]
+    private static partial Regex CriminalLiability();
 
     /// <summary>
     /// The figures that render beside the headline one as "939 lapses · 345 locations". Each label

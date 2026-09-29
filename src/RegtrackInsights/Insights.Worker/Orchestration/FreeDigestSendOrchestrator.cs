@@ -32,7 +32,8 @@ public sealed record FreeDigestSendOrchestrationOutput(
 /// that tenant never went out - and, the digest being weekly, those recipients simply lost the
 /// week. Now the run completes and reports Sent / Skipped / Failed.
 ///
-/// Version deliberately left at 1.0 (product decision, 2026-09-25): only this code exists after
+/// Version deliberately left at 1.0 for THIS change (product decision, 2026-09-25; the current
+/// version and why it moved are in the history above <see cref="Version"/>): only this code exists after
 /// deploy. It is replay-safe for any instance already in flight - the success path schedules the
 /// same tasks as before, an old history cannot contain an exhausted retry (that faulted it), and a
 /// missing EmailGatewayId is resolved live by the send activity.
@@ -40,7 +41,26 @@ public sealed record FreeDigestSendOrchestrationOutput(
 public sealed class FreeDigestSendOrchestrator : TaskOrchestration<FreeDigestSendOrchestrationOutput, FreeDigestSendOrchestrationInput>
 {
     public const string Name = "FreeDigestSendOrchestrator";
-    public const string Version = "1.0";
+
+    /*  Version history.
+
+        1.0 - two-phase send (ADR-0001, 2026-09-10); per-recipient failure isolation and per-tenant
+        email gateway (2026-09-25) and the RegTrack show-entitlements lookup (2026-09-27) were both
+        changed in place at 1.0.
+
+        Bumped 1.0 -> 1.1 (2026-09-29): the show-entitlements lookup is REMOVED on the product
+        owner's instruction. The orchestrator no longer schedules ResolveRecipientEntitlementsActivity
+        chunks (the activity is deleted), and ResolveDigestDispatchActivity's output changed shape:
+        it re-resolves each recipient's plain SQL scope itself and returns the matched
+        DispatchGroups plus the two skip counts, instead of raw artifacts + recipients. A real
+        call-sequence and payload change, so a 1.0 history cannot replay against this body.
+        [VERIFY BEFORE DEPLOY] Only 1.1 is registered (WorkerRegistration), so any in-flight 1.0
+        FreeDigestSendOrchestrator instance can no longer be dispatched - terminate/purge them
+        first. Do not deploy between Sunday generate and Monday send: Sunday artifacts generated
+        under 1.0 carry signatures over entitlement-CUT pairs, so a recipient whose scope was
+        narrowed by the API computes a different (plain SQL) signature on Monday and matches no
+        artifact - they get nothing that week. Fails closed, never leaks, but it is a lost week. */
+    public const string Version = "1.1";
 
     internal const int SendFanOutBatchSize = 25;
 
@@ -64,14 +84,18 @@ public sealed class FreeDigestSendOrchestrator : TaskOrchestration<FreeDigestSen
         {
             return new FreeDigestSendOrchestrationOutput(
                 input.TenantId, dispatch.TenantName, dispatch.Decision, dispatch.Reason,
-                ScopeGroups: 0, Sent: 0, Skipped: 0, dispatch.RecipientsSkippedNoMatchingArtifact, dispatch.RecipientsSkippedNoScope);
+                ScopeGroups: 0, Sent: 0, Skipped: 0,
+                RecipientsSkippedNoMatchingArtifact: dispatch.RecipientsSkippedNoMatchingArtifact,
+                RecipientsSkippedNoScope: dispatch.RecipientsSkippedNoScope);
         }
+
+        var groups = dispatch.Groups;
 
         var sent = 0;
         var skipped = 0;
         var failed = 0;
 
-        foreach (var group in dispatch.Groups)
+        foreach (var group in groups)
         {
             var fetched = await context.ScheduleWithRetry<FetchDigestArtifactOutput>(
                 typeof(FetchDigestArtifactActivity).Name, "1.0", retry, new FetchDigestArtifactInput(group.Artifact));
@@ -106,7 +130,7 @@ public sealed class FreeDigestSendOrchestrator : TaskOrchestration<FreeDigestSen
 
         return new FreeDigestSendOrchestrationOutput(
             input.TenantId, dispatch.TenantName, dispatch.Decision, dispatch.Reason,
-            dispatch.Groups.Count, sent, skipped, dispatch.RecipientsSkippedNoMatchingArtifact, dispatch.RecipientsSkippedNoScope,
+            groups.Count, sent, skipped, dispatch.RecipientsSkippedNoMatchingArtifact, dispatch.RecipientsSkippedNoScope,
             failed);
     }
 

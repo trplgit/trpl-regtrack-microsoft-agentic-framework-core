@@ -6,8 +6,8 @@ using Microsoft.Data.SqlClient;
 namespace Insights.Data;
 
 /// <summary>
-/// Reads one monthly free-digest slot (sql/36-41). Same scope as the weekly digest - the procs resolve
-/// scope through tvfInsightsScopedInstances for <c>userId</c>, exactly as sql/06 does.
+/// Reads one monthly free-digest slot (sql/36-41). The procs resolve scope through
+/// tvfInsightsScopedInstances for <c>userId</c>.
 /// </summary>
 public interface IFreeMonthlyDigestRepository
 {

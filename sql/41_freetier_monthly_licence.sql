@@ -110,7 +110,7 @@ BEGIN
     /*===================================================================
       1. TOTALS + RECONCILIATION (all before any result set)
     ===================================================================*/
-    DECLARE @total INT, @valid INT, @lapsed INT, @endedOther INT, @noEnd INT,
+    DECLARE @total INT, @valid INT, @lapsed INT, @endedOther INT, @noEnd INT, @otherStatus INT,
             @lapsedUnrenewed INT, @lapsedRenewing INT,
             @expRom INT, @expRomUnrenewed INT, @expRomRenewing INT,
             @lapsedLm INT, @lapsedLmUnrenewed INT, @lapsedTm INT, @lapsedTmUnrenewed INT,
@@ -121,6 +121,7 @@ BEGIN
            @lapsed            = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed'      THEN 1 ELSE 0 END), 0),
            @endedOther        = ISNULL(SUM(CASE WHEN LicenceState = 'ended_other' THEN 1 ELSE 0 END), 0),
            @noEnd             = ISNULL(SUM(CASE WHEN LicenceState = 'no_end_date' THEN 1 ELSE 0 END), 0),
+           @otherStatus       = ISNULL(SUM(CASE WHEN LicenceState = 'other_status' THEN 1 ELSE 0 END), 0),   -- 2026-09-29, sql/35
            @lapsedUnrenewed   = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
            @lapsedRenewing    = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 1 THEN 1 ELSE 0 END), 0),
            @expRom            = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 THEN 1 ELSE 0 END), 0),
@@ -134,7 +135,7 @@ BEGIN
            @noStatusRow       = ISNULL(SUM(CASE WHEN StatusBucket IS NULL THEN 1 ELSE 0 END), 0)
     FROM #lic;
 
-    IF @total <> @valid + @lapsed + @endedOther + @noEnd
+    IF @total <> @valid + @lapsed + @endedOther + @noEnd + @otherStatus
         THROW 51301, N'FREE MONTHLY LICENCE RECONCILIATION FAILED - licence states do not partition the scoped licence set. Refusing to publish.', 1;
 
     /*  Per-location members: every licence sits on exactly one branch.      */

@@ -187,7 +187,7 @@ public sealed class FreeMonthlyPreviewWorker(
                     /*  One row per email, appended across runs, so model choice can be costed from
                         measurement rather than argued from list prices. The deployment and its
                         knobs are on every row: a run is only comparable to another if those match. */
-                    await AppendCostRowAsync(dir, tenantId, group.RepresentativeUserId, slot, result.Output, cancellationToken);
+                    await AppendCostRowAsync(dir, tenantId, group.RepresentativeUserId, slot, result, cancellationToken);
                 }
                 catch (FreeMonthlyDigestRefusedException ex)
                 {
@@ -207,8 +207,9 @@ public sealed class FreeMonthlyPreviewWorker(
     /// fallback. Rows accumulate across runs, so comparing two models is a spreadsheet away.
     /// </summary>
     private async Task AppendCostRowAsync(
-        string dir, int tenantId, int userId, MonthlyDigestSlot slot, ComposeDigestOutput output, CancellationToken cancellationToken)
+        string dir, int tenantId, int userId, MonthlyDigestSlot slot, MonthlyComposeDiagnostics result, CancellationToken cancellationToken)
     {
+        var output = result.Output;
         var path = Path.Combine(dir, "tokens.csv");
         if (!File.Exists(path))
             await File.WriteAllTextAsync(path,
@@ -345,10 +346,11 @@ public sealed class FreeMonthlyPreviewWorker(
         var gate = await digestRepository.EvaluateGateAsync(tenantId, cancellationToken);
         summary.AppendLine($"gate: {gate.Decision} - {gate.Reason} (recipients: {gate.RecipientCount})");
 
+        var scopeRepository = sp.GetRequiredService<IScopeRepository>();
         var resolve = new ResolveDigestRecipientsActivity(
             digestRepository,
             sp.GetRequiredService<IInsightJsonRepository>(),
-            sp.GetRequiredService<IScopeRepository>(),
+            scopeRepository,
             sp.GetRequiredService<FreeDigestMetrics>(),
             sp.GetRequiredService<ILogger<ResolveDigestRecipientsActivity>>());
 
@@ -356,24 +358,23 @@ public sealed class FreeMonthlyPreviewWorker(
         var groupLimit = configuration["FreeDigest:Preview:Groups"];
         var forcedUser = configuration.GetValue<int?>("FreeDigest:UserId");
         summary.AppendLine($"resolve: proceed={resolved.ShouldProceed}, decision={resolved.Decision}, week ending {resolved.WeekEnding}, "
-                           + $"{resolved.Groups.Count} scope group(s), {resolved.RecipientsWithoutScope} recipient(s) dropped with no scope");
+                           + $"{resolved.Groups.Count} scope group(s), {resolved.RecipientsWithoutScope} recipient(s) without scope");
 
         var claimed = await digestRepository.GetClaimedUserIdsAsync(tenantId, DateOnly.ParseExact(resolved.WeekEnding, "yyyy-MM-dd"), cancellationToken);
         summary.AppendLine($"already claimed for week ending {resolved.WeekEnding}: "
                            + (claimed.Count == 0 ? "none" : string.Join(", ", claimed)));
+
+        if (resolved.ShouldProceed && forcedUser is { } user)
+        {
+            summary.AppendLine($"FreeDigest:UserId={user}: previewing that user only, with their own SQL scope.");
+            return [await PreviewGroupForUserAsync(digestRepository, scopeRepository, tenantId, user, cancellationToken)];
+        }
 
         if (resolved.ShouldProceed && resolved.Groups.Count > 0)
         {
             /*  COST CONTROL. A tenant can have many scope groups (1285 has 6), and every group is a
                 full set of LLM calls. The preview defaults to the FIRST group only - enough to judge
                 the writing - and takes the rest on request.                                       */
-            if (forcedUser is { } user)
-            {
-                summary.AppendLine($"FreeDigest:UserId={user}: previewing that user only, not the {resolved.Groups.Count} resolved group(s).");
-                return [resolved.Groups.FirstOrDefault(g => g.RepresentativeUserId == user)
-                        ?? new DigestScopeGroup("forced-user", user, [])];
-            }
-
             var take = string.Equals(groupLimit, "all", StringComparison.OrdinalIgnoreCase)
                 ? resolved.Groups.Count
                 : int.TryParse(groupLimit, out var n) && n > 0 ? n : 1;
@@ -385,17 +386,49 @@ public sealed class FreeMonthlyPreviewWorker(
         }
 
         /*  The real pipeline stops here. The preview stops too unless asked not to - then it falls
-            back to the first recipient WITH SCOPE, so a tenant whose recipients were all mailed
-            earlier this week can still be previewed.                                            */
+            back to the first recipient who holds any scope, so a tenant whose recipients were all
+            mailed earlier this week can still be previewed.                                      */
         if (!configuration.GetValue("FreeDigest:Preview:IgnoreClaims", false))
             throw new InvalidOperationException(
                 $"The pipeline would send nothing for tenant {tenantId}: {resolved.Decision} - {resolved.Reason}. "
                 + "Pass --FreeDigest:Preview:IgnoreClaims=true to preview anyway.");
 
         summary.AppendLine("IgnoreClaims: the pipeline would have exited here; previewing the first recipient with scope instead.");
-        var userId = configuration.GetValue<int?>("FreeDigest:UserId")
-                     ?? await FirstScopedRecipientAsync(sp, digestRepository, tenantId, cancellationToken);
-        return [new DigestScopeGroup("preview", userId, [])];
+        return [forcedUser is { } previewUser
+            ? await PreviewGroupForUserAsync(digestRepository, scopeRepository, tenantId, previewUser, cancellationToken)
+            : await FirstPreviewGroupWithScopeAsync(digestRepository, scopeRepository, tenantId, cancellationToken)];
+    }
+
+    /// <summary>
+    /// One named user's scope group, from their plain SQL scope. The user need not be a digest
+    /// recipient - a preview of any scoped user is useful - but their email and name are used when
+    /// they are one. An empty scope throws: it is DENY, never "unrestricted".
+    /// Shared with <see cref="InsightJsonPreviewWorker"/>.
+    /// </summary>
+    internal static async Task<DigestScopeGroup> PreviewGroupForUserAsync(
+        IFreeDigestRepository digestRepository, IScopeRepository scopeRepository, int tenantId, int userId, CancellationToken cancellationToken)
+    {
+        var recipient = (await digestRepository.GetRecipientsAsync(tenantId, cancellationToken)).FirstOrDefault(r => r.UserId == userId);
+        var reference = new DigestRecipientRef(userId, recipient?.Email ?? string.Empty, recipient?.Name);
+
+        var (groups, _) = await ResolveDigestRecipientsActivity.GroupByScopeAsync(scopeRepository, tenantId, [reference], cancellationToken);
+        return groups.SingleOrDefault()
+               ?? throw new InvalidOperationException($"User {userId} holds no scope pair on tenant {tenantId} - nothing to preview.");
+    }
+
+    /// <summary>The first recipient, in the pipeline's order, who holds any scope - ignoring this week's claims. Shared with <see cref="InsightJsonPreviewWorker"/>.</summary>
+    internal static async Task<DigestScopeGroup> FirstPreviewGroupWithScopeAsync(
+        IFreeDigestRepository digestRepository, IScopeRepository scopeRepository, int tenantId, CancellationToken cancellationToken)
+    {
+        foreach (var recipient in await digestRepository.GetRecipientsAsync(tenantId, cancellationToken))
+        {
+            var (groups, _) = await ResolveDigestRecipientsActivity.GroupByScopeAsync(
+                scopeRepository, tenantId, [new DigestRecipientRef(recipient.UserId, recipient.Email, recipient.Name)], cancellationToken);
+            if (groups.Count > 0)
+                return groups[0];
+        }
+
+        throw new InvalidOperationException($"Tenant {tenantId} has no recipient with any scope - nothing to preview.");
     }
 
     /// <summary>
@@ -454,19 +487,6 @@ public sealed class FreeMonthlyPreviewWorker(
         return last with { Slot = slot };
     }
 
-    private async Task<int> FirstScopedRecipientAsync(IServiceProvider sp, IFreeDigestRepository repository, int tenantId, CancellationToken cancellationToken)
-    {
-        var scopeRepository = sp.GetRequiredService<IScopeRepository>();
-        foreach (var recipient in await repository.GetRecipientsAsync(tenantId, cancellationToken))
-        {
-            var id = checked((int)recipient.UserId);
-            if ((await scopeRepository.GetScopePairsAsync(id, tenantId, cancellationToken)).Count > 0)
-                return id;
-        }
-
-        throw new InvalidOperationException($"Tenant {tenantId} has no digest recipient with scope - pass --FreeDigest:UserId.");
-    }
-
     private static string Debug(
         MonthlyComposeDiagnostics result, MonthlyDigestEdition edition, int tenantId, int userId, string subject, string codec)
     {
@@ -504,6 +524,8 @@ public sealed class FreeMonthlyPreviewWorker(
         sb.AppendLine().AppendLine("== MODEL INPUT (user message) ==").AppendLine(result.UserMessage);
         sb.AppendLine().AppendLine("== MODEL RAW DRAFT (before names were bound) ==").AppendLine(result.RawDraft);
         sb.AppendLine().AppendLine("== FINAL BODY ==").AppendLine(result.Output.Body);
+        if (result.FallbackFloorUsed)
+            sb.AppendLine().AppendLine("!! The send-quality fallback failed its own validation - the LEGACY fallback shipped. This is a defect.");
         return sb.ToString();
     }
 }

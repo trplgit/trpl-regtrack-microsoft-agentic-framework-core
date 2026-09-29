@@ -150,23 +150,21 @@ BEGIN
             CONCAT(N'LoadFacts took ', @ms, N' ms; ', (SELECT COUNT(*) FROM #inst), N' instances, ',
                    (SELECT COUNT(*) FROM #sched), N' schedules loaded.'));
 
-        /*  ESTATE EQUIVALENCE 1 - overdue stock must equal the CANONICAL
-            overdue function over the same scope. sql/34 restates the predicate
-            (one read, one instant); this proves the restatement is exact.
-            A small difference can be a status change between the two reads;
-            re-run before treating it as a defect.                            */
+        /*  [2026-09-29 RegTrack parity] sql/34 now follows the RegTrack 2.0
+            dashboard's overdue set and drops never-touched schedules, so it is
+            EXPECTED to differ from the paid tier's canonical function. Reported
+            as INFO for reference; the parity check is against the dashboard
+            itself (same tenant, same user, same day), done by hand.          */
         DECLARE @mine INT = (SELECT COUNT(*) FROM #sched WHERE IsOverdue = 1);
         DECLARE @canon INT = (SELECT COUNT(*)
                               FROM dbo.tvfInsightsOverdueSchedules(@c, @AsOf) o
                               JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID);
-        INSERT #report VALUES (@c, @u, 'overdue_equals_canonical',
-            CASE WHEN @mine = @canon THEN 'PASS' ELSE 'WARN' END,
-            CONCAT(N'monthly loader ', @mine, N' vs tvfInsightsOverdueSchedules ', @canon,
-                   CASE WHEN @mine = @canon THEN N'' ELSE N' - re-run; if it persists, the restated predicate has drifted.' END));
+        INSERT #report VALUES (@c, @u, 'overdue_vs_paid_canonical', 'INFO',
+            CONCAT(N'monthly loader (dashboard definition) ', @mine, N' vs paid-tier tvfInsightsOverdueSchedules ', @canon,
+                   N' - a difference is expected since 2026-09-29.'));
 
-        /*  ESTATE EQUIVALENCE 2 - the scope is UNCHANGED from today's free
-            email: instance count must equal sql/06 TotalActiveObligations for
-            the same user.                                                    */
+        /*  Same: the monthly estate now applies the dashboard's filters, so it
+            is EXPECTED to be at most sql/06's count. INFO, not a check.       */
         IF OBJECT_ID('tempdb..#weekly') IS NOT NULL DROP TABLE #weekly;
         CREATE TABLE #weekly (
             CustomerID INT, GeneratedAt DATETIME, TotalActiveObligations INT, DueNext7 INT,
@@ -177,10 +175,11 @@ BEGIN
 
         DECLARE @weeklyObl INT = (SELECT TOP 1 TotalActiveObligations FROM #weekly);
         DECLARE @monthlyObl INT = (SELECT COUNT(*) FROM #inst);
-        INSERT #report VALUES (@c, @u, 'scope_equals_weekly_digest',
-            CASE WHEN @weeklyObl = @monthlyObl THEN 'PASS' ELSE 'WARN' END,
+        INSERT #report VALUES (@c, @u, 'scope_vs_weekly_digest',
+            CASE WHEN @monthlyObl <= @weeklyObl THEN 'INFO' ELSE 'WARN' END,
             CONCAT(N'monthly ', @monthlyObl, N' obligations vs weekly sql/06 ', @weeklyObl,
-                   CASE WHEN @weeklyObl = @monthlyObl THEN N'' ELSE N' - a difference means the scope drifted; investigate before shipping.' END));
+                   CASE WHEN @monthlyObl <= @weeklyObl THEN N' - smaller is expected (dashboard filters).'
+                        ELSE N' - monthly is LARGER than the unfiltered weekly scope; the filters cannot add rows, investigate.' END));
 
         /*  Ownership sanity - schedule-first must leave almost nothing
             ownerless (CLAUDE.md Sec.5: 99.8% of schedules carry a performer).  */

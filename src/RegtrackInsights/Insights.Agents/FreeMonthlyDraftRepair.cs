@@ -913,7 +913,7 @@ public static partial class FreeMonthlyDraftRepair
     /// Splits on sentence end followed by whitespace. Keeps the terminator with its sentence, and
     /// does not split on a decimal point because there are none - every input value is whole.
     /// </summary>
-    private static IEnumerable<string> SplitSentences(string paragraph)
+    internal static IEnumerable<string> SplitSentences(string paragraph)
     {
         var start = 0;
         foreach (Match m in SentenceEnd().Matches(paragraph))

@@ -117,7 +117,7 @@ public static class PaidReportAgentsRegistration
         }
 
         // [ADDED 2026-09-23] Backs onSqlToolInvoked/onMemoryWriteInvoked below - see
-        // IToolInvocationRecorder's own doc comment and sql/34_tool_invocation_log.sql. Falls back
+        // IToolInvocationRecorder's own doc comment and sql/43_tool_invocation_log.sql. Falls back
         // to ConnectionStrings:RegTrack, same "never silently unconfigured" reasoning as
         // readOnlySqlConnectionString above (this always writes to the same DB the app already
         // has a real connection string for - it is a separate table, not a separate database).

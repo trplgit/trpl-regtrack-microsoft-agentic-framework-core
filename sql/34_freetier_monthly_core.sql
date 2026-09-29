@@ -7,8 +7,11 @@
   "the system was handed something it cannot interpret". Declared here so an
   operator is not surprised.)
 
-  Codes in use: 51230 scope | 51231-51233 structural invariants (51234 free) |
-  51235-51237 window input | 51238-51239 dictionary.
+  Codes in use: 51230 scope | 51231-51233 structural invariants |
+  51234 dashboard-overdue set not seeded | 51235-51237 window input |
+  51238-51239 dictionary.
+  (51234 REASSIGNED 2026-09-29: it was "malformed @AllowedBranches". That
+   parameter no longer exists, so the old condition cannot recur.)
 
   SHARED FACT LOADER for every monthly free-tier slot proc
   (sql/36 Overview, sql/38 Users, sql/39 Location, sql/40 Act; sql/37 = the
@@ -91,28 +94,56 @@
   in the same instant (non-negotiable #3). Two separate reads could disagree
   about a schedule closed between them.
 
-  -- OVERDUE: THE CANONICAL PREDICATE, RESTATED VERBATIM ---------------------
-  IsOverdue = ScheduleOn <= @AsOf AND (OverdueEligible = 1 OR no transaction)
-  This is dbo.tvfInsightsOverdueSchedules' predicate exactly (sql/01), with
-  the same estate filters as dbo.tvfInsightsLatestStatus. It is restated here
-  rather than joined because a second read breaks the same-instant rule above;
-  sql/24 already mirrors it the same way. sql/42 compares the two counts.
+  -- REGTRACK 2.0 PARITY (2026-09-29) -----------------------------------------
+  Product-owner decision: every free-digest number must equal what the RegTrack
+  2.0 management dashboard shows the same user for the same tenant, so testing
+  can reconcile the two screen for screen. Replicated from the UAT source of
+  SP_GetManagementDashboardGraphCounts_Statutory (MGMT path) and
+  SP_GetEntitySummary (MGMT path), read 2026-09-29:
 
-  [TRAP - the never-touched ruling is PAST-DUE only] BA RULING: "a past-due
-  schedule with no transaction is to be considered overdue". A schedule due
-  LATER this month with no transaction is simply not started yet. The
-  "ScheduleOn <= @AsOf" guard is what keeps every future obligation from being
-  labelled overdue. Invariant 51232 enforces it.
+    an obligation counts only when
+      - its Act is not deleted                       (A.IsDeleted = 0)
+      - its Compliance is visible                    (ComplinceVisible = 1 or NULL)
+      - its Compliance is not ComplianceType 1       (C.ComplianceType <> 1)
+      - it has a PERFORMER assignment (RoleID 3) held by an active, undeleted
+        user of THIS tenant                          (EXISTS ComplianceAssignment)
+    a schedule counts only when it has at least one transaction
+    OVERDUE = latest status in the dashboard's overdue set AND the due DATE is
+      before the as-at DATE. Due today is not overdue. Pending review, rejected
+      and in progress are not overdue. The set lives, by status id, in
+      dbo.InsightsFreeDashboardStatusRule (RuleName 'overdue') - created and
+      seeded by THIS file so no proc carries a status literal (CLAUDE.md
+      non-negotiable 4) and the shared dictionary (sql/01) is untouched.
+
+  The paid tier (sql/03 tvfInsightsScopedInstances, tvfInsightsOverdueSchedules)
+  is NOT changed - these filters are applied here, on top of it.
+
+  [SUPERSEDED FOR THE FREE TIER ONLY] Two rulings recorded elsewhere in this
+  repo do not hold here any more, because the dashboard does not apply them:
+    - "a past-due schedule with no transaction is overdue" (BA ruling) - the
+      dashboard drops a schedule with no transaction, so this loader does too.
+      NeverTouched is therefore always 0; the column stays for the contract.
+    - the 181x ownership note (CLAUDE.md Sec.5) - an obligation with no RoleID 3
+      assignment is not counted at all, exactly as on the dashboard. Schedule-
+      level Performerid still decides WHO the performer is (below).
+  Soft-deleted ComplianceInstance rows are KEPT, as the dashboard's MGMT path
+  keeps them (it has no CI.IsDeleted filter). That is why this loader selects
+  its instances itself instead of reading dbo.tvfInsightsScopedInstances
+  (sql/03, shared with the paid tier, which drops them - unchanged).
 
   -- OUTCOME (latest status, via the dictionary - never a status literal) ----
       completed_on_time   ClosureClass completed, Timeliness on_time
       completed_late      ClosureClass completed, Timeliness delayed
       completed_untimed   ClosureClass completed, Timeliness NULL (expected 0; declared)
+      [PARITY] For the statuses in rule 'timed_by_close_date' (the two
+      "Approved" ids) the dashboard ignores the status id's timeliness and
+      compares the transaction's StatusChangedOn with the due date: on or
+      before -> on time, after -> late, no close date -> neither (untimed).
       resolved_terminal   ClosureClass resolved_terminal - closed by the REVIEWER
                           WITHOUT completion. Covers BOTH "not applicable" and
                           "not complied" finals. NEVER label it "not applicable"
                           alone - one of its members is a confirmed miss.
-      open                ClosureClass open, OR no transaction at all
+      open                ClosureClass open
   A status the dictionary cannot place THROWs 51238. Never guessed.
 
   -- OWNERSHIP: SCHEDULE FIRST, INSTANCE SECOND ------------------------------
@@ -135,8 +166,9 @@
   declares the count in data_quality.
 
   -- SCOPE --------------------------------------------------------------------
-  Unchanged from today's free tier: dbo.tvfInsightsScopedInstances for the
-  representative user of the recipient group (2-D, branch x category). Every
+  dbo.tvfInsightsScopePairs for the representative user of the recipient
+  group (2-D, branch x category, EntitiesAssignment - the same scope source the
+  RegTrack dashboard's MGMT path reads), then the parity filters above. Every
   recipient in a group shares this exact scope by construction - groups are
   keyed on the scope-pair signature (ResolveDigestRecipientsActivity). So any
   entity a slot proc names is one every recipient of that email can already
@@ -145,10 +177,62 @@
   the orchestrator always passes a real representative user, and a NULL here
   is a caller defect, not a mode.
 
+  [REMOVED 2026-09-29] The @AllowedBranches entitlement filter (RegTrack
+  show-entitlements API, added 2026-09-27) is gone on the product owner's
+  instruction, with dbo.tvfInsightsEntitledScopePairs. This file DROPS that
+  function if an earlier deployment created it.
+
   IDEMPOTENT. PURE ASCII (CLAUDE.md Sec.5a). Target: SQL Server (vitComplianceSystem)
 ===========================================================================*/
 
 SET NOCOUNT ON;
+GO
+
+/*  [RETIRED 2026-09-29] The entitlement-filter function is no longer used by
+    any proc. Dropped here so a database that received the 2026-09-27 revision
+    is cleaned up by redeploying this file.                                  */
+IF OBJECT_ID('dbo.tvfInsightsEntitledScopePairs', 'IF') IS NOT NULL
+    DROP FUNCTION dbo.tvfInsightsEntitledScopePairs;
+GO
+
+/*---------------------------------------------------------------------------
+  RegTrack 2.0 dashboard STATUS RULES (2026-09-29), by ComplianceStatus id.
+  Source: SP_GetManagementDashboardGraphCounts_Statutory (UAT, read 2026-09-29).
+    overdue              IsOverdue: these latest statuses, due date before
+                         today. NOT overdue there: pending review 2,3,11,16,18 /
+                         rejected 6,8 / in progress 10 / closed and final.
+    timed_by_close_date  the two "Approved" ids: on time vs late is decided by
+                         StatusChangedOn vs the due date, not by the id.
+  LICENCE rules (read by sql/35), by Lic_tbl_StatusMaster id. Source:
+  SP_LicenseInstanceTransactionCount (UAT), MGRStatus: Active / Expiring /
+  Expired are the latest status names. Ids per sql/01's verified seed notes
+  (2 Active, 4 Expiring, 3 Expired - each an exact-unique name).
+    lic_active / lic_expiring / lic_expired
+  Re-seeded on every deploy so the table always equals this list.
+---------------------------------------------------------------------------*/
+IF OBJECT_ID('dbo.InsightsFreeDashboardStatusRule', 'U') IS NULL
+    CREATE TABLE dbo.InsightsFreeDashboardStatusRule (
+        RuleName  VARCHAR(30)   NOT NULL,
+        StatusId  INT           NOT NULL,               -- ComplianceStatus.ID
+        Note      NVARCHAR(200) NOT NULL,
+        CONSTRAINT PK_InsightsFreeDashboardStatusRule PRIMARY KEY (RuleName, StatusId)
+    );
+GO
+
+DELETE FROM dbo.InsightsFreeDashboardStatusRule;
+INSERT dbo.InsightsFreeDashboardStatusRule (RuleName, StatusId, Note)
+VALUES ('overdue', 1,  N'Open'),
+       ('overdue', 12, N'Submitted For Interim Review'),
+       ('overdue', 13, N'Interim Review Approved - interim is not final'),
+       ('overdue', 14, N'Interim Rejected'),
+       ('overdue', 21, N'Deviation Applied'),
+       ('overdue', 22, N'Deviation Rejected'),
+       ('overdue', 23, N'Deviation Approved - still open'),
+       ('timed_by_close_date', 7, N'Approved (closed before due date by id)'),
+       ('timed_by_close_date', 9, N'Approved (closed after due date by id)'),
+       ('lic_active',   2, N'Licence status Active (Lic_tbl_StatusMaster)'),
+       ('lic_expiring', 4, N'Licence status Expiring (Lic_tbl_StatusMaster)'),
+       ('lic_expired',  3, N'Licence status Expired (Lic_tbl_StatusMaster)');
 GO
 
 IF OBJECT_ID('dbo.usp_Insights_FreeMonthly_LoadFacts', 'P') IS NOT NULL
@@ -175,6 +259,7 @@ BEGIN
     DECLARE @CurrStart      DATETIME = CAST(@CurrMonthStart AS DATETIME);
     DECLARE @PrevMonthStart DATETIME = DATEADD(MONTH, -1, @CurrStart);
     DECLARE @NextMonthStart DATETIME = DATEADD(MONTH,  1, @CurrStart);
+    DECLARE @AsOfDate       DATETIME = CAST(CAST(@AsOf AS DATE) AS DATETIME);   -- the dashboard compares whole dates
 
     IF @AsOf < @CurrStart OR @AsOf >= @NextMonthStart
         THROW 51237, N'FREE MONTHLY - @AsOf FALLS OUTSIDE THE EDITION MONTH. Most likely a clock mismatch (a UTC @AsOf against a local-time month). Pass @AsOf in the same clock as ComplianceScheduleOn.ScheduleOn. Refusing to compute.', 1;
@@ -186,6 +271,21 @@ BEGIN
         THROW 51230, N'SCOPE DENIED - user has no authorised (branch, category) pairs for this tenant. Refusing to compute.', 1;
 
     EXEC dbo.usp_Insights_AssertStatusCoverage;   -- THROWs 51001 on a dictionary gap; returns no grid
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.InsightsFreeDashboardStatusRule WHERE RuleName = 'overdue')
+       OR NOT EXISTS (SELECT 1 FROM dbo.InsightsFreeDashboardStatusRule WHERE RuleName = 'timed_by_close_date')
+        THROW 51234, N'DICTIONARY GAP - dbo.InsightsFreeDashboardStatusRule is missing a rule set. It holds the RegTrack dashboard status rules and is seeded by sql/34; redeploy sql/34. Refusing to compute.', 1;
+
+    /*  Active, undeleted users of THIS tenant - the dashboard's #tempUser_M.
+        An obligation counts only when one of them holds its performer role.  */
+    IF OBJECT_ID('tempdb..#lf_user') IS NOT NULL DROP TABLE #lf_user;
+    SELECT u.ID
+    INTO #lf_user
+    FROM [User] u
+    WHERE u.CustomerID = @CustomerID
+      AND u.IsDeleted  = 0
+      AND u.IsActive   = 1;
+    CREATE CLUSTERED INDEX IX_lf_user ON #lf_user (ID);
 
     IF OBJECT_ID('tempdb..#lf_risk') IS NOT NULL DROP TABLE #lf_risk;
     SELECT TRY_CAST(p.RawValue AS INT) AS RawValue, p.Meaning
@@ -200,21 +300,44 @@ BEGIN
 
     /*===================================================================
       2. SCOPED INSTANCES - materialised FIRST (scope-first, then reach)
+         Parity filters (header): act not deleted, compliance visible, not
+         ComplianceType 1, and a performer (RoleID 3) held by an active user
+         of this tenant. Risk = instance override first, as the dashboard
+         reads it (COALESCE(CI.Risk, C.RiskType)).
+         Selected here, not via tvfInsightsScopedInstances, because that
+         shared function drops soft-deleted instances and the dashboard does
+         not (header). Same 2-D scope pairs, same branch/compliance filters.
     ===================================================================*/
     INSERT #inst (ComplianceInstanceID, BranchID, CategoryId, ActID, ComplianceID,
                   DepartmentID, Imprisonment, RiskType, RiskClass)
-    SELECT s.ComplianceInstanceID,
-           s.BranchID,
-           s.CategoryId,
-           s.ActID,
-           s.ComplianceID,
+    SELECT ci.ID,
+           ci.CustomerBranchID,
+           a.ComplianceCategoryId,
+           a.ID,
+           ci.ComplianceID,
            ci.DepartmentID,
-           CAST(ISNULL(s.Imprisonment, 0) AS BIT),
-           s.RiskType,
+           CAST(ISNULL(c.Imprisonment, 0) AS BIT),
+           COALESCE(ci.Risk, c.RiskType),
            r.Meaning
-    FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s
-    JOIN ComplianceInstance ci ON ci.ID = s.ComplianceInstanceID
-    LEFT JOIN #lf_risk r       ON r.RawValue = s.RiskType;
+    FROM ComplianceInstance ci
+    JOIN CustomerBranch cb     ON cb.ID = ci.CustomerBranchID
+    JOIN Compliance c          ON c.ID  = ci.ComplianceID
+    JOIN Act a                 ON a.ID  = c.ActID
+    JOIN dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp      -- 2-D: BOTH branch AND category
+         ON sp.BranchID   = ci.CustomerBranchID
+        AND sp.CategoryId = a.ComplianceCategoryId
+    LEFT JOIN #lf_risk r       ON r.RawValue = COALESCE(ci.Risk, c.RiskType)
+    WHERE cb.CustomerID = @CustomerID
+      AND cb.IsDeleted  = 0 AND cb.Status = 1
+      AND c.IsDeleted   = 0
+      AND a.IsDeleted   = 0
+      AND (c.ComplinceVisible = 1 OR c.ComplinceVisible IS NULL)   -- schema spelling
+      AND c.ComplianceType <> 1                                    -- as the dashboard: NULL is excluded too
+      AND EXISTS (SELECT 1
+                  FROM ComplianceAssignment ca
+                  JOIN #lf_user u ON u.ID = ca.UserID
+                  WHERE ca.ComplianceInstanceID = ci.ID
+                    AND ca.RoleID = 3);                            -- 3 = performer (a role id, not a status)
 
     CREATE NONCLUSTERED INDEX IX_inst_branch ON #inst (BranchID) INCLUDE (ActID, Imprisonment, RiskClass);
 
@@ -260,37 +383,44 @@ BEGIN
         CASE WHEN cso.Reviewerid IS NOT NULL AND cso.Reviewerid <> 0 THEN 'schedule'
              WHEN o.ReviewerID IS NOT NULL                           THEN 'instance'
              ELSE 'none' END,
-        CAST(CASE WHEN lt.ID IS NULL THEN 1 ELSE 0 END AS BIT),
-        CASE WHEN lt.ID IS NULL                                               THEN 'open'
-             WHEN d.StatusId IS NULL                                          THEN 'unclassified'
+        CAST(0 AS BIT),              -- NeverTouched: a schedule with no transaction is not loaded (parity)
+        CASE WHEN d.StatusId IS NULL                                          THEN 'unclassified'
+             /*  Parity: the "Approved" ids are timed by close date, not by id. */
+             WHEN d.ClosureClass = 'completed' AND tc.StatusId IS NOT NULL
+                  THEN CASE WHEN lt.StatusChangedOn IS NULL               THEN 'completed_untimed'
+                            WHEN lt.StatusChangedOn <= cso.ScheduleOn      THEN 'completed_on_time'
+                            ELSE 'completed_late' END
              WHEN d.ClosureClass = 'completed' AND d.Timeliness = 'on_time'   THEN 'completed_on_time'
              WHEN d.ClosureClass = 'completed' AND d.Timeliness = 'delayed'   THEN 'completed_late'
              WHEN d.ClosureClass = 'completed'                                THEN 'completed_untimed'
              WHEN d.ClosureClass = 'resolved_terminal'                        THEN 'resolved_terminal'
              WHEN d.ClosureClass = 'open'                                     THEN 'open'
              ELSE 'unclassified' END,
-        CAST(CASE WHEN cso.ScheduleOn <= @AsOf
-                   AND (d.OverdueEligible = 1 OR lt.ID IS NULL) THEN 1 ELSE 0 END AS BIT),
-        CASE WHEN cso.ScheduleOn <= @AsOf AND (d.OverdueEligible = 1 OR lt.ID IS NULL)
+        CAST(CASE WHEN cso.ScheduleOn < @AsOfDate AND od.StatusId IS NOT NULL THEN 1 ELSE 0 END AS BIT),
+        CASE WHEN cso.ScheduleOn < @AsOfDate AND od.StatusId IS NOT NULL
              THEN DATEDIFF(DAY, cso.ScheduleOn, @AsOf) END,
-        CASE WHEN cso.ScheduleOn <= @AsOf AND (d.OverdueEligible = 1 OR lt.ID IS NULL)
+        CASE WHEN cso.ScheduleOn < @AsOfDate AND od.StatusId IS NOT NULL
              THEN CASE WHEN DATEDIFF(DAY, cso.ScheduleOn, @AsOf) <= 30 THEN 'd000_030'
                        WHEN DATEDIFF(DAY, cso.ScheduleOn, @AsOf) <= 60 THEN 'd031_060'
                        WHEN DATEDIFF(DAY, cso.ScheduleOn, @AsOf) <= 90 THEN 'd061_090'
                        ELSE 'd091_plus' END END
     FROM #inst i
     JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
-    OUTER APPLY (SELECT TOP 1 t.StatusId, t.ID
+    /*  CROSS, not OUTER: the dashboard inner-joins the latest transaction, so a
+        schedule with none is not counted anywhere (header, parity).         */
+    CROSS APPLY (SELECT TOP 1 t.StatusId, t.ID, t.StatusChangedOn
                  FROM ComplianceTransaction t
                  WHERE t.ComplianceScheduleOnID = cso.ID
                  ORDER BY t.Dated DESC, t.ID DESC) lt
-    LEFT JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = lt.StatusId
-    LEFT JOIN #lf_owner o                  ON o.ComplianceInstanceID = i.ComplianceInstanceID
+    LEFT JOIN dbo.vInsightsStatusCurrent d            ON d.StatusId  = lt.StatusId
+    LEFT JOIN dbo.InsightsFreeDashboardStatusRule od  ON od.StatusId = lt.StatusId AND od.RuleName = 'overdue'
+    LEFT JOIN dbo.InsightsFreeDashboardStatusRule tc  ON tc.StatusId = lt.StatusId AND tc.RuleName = 'timed_by_close_date'
+    LEFT JOIN #lf_owner o                             ON o.ComplianceInstanceID = i.ComplianceInstanceID
     WHERE cso.IsActive = 1
       AND cso.IsUpcomingNotDeleted = 1
       AND cso.ScheduleOn < @NextMonthStart
       AND (    cso.ScheduleOn >= @PrevMonthStart
-           OR (cso.ScheduleOn <= @AsOf AND (d.OverdueEligible = 1 OR lt.ID IS NULL)) );
+           OR (cso.ScheduleOn < @AsOfDate AND od.StatusId IS NOT NULL) );
 
     CREATE NONCLUSTERED INDEX IX_sched_window ON #sched (WindowPart, Outcome) INCLUDE (ComplianceInstanceID, BranchID);
     CREATE NONCLUSTERED INDEX IX_sched_overdue ON #sched (IsOverdue, AgeBand) INCLUDE (ComplianceInstanceID, BranchID, PerformerID);
@@ -307,7 +437,7 @@ BEGIN
         THROW 51231, N'FREE MONTHLY RECONCILIATION FAILED - a row outside the window is not overdue. Rows outside the window may exist only as overdue stock; the load predicate has drifted. Refusing to publish.', 1;
 
     IF EXISTS (SELECT 1 FROM #sched WHERE WindowPart = 'curr_remaining' AND IsOverdue = 1)
-        THROW 51232, N'FREE MONTHLY RECONCILIATION FAILED - a schedule due AFTER @AsOf is marked overdue. The never-touched-is-overdue ruling applies to PAST-DUE schedules only. Refusing to publish.', 1;
+        THROW 51232, N'FREE MONTHLY RECONCILIATION FAILED - a schedule due AFTER @AsOf is marked overdue. Overdue requires a due date before the as-at date. Refusing to publish.', 1;
 
     IF EXISTS (SELECT 1 FROM #sched
                WHERE (IsOverdue = 1 AND (DaysPastDue IS NULL OR AgeBand IS NULL))
@@ -316,6 +446,7 @@ BEGIN
 
     DROP TABLE #lf_owner;
     DROP TABLE #lf_risk;
+    DROP TABLE #lf_user;
 END
 GO
 

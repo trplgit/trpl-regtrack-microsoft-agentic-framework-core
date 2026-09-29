@@ -107,10 +107,15 @@ public static class FreeDigestRegistration
             ? configuration["FreeDigest:Preview:DraftsDir"]
             : null;
 
+        /*  Recorded-first, live-after: the first draft is replayed, a validator redraft (whose
+            message is not the recorded input) goes to the live writer - otherwise the redraft
+            would be answered with the very draft it is meant to fix.                          */
         if (draftsDir is { Length: > 0 })
-            services.AddSingleton(sp => new FreeMonthlyDigestWriter(new RecordedDraftClient(Path.GetFullPath(draftsDir)), sp.GetRequiredService<IPromptLoader>()));
+            services.AddSingleton(sp => new FreeMonthlyDigestWriter(
+                new RecordedDraftClient(Path.GetFullPath(draftsDir), sp.GetRequiredService<IClaudeClient>()), sp.GetRequiredService<IPromptLoader>()));
         else
             services.AddSingleton<FreeMonthlyDigestWriter>();
+
         /*  FreeDigest:Preview:ReplayDir replaces SQL with slot data captured earlier to disk, so
             prompt and model tuning can continue when the UAT database is unavailable. Development
             only: it is ignored unless FreeDigest:Preview:Enabled is also true, which no deployed

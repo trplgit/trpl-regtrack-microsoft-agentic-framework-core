@@ -18,11 +18,12 @@
     Which site depends on one person?        single_point_of_failure (here)
     Which sites have nothing configured?     ghost_location          (here)
 
-  -- MEMBERS: THE BRANCH LIST, NOT THE FACTS ---------------------------------
-  [TRAP - CLAUDE.md Sec.3] Built from the recipient's authorised branches
-  (tvfInsightsScopePairs), never from #inst. A location with ZERO obligations
-  would vanish from a fact-driven list - and a childless site with nothing
-  configured is itself the coverage finding (sql/05: hid 4 of 16 branches).
+  -- MEMBERS: THE DASHBOARD'S LOCATION LIST (CHANGED 2026-09-29) ------------
+  [SUPERSEDED FOR THE FREE TIER - CLAUDE.md Sec.3 "build rows from the entity
+  list"] Product-owner decision: the location count must equal the RegTrack
+  2.0 dashboard's, and the dashboard lists only branches holding at least one
+  counted obligation. Members are therefore built from #inst. A location with
+  zero counted obligations no longer appears, so ghost_location stays silent.
 
   -- single_point_of_failure --------------------------------------------------
   Eligible = locations with >= @SpofFloor OPEN items (the Instances > 0 guard
@@ -136,11 +137,16 @@ BEGIN
     DECLARE @NextStart DATETIME = DATEADD(MONTH,  1, @CurrStart);
 
     /*===================================================================
-      1. MEMBERS = the recipient's authorised branches (incl. empty ones)
+      1. MEMBERS = the locations the RegTrack dashboard lists (2026-09-29):
+         a branch counts only when it holds at least one counted obligation
+         (SP_GetEntitySummary, MGMT path - see sql/34's parity filters). An
+         authorised branch with nothing counted is NOT a member, so members
+         equal the dashboard's location list. Consequence: ghost_location
+         (below) finds nothing and stays silent - its code is kept.
     ===================================================================*/
     INSERT #mem (MemberId, MemberLabel)
     SELECT b.BranchID, cb.Name
-    FROM (SELECT DISTINCT sp.BranchID FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp) b
+    FROM (SELECT DISTINCT i.BranchID FROM #inst i) b
     JOIN CustomerBranch cb ON cb.ID = b.BranchID;
 
     INSERT #smap (ComplianceScheduleOnID, MemberId)

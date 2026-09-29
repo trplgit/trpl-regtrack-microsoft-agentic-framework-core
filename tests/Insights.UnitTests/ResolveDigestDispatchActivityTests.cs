@@ -8,10 +8,22 @@ using Xunit;
 
 namespace Insights.UnitTests;
 
-/// <summary>The email gateway gate (2026-09-25): resolved live after the entitlement gate, before anyone is claimed.</summary>
+/// <summary>
+/// The email gateway gate (2026-09-25): resolved live after the entitlement gate, before anyone is
+/// claimed. [2026-09-29] Scope is re-resolved live here too (plain SQL scope - the entitlement API
+/// step was removed) and matched to Sunday's artifacts inside the activity.
+/// </summary>
 public sealed class ResolveDigestDispatchActivityTests
 {
-    private static (ResolveDigestDispatchActivity Activity, Mock<IFreeDigestArtifactRepository> Artifacts) Build(EmailGatewayResolution resolution)
+    private static readonly IReadOnlyList<ScopePair> Pairs = [new ScopePair(16873, 1)];
+    private static readonly string Signature = ScopeSignature.For(Pairs);
+
+    private static FreeDigestArtifact Artifact(string signature, DateTime generatedAtUtc) =>
+        new(Guid.NewGuid(), 23, new DateOnly(2026, 8, 23), signature, 357,
+            "ABC Training", generatedAtUtc, generatedAtUtc, "llm", "c", "p", [], "k", "v");
+
+    private static (ResolveDigestDispatchActivity Activity, Mock<IFreeDigestArtifactRepository> Artifacts, Mock<IScopeRepository> Scope) Build(
+        EmailGatewayResolution resolution, IReadOnlyList<FreeDigestArtifact>? pending = null)
     {
         var repo = new Mock<IFreeDigestRepository>();
         repo.Setup(r => r.GetEntitledTenantsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([new FreeDigestTenant(23, "ABC Training")]);
@@ -20,14 +32,12 @@ public sealed class ResolveDigestDispatchActivityTests
         repo.Setup(r => r.GetRecipientsAsync(23, It.IsAny<CancellationToken>()))
             .ReturnsAsync([new FreeDigestRecipient(357, "someone@example.com", "Someone")]);
 
-        var pairs = new List<ScopePair> { new(100, 1) };
-        var scope = new Mock<IScopeRepository>();
-        scope.Setup(s => s.GetScopePairsAsync(357, 23, It.IsAny<CancellationToken>())).ReturnsAsync(pairs);
-
         var artifacts = new Mock<IFreeDigestArtifactRepository>();
         artifacts.Setup(a => a.GetForDispatchAsync(23, 3, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([new FreeDigestArtifact(Guid.NewGuid(), 23, new DateOnly(2026, 8, 23), ScopeSignature.For(pairs), 357,
-                "ABC Training", DateTime.UtcNow, DateTime.UtcNow, "llm", "c", "p", [], "k", "v")]);
+            .ReturnsAsync(pending ?? [Artifact(Signature, DateTime.UtcNow)]);
+
+        var scope = new Mock<IScopeRepository>();
+        scope.Setup(s => s.GetScopePairsAsync(357, 23, It.IsAny<CancellationToken>())).ReturnsAsync(Pairs);
 
         var resolver = new Mock<IEmailGatewayResolver>();
         resolver.Setup(r => r.ResolveAsync(23, It.IsAny<CancellationToken>())).ReturnsAsync(resolution);
@@ -35,18 +45,19 @@ public sealed class ResolveDigestDispatchActivityTests
         var activity = new ResolveDigestDispatchActivity(repo.Object, artifacts.Object, scope.Object, resolver.Object,
             NullLogger<ResolveDigestDispatchActivity>.Instance);
 
-        return (activity, artifacts);
+        return (activity, artifacts, scope);
     }
 
     [Fact]
-    public async Task TheResolvedGatewayIsReturnedWithTheGroups()
+    public async Task TheResolvedGatewayIsReturnedWithTheMatchedGroups()
     {
-        var (activity, _) = Build(new EmailGatewayResolution(EmailGateway.SendGrid, EmailGatewaySource.FailoverSwitch, "switch", []));
+        var (activity, _, _) = Build(new EmailGatewayResolution(EmailGateway.SendGrid, EmailGatewaySource.FailoverSwitch, "switch", []));
 
         var result = await activity.RunAsync(new ResolveDigestDispatchInput(23, 3));
 
         Assert.True(result.ShouldProceed);
-        Assert.Single(result.Groups);
+        var group = Assert.Single(result.Groups);
+        Assert.Equal(357L, Assert.Single(group.Recipients).UserId);
         Assert.Equal((int)EmailGateway.SendGrid, result.EmailGatewayId);
     }
 
@@ -54,7 +65,7 @@ public sealed class ResolveDigestDispatchActivityTests
     [Fact]
     public async Task ARefusedGateway_RefusesTheTenant()
     {
-        var (activity, artifacts) = Build(new EmailGatewayResolution(null, EmailGatewaySource.Refused, "unknown EmailGateWayType 7", []));
+        var (activity, artifacts, scope) = Build(new EmailGatewayResolution(null, EmailGatewaySource.Refused, "unknown EmailGateWayType 7", []));
 
         var result = await activity.RunAsync(new ResolveDigestDispatchInput(23, 3));
 
@@ -64,5 +75,62 @@ public sealed class ResolveDigestDispatchActivityTests
         Assert.Empty(result.Groups);
         Assert.Null(result.EmailGatewayId);
         artifacts.Verify(a => a.GetForDispatchAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        scope.Verify(s => s.GetScopePairsAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>No artifact waiting: nobody's scope is resolved - it would cost SQL for nothing.</summary>
+    [Fact]
+    public async Task NoArtifacts_ResolvesNoScope()
+    {
+        var (activity, _, scope) = Build(new EmailGatewayResolution(EmailGateway.SendGrid, EmailGatewaySource.Default, "default", []), []);
+
+        var result = await activity.RunAsync(new ResolveDigestDispatchInput(23, 3));
+
+        Assert.True(result.ShouldProceed);
+        Assert.Empty(result.Groups);
+        scope.Verify(s => s.GetScopePairsAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>[BUG FOUND LIVE, 2026-09-11] Two artifacts for one signature: the newest wins, nothing throws.</summary>
+    [Fact]
+    public async Task TwoArtifactsForOneSignature_KeepsTheNewest()
+    {
+        var older = Artifact(Signature, new DateTime(2026, 8, 16, 0, 0, 0, DateTimeKind.Utc));
+        var newer = Artifact(Signature, new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc));
+        var (activity, _, _) = Build(new EmailGatewayResolution(EmailGateway.SendGrid, EmailGatewaySource.Default, "default", []), [older, newer]);
+
+        var result = await activity.RunAsync(new ResolveDigestDispatchInput(23, 3));
+
+        Assert.Equal(newer.ArtifactId, Assert.Single(result.Groups).Artifact.ArtifactId);
+    }
+
+    /// <summary>A recipient whose scope changed since Sunday matches no artifact and is counted, never sent to.</summary>
+    [Fact]
+    public async Task ARecipientWhoseScopeChangedSinceSunday_MatchesNoArtifact()
+    {
+        var (activity, _, _) = Build(
+            new EmailGatewayResolution(EmailGateway.SendGrid, EmailGatewaySource.Default, "default", []),
+            [Artifact(ScopeSignature.For([new ScopePair(99999, 1)]), DateTime.UtcNow)]);
+
+        var result = await activity.RunAsync(new ResolveDigestDispatchInput(23, 3));
+
+        Assert.Empty(result.Groups);
+        Assert.Equal(1, result.RecipientsSkippedNoMatchingArtifact);
+    }
+
+    /// <summary>A group is sent only the artifact of its EXACT signature; a group with none gets nothing.</summary>
+    [Fact]
+    public void MatchArtifacts_PairsOnlyExactSignatures()
+    {
+        var artifact = Artifact("sig", DateTime.UtcNow);
+        var matched = new DigestScopeGroup("sig", 1, [new DigestRecipientRef(1, "a@example.com", null)]);
+        var changed = new DigestScopeGroup("other", 2, [new DigestRecipientRef(2, "b@example.com", null), new DigestRecipientRef(3, "c@example.com", null)]);
+
+        var (groups, withoutArtifact) = ResolveDigestDispatchActivity.MatchArtifacts([artifact], [matched, changed]);
+
+        var group = Assert.Single(groups);
+        Assert.Equal(artifact.ArtifactId, group.Artifact.ArtifactId);
+        Assert.Equal(1L, Assert.Single(group.Recipients).UserId);
+        Assert.Equal(2, withoutArtifact);
     }
 }

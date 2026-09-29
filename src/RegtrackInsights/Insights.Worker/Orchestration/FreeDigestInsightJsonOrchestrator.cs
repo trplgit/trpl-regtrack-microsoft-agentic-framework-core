@@ -26,7 +26,21 @@ public sealed record FreeDigestInsightJsonOrchestrationOutput(
 public sealed class FreeDigestInsightJsonOrchestrator : TaskOrchestration<FreeDigestInsightJsonOrchestrationOutput, FreeDigestInsightJsonOrchestrationInput>
 {
     public const string Name = "FreeDigestInsightJsonOrchestrator";
-    public const string Version = "1.0";
+
+    /*  Version history.
+
+        1.0 - the weekly insight JSON lane (ADR-0002, 2026-09-11). The RegTrack show-entitlements
+        lookup (2026-09-27) was changed in place at 1.0.
+
+        Bumped 1.0 -> 1.1 (2026-09-29): the show-entitlements lookup is REMOVED on the product
+        owner's instruction - same removal as FreeDigestGenerateOrchestrator 1.1. No more
+        ResolveRecipientEntitlementsActivity chunks; groups come straight from
+        ResolveDigestRecipientsActivity (plain SQL scope signature); ComposeInsightJsonInput lost
+        AllowedBranchIds. A real call-sequence and payload change. [VERIFY BEFORE DEPLOY] Only 1.1
+        is registered - terminate/purge any in-flight 1.0 instance before deploying. Deploy this
+        worker before, or together with, the sql/34-41 change that drops @AllowedBranches - never
+        the SQL first (see FreeDigestGenerateOrchestrator's 1.1 note). */
+    public const string Version = "1.1";
 
     public override async Task<FreeDigestInsightJsonOrchestrationOutput> RunTask(OrchestrationContext context, FreeDigestInsightJsonOrchestrationInput input)
     {
@@ -44,9 +58,11 @@ public sealed class FreeDigestInsightJsonOrchestrator : TaskOrchestration<FreeDi
         {
             return new FreeDigestInsightJsonOrchestrationOutput(
                 input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
-                ScopeGroups: 0, LlmCalls: 0, Posted: 0, Skipped: 0, resolved.RecipientsWithoutScope,
+                ScopeGroups: 0, LlmCalls: 0, Posted: 0, Skipped: 0, RecipientsWithoutScope: 0,
                 TotalInputTokens: 0, TotalOutputTokens: 0);
         }
+
+        var groups = resolved.Groups;
 
         var llmCalls = 0;
         var posted = 0;
@@ -54,7 +70,7 @@ public sealed class FreeDigestInsightJsonOrchestrator : TaskOrchestration<FreeDi
         var totalInputTokens = 0;
         var totalOutputTokens = 0;
 
-        foreach (var group in resolved.Groups)
+        foreach (var group in groups)
         {
             var composed = await context.ScheduleWithRetry<ComposeInsightJsonOutput>(
                 typeof(ComposeInsightJsonActivity).Name, "1.0", retry,
@@ -82,7 +98,7 @@ public sealed class FreeDigestInsightJsonOrchestrator : TaskOrchestration<FreeDi
 
         return new FreeDigestInsightJsonOrchestrationOutput(
             input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
-            resolved.Groups.Count, llmCalls, posted, skipped, resolved.RecipientsWithoutScope,
+            groups.Count, llmCalls, posted, skipped, resolved.RecipientsWithoutScope,
             totalInputTokens, totalOutputTokens);
     }
 }

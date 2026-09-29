@@ -27,7 +27,25 @@ public sealed record FreeDigestGenerateOrchestrationOutput(
 public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDigestGenerateOrchestrationOutput, FreeDigestGenerateOrchestrationInput>
 {
     public const string Name = "FreeDigestGenerateOrchestrator";
-    public const string Version = "1.0";
+
+    /*  Version history.
+
+        1.0 - two-phase generate (ADR-0001, 2026-09-10). The RegTrack show-entitlements lookup
+        (2026-09-27) was changed in place at 1.0.
+
+        Bumped 1.0 -> 1.1 (2026-09-29): the show-entitlements lookup is REMOVED on the product
+        owner's instruction. No more ResolveRecipientEntitlementsActivity chunks between resolve
+        and claim; ResolveDigestRecipientsActivity groups recipients by their plain SQL scope
+        signature again and returns the groups itself; ComposeDigestInput lost AllowedBranchIds
+        (the slot procs no longer take @AllowedBranches). A real call-sequence and payload
+        change. [VERIFY BEFORE DEPLOY] Only 1.1 is registered, so any in-flight 1.0 instance can
+        no longer be dispatched - terminate/purge FreeDigestGenerateOrchestrator 1.0 instances
+        first, and do not deploy between Sunday generate and Monday send (see
+        FreeDigestSendOrchestrator's 1.1 note). DEPLOY ORDER vs the sql/34-41 change that drops
+        @AllowedBranches: this worker first, or together - never the SQL first. A 1.0 worker still
+        passes @AllowedBranches and fails every slot read (Msg 8144) against procs that no longer
+        declare it; this worker omits it, which the 2026-09-27 procs accept (it defaulted to NULL). */
+    public const string Version = "1.1";
 
     public override async Task<FreeDigestGenerateOrchestrationOutput> RunTask(OrchestrationContext context, FreeDigestGenerateOrchestrationInput input)
     {
@@ -47,9 +65,11 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
         {
             return new FreeDigestGenerateOrchestrationOutput(
                 input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
-                ScopeGroups: 0, LlmCalls: 0, Generated: 0, AlreadyGenerated: 0, resolved.RecipientsWithoutScope,
+                ScopeGroups: 0, LlmCalls: 0, Generated: 0, AlreadyGenerated: 0, RecipientsWithoutScope: 0,
                 TotalInputTokens: 0, TotalOutputTokens: 0);
         }
+
+        var groups = resolved.Groups;
 
         var llmCalls = 0;
         var generated = 0;
@@ -58,7 +78,7 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
         var totalOutputTokens = 0;
         var refused = 0;
 
-        foreach (var group in resolved.Groups)
+        foreach (var group in groups)
         {
             var claim = await context.ScheduleWithRetry<ClaimDigestArtifactOutput>(
                 typeof(ClaimDigestArtifactActivity).Name, "1.0", retry,
@@ -123,7 +143,7 @@ public sealed class FreeDigestGenerateOrchestrator : TaskOrchestration<FreeDiges
 
         return new FreeDigestGenerateOrchestrationOutput(
             input.TenantId, resolved.TenantName, resolved.Decision, resolved.Reason,
-            resolved.Groups.Count, llmCalls, generated, alreadyGenerated, resolved.RecipientsWithoutScope,
+            groups.Count, llmCalls, generated, alreadyGenerated, resolved.RecipientsWithoutScope,
             totalInputTokens, totalOutputTokens, refused);
     }
 }

@@ -15,14 +15,30 @@ namespace Insights.Worker;
 /// did what it should. <c>FreeDigest:Preview:DraftsDir</c> points at a folder of earlier previews;
 /// the slot is read from the user message the writer sends, and the draft comes from that slot's
 /// debug file. Development only: registered only when the preview is enabled.</para>
+///
+/// <para>[2026-09-27] Recorded-first, live-after. Only the FIRST draft - a call whose message is
+/// the slot input itself, a JSON object - is replayed. A rewrite request (the validator's redraft)
+/// is not a JSON object, and goes to <paramref name="live"/>; without
+/// one it throws, as before. Use one DraftsDir per (tenant, scope group): the first file for the
+/// slot is taken whatever tenant wrote it.</para>
 /// </summary>
-public sealed partial class RecordedDraftClient(string draftsDirectory) : IClaudeClient
+public sealed partial class RecordedDraftClient(string draftsDirectory, IClaudeClient? live = null) : IClaudeClient
 {
     public Task<ClaudeCompletionResult> CompleteAsync(string systemPrompt, string userMessage, int maxTokens, CancellationToken cancellationToken = default)
     {
-        using var json = JsonDocument.Parse(userMessage);
-        var slot = json.RootElement.GetProperty("slot").GetString()
-                   ?? throw new InvalidOperationException("The user message carries no slot.");
+        string? slot;
+        try
+        {
+            using var json = JsonDocument.Parse(userMessage);
+            slot = json.RootElement.GetProperty("slot").GetString();
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException && live is not null)
+        {
+            return live!.CompleteAsync(systemPrompt, userMessage, maxTokens, cancellationToken);
+        }
+
+        if (slot is null)
+            throw new InvalidOperationException("The user message carries no slot.");
 
         var file = Directory.EnumerateFiles(draftsDirectory, $"*-{slot}.debug.txt").OrderBy(f => f, StringComparer.Ordinal).FirstOrDefault()
                    ?? throw new FileNotFoundException($"No *-{slot}.debug.txt in {draftsDirectory} to replay a draft from.");
