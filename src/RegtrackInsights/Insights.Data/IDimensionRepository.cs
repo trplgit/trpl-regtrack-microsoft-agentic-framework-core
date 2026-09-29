@@ -125,8 +125,12 @@ public interface IDimensionRepository
         int userId, int customerId, DateTime windowStart, DateTime windowEnd, DateTime? asOf = null, int dormancyMonths = 12, CancellationToken cancellationToken = default);
 
     /// <summary>Licences. Grain is licence TYPE, not branch. Branch-only scope (no category axis) - see LicenceControlTotals.</summary>
+    /// <remarks>[2026-09-29] windowStart/windowEnd = the report period (end exclusive): only licences whose
+    /// END DATE falls in it are counted, RegTrack's own licence-report date filter (sql/v2/24). Both null =
+    /// every licence. The paid pipeline always passes a real period.</remarks>
     Task<DimensionResult<LicenceControlTotals, LicenceRow>> GetLicenceAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+        int userId, int customerId, DateTime? windowStart = null, DateTime? windowEnd = null, DateTime? asOf = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Backlog aging. Overdue schedules by the FY they fell due in - a flow metric, never compare across runs.</summary>
     Task<DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>> GetBacklogAgingAsync(

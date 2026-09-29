@@ -8,7 +8,7 @@ namespace Insights.Agents;
 /// (<c>report_period</c>) without changing <c>IReportHtmlAgent.RenderAsync</c>'s shape - same
 /// AsyncLocal-per-activity-call pattern as <see cref="LangfuseSessionContext"/>. Built in code
 /// from the real window so the model never has to work out (or invent) a date range. Null when
-/// the report has no window (Licence, BacklogAging - counted as of today).
+/// the report has no window (BacklogAging - counted as of today).
 /// </summary>
 public static class ReportPeriodContext
 {
@@ -50,7 +50,7 @@ public static class ReportPeriodContext
 
     /// <summary>
     /// [ADDED 2026-09-28] Same as <see cref="Describe"/>, but null for a dimension that ignores the
-    /// window (Licence, BacklogAging - counted as of the run date): a Q2 request still carries a Q2
+    /// window (BacklogAging - counted as of the run date; Licence follows the period since 2026-09-29): a Q2 request still carries a Q2
     /// window, and printing it over as-of-today data would state a period the numbers do not cover.
     /// A null dimension (fixed_holistic, several dimensions) keeps the window.
     /// </summary>

@@ -247,6 +247,8 @@ Violating any of these is a build-breaking error, not a style preference.
   Same rule for licences (2026-09-29, head of testing): Active / Expired / ... are the licence's latest status
   exactly as RegTrack's licence report (`SP_LicenseMyReport_V2`) labels it - dictionary `LicenceReportStatus`,
   `sql/v2/23` - never worked out from EndDate. Only `EndingNext30` is date-based.
+  The Licence report follows the user's period (`sql/v2/24`): only licences whose END DATE falls in it, exactly
+  RegTrack's date filter (raw EndDate, last day inclusive at 00:00 - a last-day end date with a time is outside).
 - Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
   over a subquery. Use a `LEFT JOIN` and test for `NULL`.
 - Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an
@@ -412,8 +414,8 @@ x5 - x9   DICTIONARY / MASTER DATA GAP
 | 51050-51059 | `07` entity | 51170-51176 | `22`-`25` **shared** (see note) |
 | 51060-51069 | `08` risk | 51190-51199 | `26` forward risk |
 | 51070-51079 | `09` nature | 51200-51209 | `27` coverage gaps |
-| 51080-51089 | `10` departments | 51040-51049, 51150-51159, 51177-51189, 51210+ | **free** |
-| 51090-51099 | `11` act | | |
+| 51080-51089 | `10` departments | 51180 | `v2/24` licence: incomplete report period |
+| 51090-51099 | `11` act | 51041-51049, 51181-51188 | **free** (51040 = shared detector code; 51150-51159 used by `28`; 5117x by `22`-`25`; check 5121x+ before use) |
 | 51100-51109 | `12` users | | |
 | 51110-51119 | `13` internal | | |
 

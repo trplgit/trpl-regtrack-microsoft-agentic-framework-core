@@ -34,12 +34,14 @@ public sealed class ReasoningSourceMapTests
     public void PeriodMap_NeedsAPeriod()
     {
         Assert.Null(ReasoningSourceMap.LoadFilledJson("Act", 11416, 1285, null, null));
+        // [2026-09-29] Licence follows the report period now (sql/v2/24).
+        Assert.Null(ReasoningSourceMap.LoadFilledJson("Licence", 11416, 1285, null, null));
     }
 
     [Fact]
     public void AsOfTodayMap_LoadsWithoutAPeriod()
     {
-        var json = ReasoningSourceMap.LoadFilledJson("Licence", 11416, 1285, null, null);
+        var json = ReasoningSourceMap.LoadFilledJson("BacklogAging", 11416, 1285, null, null);
 
         Assert.NotNull(json);
         var setup = JsonDocument.Parse(json).RootElement.GetProperty("setup_sql").GetString();

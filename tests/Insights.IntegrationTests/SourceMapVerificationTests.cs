@@ -117,7 +117,8 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// Licence has no report period - it counts as of today. Tenant 5 is swapped for 1355: on UAT
+    /// [2026-09-29] Licence follows the report period (sql/v2/24, RegTrack's end-date filter). FY 2025-26 is
+    /// used because it holds most licences for these users (1285: 88 of 180). Tenant 5 is swapped for 1355: on UAT
     /// tenant 5's own Licence procedure refuses (a licence points to a type missing from the master -
     /// the proc's deliberate fail-closed referential check), so there is nothing to compare against.
     /// [2026-09-28] Licence-role scope (sql/21): (29, 38) removed - user 38 is Management with no licence
@@ -131,8 +132,9 @@ public sealed class SourceMapVerificationTests(ITestOutputHelper output)
     [InlineData(5, 989)]
     public async Task Licence_EveryCheckMatchesTheProcedure(int tenantId, int userId)
     {
-        var result = await new SqlDimensionRepository(ConnectionString).GetLicenceAsync(userId, tenantId);
-        await VerifyAsync("Licence", tenantId, userId, DateTime.MinValue, DateTime.MinValue,
+        var (ws, we) = (new DateTime(2025, 4, 1), new DateTime(2026, 4, 1));
+        var result = await new SqlDimensionRepository(ConnectionString).GetLicenceAsync(userId, tenantId, ws, we);
+        await VerifyAsync("Licence", tenantId, userId, ws, we,
             JsonSerializer.SerializeToElement(result.ControlTotals), JsonSerializer.SerializeToElement(result.Rows),
             JsonSerializer.SerializeToElement(result.Assertions), rowSample: 20);
     }

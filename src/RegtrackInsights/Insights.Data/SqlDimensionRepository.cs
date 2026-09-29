@@ -224,13 +224,14 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         `errorBase+2` overload below cannot express that, so this call goes through the explicit
         overload with the real code sets instead of introducing a false collision between them.  */
     public Task<DimensionResult<LicenceControlTotals, LicenceRow>> GetLicenceAsync(
-        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        int userId, int customerId, DateTime? windowStart = null, DateTime? windowEnd = null, DateTime? asOf = null,
+        CancellationToken cancellationToken = default) =>
         ExecuteAsync<LicenceControlTotals, LicenceRow>(
             "Licence", "dbo.usp_Insights_Dimension_Licence",
             scopeDeniedCode: LicenceErrorBase,
             reconciliationCodes: [LicenceErrorBase + 1, LicenceErrorBase + 2, LicenceErrorBase + 3, LicenceErrorBase + 4],
             dictionaryGapCodes: [LicenceErrorBase + 5, LicenceErrorBase + 6, LicenceErrorBase + 7],
-            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf, WindowStart = windowStart, WindowEnd = windowEnd }, null, cancellationToken);
 
     /*  [FIX] sql/22-25 all share ONE 51170-51179 block instead of one block each (see sql/22's
         own header note: single-row/fixed-bucket tenant-wide aggregates, not per-member

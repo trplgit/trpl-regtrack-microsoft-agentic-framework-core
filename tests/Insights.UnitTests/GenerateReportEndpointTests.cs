@@ -721,7 +721,8 @@ public sealed class GenerateReportEndpointTests
         Assert.Empty(enqueuer.Calls);
     }
 
-    /// <summary>BacklogAging/Licence never use a window - free-text periods stay accepted for them.</summary>
+    /// <summary>BacklogAging never uses a window - free-text periods stay accepted for it. (Licence follows the
+    /// period since 2026-09-29 - see Generate_LicenceWithFreeTextPeriod_Returns400.)</summary>
     [Fact]
     public async Task Generate_NonWindowedDimensionsWithFreeTextPeriod_StillQueue()
     {
@@ -732,12 +733,33 @@ public sealed class GenerateReportEndpointTests
         var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
 
         var request = new GenerateReportRequest(
-            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection", RequestedDimensions: ["BacklogAging", "Licence"]);
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection", RequestedDimensions: ["BacklogAging"]);
 
         var response = await client.PostAsJsonAsync("/api/insights/reports", request);
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        Assert.Equal(2, enqueuer.Calls.Count);
+        Assert.Single(enqueuer.Calls);
+    }
+
+    /// <summary>[2026-09-29] Licence counts only licences whose end date falls in the period (sql/v2/24), so a
+    /// period the parser cannot turn into a window is refused before anything is queued.</summary>
+    [Fact]
+    public async Task Generate_LicenceWithFreeTextPeriod_Returns400()
+    {
+        var directory = new FakeTenantDirectory(Eligible(Tenant));
+        var scope = new FakeScopeRepository(scopePairCount: 3);
+        var enqueuer = new FakeRunEnqueuer("insights-1490-licence");
+
+        var client = await InsightsApiTestHost.StartAsync(Caller, directory, scope: scope, enqueuer: enqueuer, cooldown: OpenCooldown());
+
+        var request = new GenerateReportRequest(
+            Tenant, new InsightsScopeRequest("tenant", null), "FY2025-26", "dimension_selection", RequestedDimensions: ["Licence"]);
+
+        var response = await client.PostAsJsonAsync("/api/insights/reports", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertErrorCodeAsync(response, "INVALID_PERIOD");
+        Assert.Empty(enqueuer.Calls);
     }
 
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string expected)

@@ -64,7 +64,7 @@ public sealed class FetchDimensionsActivityTests
             .ReturnsAsync(new DimensionResult<InternalControlTotals, InternalRow>("Internal", new InternalControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetEventAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, 12, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EventControlTotals, EventRow>("Event", new EventControlTotals(), [], [], [], [], []));
-        repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<LicenceControlTotals, LicenceRow>("Licence", new LicenceControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetBacklogAgingAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<BacklogAgingControlTotals, BacklogAgingRow>("BacklogAging", new BacklogAgingControlTotals(), [], [], [], [], []));
@@ -184,7 +184,7 @@ public sealed class FetchDimensionsActivityTests
             .ThrowsAsync(new DimensionReconciliationException("Internal", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetEventAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, 12, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Event", TenantId, new Exception("inner")));
-        repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetLicenceAsync(UserId, TenantId, It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("Licence", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetBacklogAgingAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("BacklogAging", TenantId, new Exception("inner")));

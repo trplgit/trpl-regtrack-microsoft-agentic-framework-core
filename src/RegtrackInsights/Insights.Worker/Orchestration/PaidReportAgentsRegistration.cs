@@ -191,7 +191,7 @@ public static class PaidReportAgentsRegistration
                 // longer a finding (RegTrack parity: every obligation has an active performer, so the
                 // ownership fields are always 0). v3 files stay untouched.
                 ["Departments"] = Build("Departments", "02_composition_freehand_departments_v4.md"),
-                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v4.md"),
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v5.md"),
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
                 ["Location"] = Build("Location", "02_composition_freehand_location_v4.md"),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
@@ -394,7 +394,7 @@ public static class PaidReportAgentsRegistration
                     "05_report_html_dimension_selection_act_v4.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v6.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality

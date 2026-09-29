@@ -2,11 +2,13 @@
   "dimension": "Licence",
   "rowKeyField": "LicenseTypeID",
   "rowNameField": "LicenseTypeName",
-  "note": "Written from usp_Insights_Dimension_Licence (sql/v2/23_usp_Insights_Dimension_Licence_v2.sql) as deployed. Verified by SourceMapVerificationTests - every query must return exactly what the report's procedure returned. Licences are counted as of today (no report period). Active, Expired and every other status column are the licence's latest status exactly as the Status column of RegTrack's own licence report shows it - not worked out from the end date.",
+  "note": "Written from usp_Insights_Dimension_Licence (sql/v2/23_usp_Insights_Dimension_Licence_v2.sql) as deployed. Verified by SourceMapVerificationTests - every query must return exactly what the report's procedure returned. Only licences whose END DATE falls in the report period are counted (RegTrack's own licence-report date filter); the three 'All' totals cover every licence in the user's licence scope. Active, Expired and every other status column are the licence's latest status exactly as the Status column of RegTrack's own licence report shows it - not worked out from the end date.",
   "setup": [
     "DECLARE @UserID INT = {UserID};",
     "DECLARE @CustomerID INT = {CustomerID};",
     "DECLARE @AsOf DATETIME = GETDATE();",
+    "DECLARE @WindowStart DATETIME = '{WindowStart}';",
+    "DECLARE @WindowEnd DATETIME = '{WindowEnd}';",
     "",
     "-- Step 1. Licences at the company's operating branches (Lic_tbl_LicenseInstance, not deleted), narrowed by the",
     "--         user's licence role (User.LicenseRoleID -> Role.Code), the same rule RegTrack's own licence report uses:",
@@ -14,10 +16,10 @@
     "--         (branch, licence type) pairs; Non-Admin (EXCT) only licences on compliance tasks assigned to them.",
     "DECLARE @LicRole VARCHAR(10) = (SELECT r.Code FROM [User] u JOIN Role r ON r.ID = u.LicenseRoleID WHERE u.ID = @UserID AND u.IsDeleted = 0);",
     "IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;",
-    "--         A perpetual licence (IsPermanantActive = 1) has no expiry: its end date is ignored (blanked here, as RegTrack's own",
-    "--         licence report does), so it never counts as ending in the next 30 days.",
+    "--         EndDate is the raw column - RegTrack's date filter reads it raw too. A perpetual licence",
+    "--         (IsPermanantActive = 1) never counts as ending in the next 30 days (check Y12).",
     "SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID, NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID,",
-    "       CASE WHEN ISNULL(li.IsPermanantActive, 0) = 1 THEN NULL ELSE li.EndDate END AS EndDate,",
+    "       li.EndDate,",
     "       CAST(ISNULL(li.IsPermanantActive, 0) AS INT) AS IsPerpetual INTO #lic",
     "FROM Lic_tbl_LicenseInstance li",
     "WHERE li.CustomerID = @CustomerID AND li.IsDeleted = 0",
@@ -57,6 +59,15 @@
     "             WHERE p.Semantic = 'LicenceReportStatus' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL)",
     "SELECT l.LicenseId, b.Label INTO #status",
     "FROM #lic l LEFT JOIN ranked r ON r.LicenseID = l.LicenseId AND r.rn = 1 LEFT JOIN lbl b ON b.StatusId = r.StatusID;",
+    "",
+    "-- Step 3. The report period - RegTrack's own licence-report date filter: keep a licence when its end date is on or",
+    "--         after the first day and on or before the LAST day at 00:00 (RegTrack takes dates without a time, so a",
+    "--         licence ending on the last day with a time of day is outside). No end date (perpetual) = outside.",
+    "--         #allLic keeps every licence for the 'All' totals.",
+    "IF OBJECT_ID('tempdb..#allLic') IS NOT NULL DROP TABLE #allLic;",
+    "SELECT LicenseId, LicenseTypeID INTO #allLic FROM #lic;",
+    "DELETE FROM #lic WHERE EndDate IS NULL OR EndDate < @WindowStart",
+    "   OR EndDate > DATEADD(DAY, -1, CAST(CAST(@WindowEnd AS DATE) AS DATETIME));",
     "",
     "-- Keep today's date for the checks below (each check runs on its own).",
     "IF OBJECT_ID('tempdb..#asof') IS NOT NULL DROP TABLE #asof;",
@@ -119,6 +130,35 @@
       "query": [
         "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
         "WHERE l.LicenseTypeID IS NOT NULL AND s.Label = N'Expired';"
+      ]
+    },
+    {
+      "id": "Z7",
+      "name": "All licences in the user's licence scope (any end date)",
+      "compare": "totals|AllLicences",
+      "tables": "Step 1, before the report-period filter (#allLic).",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #allLic;"
+      ]
+    },
+    {
+      "id": "Z8",
+      "name": "All Active licences (any end date)",
+      "compare": "totals|AllActiveLicences",
+      "tables": "#allLic with a licence type and RegTrack status Active.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #allLic a JOIN #status s ON s.LicenseId = a.LicenseId",
+        "WHERE a.LicenseTypeID IS NOT NULL AND s.Label = N'Active';"
+      ]
+    },
+    {
+      "id": "Z9",
+      "name": "All Expired licences (any end date)",
+      "compare": "totals|AllExpiredLicences",
+      "tables": "#allLic with a licence type and RegTrack status Expired.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #allLic a JOIN #status s ON s.LicenseId = a.LicenseId",
+        "WHERE a.LicenseTypeID IS NOT NULL AND s.Label = N'Expired';"
       ]
     },
     {
@@ -236,7 +276,7 @@
       "compare": "row|EndingNext30",
       "tables": "Not perpetual; end date after today and within 30 days.",
       "query": [
-        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey}",
+        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey} AND IsPerpetual = 0",
         "  AND EndDate > a.AsOf AND EndDate <= DATEADD(DAY, 30, a.AsOf);"
       ]
     },

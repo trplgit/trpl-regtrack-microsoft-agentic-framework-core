@@ -38,6 +38,7 @@ ClosureClass / Timeliness (open/closed/on-time metrics keep their meaning).
 | 21_usp_Insights_GoldenInvariants_v2.sql | golden invariants | G-2 checks the v2 overdue rule (only status 1 Open is overdue-eligible); the v1 identity it used to check no longer applies |
 | 22_licence_report_status_dictionary_v2.sql | dictionary | Semantic `LicenceReportStatus`: each `Lic_tbl_StatusMaster` id -> the label RegTrack's licence report shows (seeded into dictionary v1 and v2, so re-running 01 keeps it) |
 | 23_usp_Insights_Dimension_Licence_v2.sql | usp_Insights_Dimension_Licence | Active / Expired / ... = the licence's latest RegTrack status, one column per label (was: worked out from EndDate) |
+| 24_usp_Insights_Dimension_Licence_window_v2.sql | usp_Insights_Dimension_Licence | supersedes 23: counts only licences whose END DATE falls in the report period (RegTrack's own licence-report date filter, raw EndDate, inclusive last day at 00:00); `AllLicences/AllActiveLicences/AllExpiredLicences` context; NULL period = every licence |
 | 99_rollback_v2.sql | all of the above | restores the pre-v2 definitions (as deployed 2026-09-29) and makes dictionary v1 current |
 
 Every procedure/function file is built from the definition **deployed on UAT** on 2026-09-29 (not the
@@ -77,6 +78,15 @@ Active 5, Expired 2, Applied 24, PendingForReview 38, Not Applicable 15, Rejecte
 Application Rejected 3 - identical to the Excel.
 
 Install order: 22 then 23 (22 must run after 01).
+
+**Report period (24, 2026-09-29).** The Licence report follows the period the user picks, like every other
+dimension. RegTrack's `SP_LicenseMyReport_V2` filters `LI.EndDate >= @dtStart AND LI.EndDate <= @dtEnd` on the raw
+end date, with dates passed as `dd-mm-yyyy` (no time) - so a licence ending on the last day WITH a time of day
+is outside (55 such licences on UAT), and no end date is outside. 24 copies that exactly. Proof: 9 users x 5
+periods (Q1, Q2, last 30 days, last 90 days, FY25-26), every (licence type x status) cell equal to RegTrack's report
+run with the same dates; source map 626/626. Two real bugs were caught by that run before deploying: a
+`WHERE NOT (...)` that kept NULL end dates in every period, and a `< WindowEnd` bound that kept last-day licences
+RegTrack drops. Install 24 after 23 (or instead of it).
 
 ## Consequences
 

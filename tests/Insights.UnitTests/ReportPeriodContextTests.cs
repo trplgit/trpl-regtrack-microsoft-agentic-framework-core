@@ -29,7 +29,6 @@ public sealed class ReportPeriodContextTests
     }
 
     [Theory]
-    [InlineData("Licence")]
     [InlineData("BacklogAging")]
     public void AsOfTodayDimension_GetsNoPeriod_EvenWhenTheRequestCarriedAWindow(string dimension)
     {
@@ -39,6 +38,7 @@ public sealed class ReportPeriodContextTests
     [Theory]
     [InlineData("Act")]
     [InlineData("Users")]
+    [InlineData("Licence")] // [2026-09-29] follows the period now (sql/v2/24)
     [InlineData(null)]
     public void WindowedDimensionOrWholeReport_KeepsThePeriod(string? dimension)
     {

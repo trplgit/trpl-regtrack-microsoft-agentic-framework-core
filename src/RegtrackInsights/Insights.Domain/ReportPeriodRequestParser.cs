@@ -29,7 +29,7 @@ public static class ReportPeriodRequestParser
     /// returns null, instead of queuing a run that can only fail. Case-insensitive.
     /// </summary>
     public static readonly IReadOnlySet<string> WindowRequiredDimensions = new HashSet<string>(
-        ["Act", "Event", "Location", "Entity", "Risk", "Nature", "Departments", "Users", "Internal"],
+        ["Act", "Event", "Location", "Entity", "Risk", "Nature", "Departments", "Users", "Internal", "Licence"],
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

@@ -553,6 +553,13 @@ public sealed record LicenceControlTotals
     public int LicenceTypesReported { get; init; }
     public int LicenceTypesWithLicences { get; init; }
     public int UntypedLicences { get; init; }
+    // [2026-09-29] The report period (sql/v2/24): everything above counts only licences whose end date
+    // falls in it. The All* figures are context across EVERY licence in the user's licence scope.
+    public DateTime? WindowStart { get; init; }
+    public DateTime? WindowEnd { get; init; }
+    public int AllLicences { get; init; }
+    public int AllActiveLicences { get; init; }
+    public int AllExpiredLicences { get; init; }
 }
 
 public sealed record LicenceRow
