@@ -10,7 +10,9 @@ public sealed class BuildReasoningTraceActivityTests
         var result = BuildReasoningTraceActivity.AppendCompletenessCheck(
             "# File\n28 / 33 x 100 = 84.8%", ["28", "33", "84.8%", "1,102"]);
 
-        Assert.Contains("## Numbers not explained above - check manually", result);
+        // [2026-09-29] The file is plain text (served as .txt) - no Markdown heading marks.
+        Assert.Contains("NUMBERS NOT EXPLAINED ABOVE - PLEASE CHECK THESE BY HAND", result);
+        Assert.DoesNotContain("#", result.Substring(result.IndexOf("NUMBERS NOT EXPLAINED", StringComparison.Ordinal)));
         Assert.Contains("- 1,102", result);
         Assert.DoesNotContain("- 84.8%", result);
     }
@@ -20,7 +22,9 @@ public sealed class BuildReasoningTraceActivityTests
     {
         var result = BuildReasoningTraceActivity.AppendCompletenessCheck("28 of 33 = 84.80%", ["28", "33", "84.8%"]);
 
+        Assert.Contains("CHECK DONE BY CODE", result);
         Assert.Contains("All 3 numbers shown on the report appear in this file.", result);
+        Assert.DoesNotContain("##", result);
     }
 
     [Fact]

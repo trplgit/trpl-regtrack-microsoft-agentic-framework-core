@@ -88,7 +88,9 @@ public sealed class ReportContentService(
             if (reasoningMarkdown is not null)
             {
                 var reasoningLocation = await viewPublisher.PublishAsync(
-                    reasoningMarkdown, sasLifetime, extension: "md", contentType: "text/markdown; charset=utf-8",
+                    // [2026-09-29] Served as .txt (user decision) - new traces are plain text (prompt 08 v3);
+                    // an older Markdown trace still opens fine as text.
+                    reasoningMarkdown, sasLifetime, extension: "txt", contentType: "text/plain; charset=utf-8",
                     cancellationToken: cancellationToken);
                 reasoningContentUrl = reasoningLocation.ContentUrl;
             }

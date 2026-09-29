@@ -23,7 +23,9 @@ public sealed class AzureReasoningTraceStore(string storageConnectionString, str
         using var contentStream = new MemoryStream(Encoding.UTF8.GetBytes(markdown));
         await blob.UploadAsync(
             contentStream,
-            new BlobHttpHeaders { ContentType = "text/markdown; charset=utf-8" },
+            // [2026-09-29] Plain text since prompt 08 v3. The blob path keeps its old "-reasoning.md" leaf
+            // on purpose - every report generated before today is found at that same path.
+            new BlobHttpHeaders { ContentType = "text/plain; charset=utf-8" },
             cancellationToken: cancellationToken);
 
         // Same non-PII tag shape as AzureReportBlobWriter's own report blob - a lifecycle policy or

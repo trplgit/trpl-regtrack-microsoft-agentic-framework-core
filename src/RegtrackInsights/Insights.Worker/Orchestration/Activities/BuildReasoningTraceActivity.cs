@@ -109,8 +109,9 @@ public sealed class BuildReasoningTraceActivity(
 
         var missing = ReportClaimExtractor.FindUnexplained(numbersOnReport, markdown);
         var section = missing.Count == 0
-            ? $"\n\n## Completeness check (done by code)\n\nAll {numbersOnReport.Count} numbers shown on the report appear in this file.\n"
-            : $"\n\n## Numbers not explained above - check manually (found by code)\n\n" +
+            // [2026-09-29] Plain text, not Markdown - the file is served as .txt (prompt 08 v3).
+            ? $"\n\nCHECK DONE BY CODE\n\nAll {numbersOnReport.Count} numbers shown on the report appear in this file.\n"
+            : $"\n\nNUMBERS NOT EXPLAINED ABOVE - PLEASE CHECK THESE BY HAND (found by code)\n\n" +
               $"{missing.Count} of the {numbersOnReport.Count} numbers shown on the report are not explained in this file. " +
               "Find each one on the report and check it against the data:\n\n" +
               string.Join("\n", missing.Select(n => $"- {n}")) + "\n";
