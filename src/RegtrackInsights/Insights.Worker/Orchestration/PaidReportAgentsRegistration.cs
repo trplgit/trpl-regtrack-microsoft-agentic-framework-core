@@ -191,7 +191,7 @@ public static class PaidReportAgentsRegistration
                 // longer a finding (RegTrack parity: every obligation has an active performer, so the
                 // ownership fields are always 0). v3 files stay untouched.
                 ["Departments"] = Build("Departments", "02_composition_freehand_departments_v4.md"),
-                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v6.md"),
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v7.md"),
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
                 ["Location"] = Build("Location", "02_composition_freehand_location_v4.md"),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
@@ -243,8 +243,8 @@ public static class PaidReportAgentsRegistration
         // composition already runs on that deployment.
         services.AddSingleton<IAnalystNarrativeAgent>(sp => new MafAnalystNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             freehandEndpoint, freehandModel, freehandApiKey, "AnalystNarrativeAgent", "Traces root cause from typed assertions and raw dimension rows.",
-            // [CHANGED 2026-09-29] v3/ -> v4/ (no ownership findings, RegTrack parity) -> v5/ (Expired licences stated plainly, no "may no longer be valid", source system never named).
-            LoadPromptSync(sp, "v5/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
+            // [CHANGED 2026-09-29] v3/ -> v4/ (no ownership findings, RegTrack parity) -> v5/ (Expired licences stated plainly, no "may no longer be valid", source system never named) -> v6/ (plain language for a compliance manager).
+            LoadPromptSync(sp, "v6/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
             readOnlySqlConnectionString,
             // [WAS null, FIXED 2026-09-23] This was the real gap: the hook existed but nothing
             // durable ever recorded a call. Now every real fetch_scoped_sql_data/write_tenant_memory
@@ -279,7 +279,7 @@ public static class PaidReportAgentsRegistration
         services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateTextAgent(
             endpoint, ExplainerModel, apiKey, "ReasoningExplainerAgent",
             "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
-            LoadPromptSync(sp, "08_reasoning_explainer_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
+            LoadPromptSync(sp, "08_reasoning_explainer_v3.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
             ResponseReasoningEffortLevel.Medium)));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
@@ -394,7 +394,7 @@ public static class PaidReportAgentsRegistration
                     "05_report_html_dimension_selection_act_v4.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v7.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v8.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
