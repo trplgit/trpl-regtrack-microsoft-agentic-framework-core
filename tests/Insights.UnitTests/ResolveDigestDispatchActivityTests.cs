@@ -38,6 +38,7 @@ public sealed class ResolveDigestDispatchActivityTests
 
         var scope = new Mock<IScopeRepository>();
         scope.Setup(s => s.GetScopePairsAsync(357, 23, It.IsAny<CancellationToken>())).ReturnsAsync(Pairs);
+        scope.Setup(s => s.GetLicenceScopePairsAsync(357, 23, It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<LicenceScopePair>)[]);
 
         var resolver = new Mock<IEmailGatewayResolver>();
         resolver.Setup(r => r.ResolveAsync(23, It.IsAny<CancellationToken>())).ReturnsAsync(resolution);

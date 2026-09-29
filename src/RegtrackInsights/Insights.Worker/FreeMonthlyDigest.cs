@@ -138,6 +138,10 @@ public sealed class FreeMonthlyDigestComposer(
         int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride,
         CancellationToken cancellationToken = default)
     {
+        // LangFuse (Insights Basic): every model call below is traced under this tenant's week.
+        using var _ = FreeDigestTelemetry.Push(new FreeDigestTraceContext(
+            tenantId, representativeUserId, Lane, edition.Slot.ToString().ToLowerInvariant(), edition.Sunday));
+
         /*  ONE clock read, clamped into the edition's month. CurrMonthStart comes from the Sunday
             (the claim key), @AsOf from now - sql/34 refuses 51237 if the two disagree, so the clamp
             is what keeps a late retry across a month boundary from being refused.               */

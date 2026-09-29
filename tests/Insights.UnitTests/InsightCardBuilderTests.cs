@@ -247,6 +247,36 @@ public sealed class InsightCardBuilderTests
         Assert.Equal("diagnostic", InsightCardRules.TypeForFact("curr", "this_month", "tm_open_past_due"));
         Assert.Equal("descriptive", InsightCardRules.TypeForFact("prev", "last_month", "lm_still_open"));
         Assert.Equal("diagnostic", InsightCardRules.TypeForFact("stock", "overdue_now", "od_total"));
+        // The one exception: the Licence slot's quiet-week headline (see the next test).
+        Assert.Equal("diagnostic", InsightCardRules.TypeForFact("ctx", "licences", "lic_total"));
+        Assert.Throws<InvalidOperationException>(() => InsightCardRules.TypeForFact("ctx", "licences", "lic_types_in_scope"));
+    }
+
+    /// <summary>
+    /// [FOUND LIVE 2026-09-29] A user whose licences are all valid - nothing expired, lapsing or
+    /// expiring - gets sql/41's last-resort headline, lic_total. That refused to build and failed
+    /// the whole tenant's card run. It must build a quiet, low-severity card instead.
+    /// </summary>
+    [Fact]
+    public void QuietLicenceWeek_LedByTheLicenceTotal_BuildsALowSeverityCard()
+    {
+        var sunday = new DateOnly(2026, 8, 30);   // 5th Sunday = the Licence edition
+        var data = new MonthlyDigestData(
+            MonthlyDigestCalendar.For(sunday),
+            sunday.ToDateTime(new TimeOnly(12, 0)),
+            "fact",
+            [
+                new MonthlyFact("lic_total", 4, "licences tracked in your scope", "licences", 100, "ctx", "volume", 5, false, true),
+                new MonthlyFact("lic_valid", 4, "of those are valid today", "licences", 110, "stock", "volume", 5, false, false),
+                new MonthlyFact("lic_expired_total", 0, "licences are expired today", "licences", 400, "stock", "licence_continuity", 2, false, false),
+            ],
+            [], [], []);
+
+        var card = Build(data);
+
+        Assert.Equal("diagnostic", card.Type);
+        Assert.Equal("low", card.Severity);
+        Assert.Equal(4, card.PrimaryMetric.Current);
     }
 
     /// <summary>[OWNER, 2026-09-27] A live Act card said "personal criminal liability" three times. Banned from every card field.</summary>

@@ -239,6 +239,18 @@ public static class FreeDigestRegistration
     /// </param>
     private static Func<HttpClient, IClaudeClient> BuildChatClientFactory(IConfiguration configuration, string? reasoningEffortOverride = null)
     {
+        /*  [2026-09-29] Every free-digest client is wrapped in TracingClaudeClient, so each model
+            call (email AND insight card) reaches the "Insights Basic" LangFuse project with its
+            tokens, tenant, user and month. A no-op when that project is not configured - see
+            ObservabilityRegistration.AddFreeDigestLangfuse.                                    */
+        var captureContent = configuration.GetValue("Otel:Basic:CaptureContent", false);
+        var inner = BuildUntracedChatClientFactory(configuration, reasoningEffortOverride, out var system, out var model);
+        return http => new TracingClaudeClient(inner(http), system, model, captureContent);
+    }
+
+    private static Func<HttpClient, IClaudeClient> BuildUntracedChatClientFactory(
+        IConfiguration configuration, string? reasoningEffortOverride, out string system, out string model)
+    {
         var provider = Require(configuration, "Llm:Provider");
 
         switch (Normalise(provider))
@@ -298,17 +310,23 @@ public static class FreeDigestRegistration
                             $"Llm:AzureOpenAi:InsightCardReasoningEffort '{effort}' is not a known level (none|minimal|low|medium|high|xhigh|max).");
                 }
 
+                system = "azure_openai";
+                model = deployment;
                 return http => new AzureOpenAiChatClient(
                     http, endpoint, deployment, azureKey, temperature, effort, verbosity, maxOutputTokens);
 
             case "openai":
                 var openAiKey = Require(configuration, "Llm:OpenAi:ApiKey");
                 var openAiModel = configuration["Llm:OpenAi:Model"] ?? "gpt-4o-mini";
+                system = "openai";
+                model = openAiModel;
                 return http => new OpenAiChatClient(http, openAiKey, openAiModel);
 
             case "anthropic":
                 var anthropicKey = Require(configuration, "Llm:Anthropic:ApiKey");
                 var anthropicModel = Require(configuration, "Llm:Anthropic:Model");
+                system = "anthropic";
+                model = anthropicModel;
                 return http => new AnthropicClaudeClient(http, anthropicKey, anthropicModel);
 
             default:

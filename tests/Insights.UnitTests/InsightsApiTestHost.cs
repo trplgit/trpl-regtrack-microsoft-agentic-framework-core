@@ -137,6 +137,9 @@ internal sealed class FakeScopeRepository(int scopePairCount) : IScopeRepository
         return Task.FromResult(pairs);
     }
 
+    public Task<IReadOnlyList<LicenceScopePair>> GetLicenceScopePairsAsync(int userId, int customerId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Not needed by the endpoints under test.");
+
     public Task<ScopeClassification> ClassifyScopeAsync(int userId, int customerId, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Not needed by the endpoints under test.");
 

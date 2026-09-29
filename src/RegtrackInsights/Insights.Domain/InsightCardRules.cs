@@ -23,7 +23,7 @@ public static class InsightCardRules
 
     /// <summary>
     /// The insight type is DERIVED from the winning fact, never promised in advance (spec 6.2):
-    /// a closed set of three, and a context fact can never lead.
+    /// a closed set of three, and a context fact can never lead - with ONE exception below.
     /// </summary>
     public static string TypeForFact(string windowScope, string section, string factKey) => windowScope switch
     {
@@ -32,6 +32,13 @@ public static class InsightCardRules
         "curr" when section == "rest_of_month" || factKey.StartsWith("rm_", StringComparison.Ordinal) => "predictive",
         "curr" when section == "licences" && factKey.Contains("expiring", StringComparison.Ordinal) => "predictive",
         "curr" => "diagnostic",
+        /*  [FOUND LIVE 2026-09-29] The Licence slot's QUIET case: when nothing is expired, lapsing or
+            expiring, sql/41 leads with lic_total by design (its last-resort headline). Since
+            licences follow the RegTrack licence scope (LIC_EntitiesAssignment) that is common - a
+            user holding a few valid licences - and refusing here failed the WHOLE tenant's card
+            run. It reads as a plain "where it sits" card. Only lic_total is let through: any other
+            context fact leading is still a defect and still refuses.                           */
+        "ctx" when factKey == "lic_total" => "diagnostic",
         _ => throw new InvalidOperationException($"A fact with WindowScope '{windowScope}' ({factKey}) cannot lead an insight - refusing to build the card."),
     };
 

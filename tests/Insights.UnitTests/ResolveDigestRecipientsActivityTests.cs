@@ -34,7 +34,8 @@ public sealed class ResolveDigestRecipientsActivityTests
         IReadOnlyList<FreeDigestRecipient> recipients,
         IReadOnlyList<long> claimed,
         IReadOnlyList<long>? jsonClaimed,
-        IReadOnlyDictionary<int, IReadOnlyList<ScopePair>>? scopeByUser = null)
+        IReadOnlyDictionary<int, IReadOnlyList<ScopePair>>? scopeByUser = null,
+        IReadOnlyDictionary<int, IReadOnlyList<LicenceScopePair>>? licencesByUser = null)
     {
         var repo = new Mock<IFreeDigestRepository>();
         var jsonRepo = new Mock<IInsightJsonRepository>();
@@ -59,6 +60,13 @@ public sealed class ResolveDigestRecipientsActivityTests
         scope.Setup(s => s.GetScopePairsAsync(It.IsAny<int>(), Tenant, It.IsAny<CancellationToken>()))
             .ReturnsAsync((int userId, int _, CancellationToken _) =>
                 scopeByUser is not null && scopeByUser.TryGetValue(userId, out var pairs) ? pairs : TenantWide);
+
+        // No licence assignment unless a test says otherwise.
+        scope.Setup(s => s.GetLicenceScopePairsAsync(It.IsAny<int>(), Tenant, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int userId, int _, CancellationToken _) =>
+                licencesByUser is not null && licencesByUser.TryGetValue(userId, out var licences)
+                    ? licences
+                    : (IReadOnlyList<LicenceScopePair>)[]);
 
         return new ResolveDigestRecipientsActivity(
             repo.Object, jsonRepo.Object, scope.Object, new FreeDigestMetrics(), NullLogger<ResolveDigestRecipientsActivity>.Instance);
@@ -137,6 +145,33 @@ public sealed class ResolveDigestRecipientsActivityTests
         Assert.Equal(11782L, Assert.Single(result.Groups[1].Recipients).UserId);
         Assert.Equal(1, result.RecipientsWithoutScope);
         Assert.DoesNotContain(20000L, Members(result));
+    }
+
+    /// <summary>
+    /// [2026-09-29] The leak this closes: same compliance scope, DIFFERENT licence assignments. One
+    /// shared email would carry the representative's licences to a user not assigned them, so the
+    /// two must land in separate groups. Same licences (any order) still share.
+    /// </summary>
+    [Fact]
+    public async Task SameComplianceScope_DifferentLicenceScope_SplitsIntoSeparateGroups()
+    {
+        var licences = new Dictionary<int, IReadOnlyList<LicenceScopePair>>
+        {
+            [357]   = [new LicenceScopePair(16873, 4), new LicenceScopePair(16875, 4)],
+            [1024]  = [new LicenceScopePair(16875, 4), new LicenceScopePair(16873, 4)],   // same set, other order
+            [11782] = [new LicenceScopePair(16873, 4)],                                  // fewer licences
+            [20000] = [],                                                                // none at all
+        };
+        var activity = Build([R(357), R(1024), R(11782), R(20000)], claimed: [], jsonClaimed: [], licencesByUser: licences);
+
+        var result = await activity.RunAsync(new ResolveDigestRecipientsInput(Tenant, AsOf.ToString("O")));
+
+        Assert.Equal(3, result.Groups.Count);
+        Assert.Equal(new[] { 357L, 1024L }, result.Groups[0].Recipients.Select(r => r.UserId));
+        Assert.Equal(11782L, Assert.Single(result.Groups[1].Recipients).UserId);
+        Assert.Equal(20000L, Assert.Single(result.Groups[2].Recipients).UserId);
+        // A user with no licence assignment keeps the compliance-only signature.
+        Assert.Equal(ScopeSignature.For(TenantWide), result.Groups[2].ScopeSignature);
     }
 
     [Fact]

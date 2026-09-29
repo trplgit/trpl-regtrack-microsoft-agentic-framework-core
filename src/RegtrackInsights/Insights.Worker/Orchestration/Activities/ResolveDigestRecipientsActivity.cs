@@ -148,7 +148,8 @@ public sealed class ResolveDigestRecipientsActivity(
     }
 
     /// <summary>
-    /// Groups recipients by the signature of their SQL scope pairs (<see cref="ScopeSignature"/>),
+    /// Groups recipients by the signature of their SQL scope pairs - compliance AND licence
+    /// (<see cref="ScopeSignature.For(IEnumerable{ScopePair}, IEnumerable{LicenceScopePair})"/>),
     /// in first-seen order; the first member of each group is its representative. A recipient with
     /// no pair is counted, never grouped - an empty scope is DENY, never "unrestricted"
     /// (<see cref="IScopeRepository.GetScopePairsAsync"/>).
@@ -166,8 +167,16 @@ public sealed class ResolveDigestRecipientsActivity(
 
         foreach (var recipient in recipients)
         {
-            var pairs = await scopeRepository.GetScopePairsAsync(checked((int)recipient.UserId), tenantId, cancellationToken);
-            var signature = ScopeSignature.For(pairs);
+            var userId = checked((int)recipient.UserId);
+            var pairs = await scopeRepository.GetScopePairsAsync(userId, tenantId, cancellationToken);
+
+            /*  [2026-09-29] Licence scope too: the email's licence figures are cut by
+                LIC_EntitiesAssignment (sql/35), so users may only share an email when their
+                licence assignments match as well - see ScopeSignature.For(pairs, licencePairs). */
+            var licencePairs = pairs.Count == 0
+                ? []
+                : await scopeRepository.GetLicenceScopePairsAsync(userId, tenantId, cancellationToken);
+            var signature = ScopeSignature.For(pairs, licencePairs);
             if (signature.Length == 0)
             {
                 withoutScope++;

@@ -74,6 +74,10 @@ public sealed class InsightCardComposer(
         var input = InsightCardInput.Build(data);
         var cap = digestSettings.InsightJsonTokenCap;
 
+        // LangFuse (Insights Basic): the card's model call is traced under this tenant's week.
+        using var _ = FreeDigestTelemetry.Push(new FreeDigestTraceContext(
+            tenantId, userId, Lane, input.Subject.ToString().ToLowerInvariant(), weekEnding));
+
         // One writer call. A draft that passed every card check ships; anything else is the deterministic card.
         var draft = await writer.DraftAsync(input, input.UserMessage, cap, cancellationToken);
 
