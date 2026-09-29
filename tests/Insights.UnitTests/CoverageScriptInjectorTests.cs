@@ -92,20 +92,30 @@ public sealed class CoverageScriptInjectorTests
     /// covStatusLabel) AND this repo's own docs/PAID_TIER_SAMPLE_REFERENCE.md Sec.3.4
     /// (status_counts: healthy/under_configured/has_ownerless/unmapped, same 4 names) - the
     /// reference taxonomy is not a mock invention, it is this repo's own documented target.
-    /// The four real labels/statuses must all be present in the injected script.
+    /// The real labels/statuses must all be present in the injected script.
+    /// [2026-09-29, RegTrack parity] has_ownerless is gone: every obligation has an active
+    /// performer now, so ownership is never a Coverage status.
     /// </summary>
     [Theory]
     [InlineData("healthy", "Mapped")]
     [InlineData("under_configured", "Under-configured")]
-    [InlineData("has_ownerless", "Has ownerless")]
     [InlineData("unmapped", "Unmapped")]
-    public void Inject_UsesTheRealFourStateTaxonomy_NotAnInventedThreeStateOne(string statusKey, string label)
+    public void Inject_UsesTheRealStatusTaxonomy(string statusKey, string label)
     {
         var result = CoverageScriptInjector.Inject(DocumentWithCoverageGrid);
 
         // Unquoted object-literal key (valid JS identifier), not a quoted string - "healthy:" not "'healthy':".
         Assert.Contains($"{statusKey}:", result, StringComparison.Ordinal);
         Assert.Contains($"'{label}'", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Inject_NeverMentionsOwnership()
+    {
+        var result = CoverageScriptInjector.Inject(DocumentWithCoverageGrid);
+
+        Assert.DoesNotContain("wnerless", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("no performer assigned", result, StringComparison.Ordinal);
     }
 
     /// <summary>Confirmed real hex values, detailed-insights.component.css lines 1047-1050/1067-1070 - green/yellow/orange/red, in that severity order.</summary>

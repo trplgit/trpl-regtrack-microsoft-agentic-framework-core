@@ -224,9 +224,9 @@ public sealed class MafAnalystNarrativeAgent(
                 "your query runs) - it has columns ComplianceInstanceID, BranchID, BranchName, CategoryId, " +
                 "ComplianceID, RiskType, Imprisonment, NatureOfCompliance, ComplianceType, ActID, " +
                 "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
-                "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
-                "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-                "doing this\", OwnerClass tells you which is true). When this run is scoped to a period " +
+                "NoOwnerAnywhere, OwnerClass (the ownership columns carry no finding: every obligation here " +
+                "has an active performer, the same rule RegTrack's own reports use - never build an " +
+                "ownership or missing-owner claim from them). When this run is scoped to a period " +
                 "window, #scoped is ALREADY narrowed to that same window (a real scheduled occurrence " +
                 "inside it) - it reflects the SAME population your dimension_rows describes, never the " +
                 "tenant's full all-time data. Only a single SELECT/WITH statement is " +
@@ -401,9 +401,9 @@ public sealed class MafAnalystNarrativeAgent(
                 "you before your query runs) - it has columns ComplianceInstanceID, BranchID, BranchName, " +
                 "CategoryId, ComplianceID, RiskType, Imprisonment, NatureOfCompliance, ComplianceType, ActID, " +
                 "DepartmentID, DepartmentName, HasInstanceOwner, HasScheduleOwner, NoInstanceOwner, " +
-                "NoOwnerAnywhere, OwnerClass ('instance_assigned'|'schedule_only'|'no_schedules'|'unowned' " +
-                "- ownership has TWO real mechanisms here, never read NoInstanceOwner alone as \"nobody is " +
-                "doing this\", OwnerClass tells you which is true). When this run is scoped to a period " +
+                "NoOwnerAnywhere, OwnerClass (the ownership columns carry no finding: every obligation here " +
+                "has an active performer, the same rule RegTrack's own reports use - never build an " +
+                "ownership or missing-owner claim from them). When this run is scoped to a period " +
                 "window, #scoped is ALREADY narrowed to that same window - it reflects the SAME population " +
                 "your dimension_rows_by_dimension describes, never the tenant's full all-time data. Only a " +
                 "single SELECT/WITH statement is " +

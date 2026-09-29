@@ -228,8 +228,8 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         ExecuteAsync<LicenceControlTotals, LicenceRow>(
             "Licence", "dbo.usp_Insights_Dimension_Licence",
             scopeDeniedCode: LicenceErrorBase,
-            reconciliationCodes: [LicenceErrorBase + 1, LicenceErrorBase + 2],
-            dictionaryGapCodes: [LicenceErrorBase + 5, LicenceErrorBase + 6],
+            reconciliationCodes: [LicenceErrorBase + 1, LicenceErrorBase + 2, LicenceErrorBase + 3, LicenceErrorBase + 4],
+            dictionaryGapCodes: [LicenceErrorBase + 5, LicenceErrorBase + 6, LicenceErrorBase + 7],
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
     /*  [FIX] sql/22-25 all share ONE 51170-51179 block instead of one block each (see sql/22's

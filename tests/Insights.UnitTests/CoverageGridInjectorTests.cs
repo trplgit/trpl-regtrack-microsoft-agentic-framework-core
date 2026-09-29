@@ -63,15 +63,34 @@ public sealed class CoverageGridInjectorTests
         var rows = new List<LocationRow>
         {
             Leaf(1, "Mapped Store", "Haryana", 10, 0, 0, 1, flags: ""),
-            Leaf(2, "Ownerless Store", "Haryana", 10, 0, 4, 1, flags: "high_ownerless"),
             Leaf(3, "Unmapped Store", "Haryana", 0, 0, 0, 0, flags: "no_obligations_configured"),
         };
 
         var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
 
         Assert.Contains("di-covtile di-covtile--healthy", result, StringComparison.Ordinal);
-        Assert.Contains("di-covtile di-covtile--has_ownerless", result, StringComparison.Ordinal);
         Assert.Contains("di-covtile di-covtile--unmapped", result, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// [2026-09-29, RegTrack parity] Every obligation now has an active performer (RegTrack only
+    /// lists those), so ownership is never a Coverage status or figure: no "has ownerless" tile,
+    /// chip, legend entry, KPI pair, rollup sentence or detail-panel line, even for a stale flag.
+    /// </summary>
+    [Fact]
+    public void Inject_NeverShowsOwnership_EvenForAStaleHighOwnerlessFlag()
+    {
+        var rows = new List<LocationRow>
+        {
+            Leaf(1, "A", "Haryana", 10, 0, 4, 1, flags: "high_ownerless"),
+            new() { BranchID = 2, BranchName = "Rollup", StateName = "Haryana", NodeType = EntityNodeType.Intermediate, Instances = 500, Ownerless = 6, DistinctPerformers = 1 },
+        };
+
+        var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
+
+        Assert.Contains("di-covtile di-covtile--healthy", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("wnerless", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("corporate rollup", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -154,7 +173,7 @@ public sealed class CoverageGridInjectorTests
         var rows = new List<LocationRow>
         {
             Leaf(1, "A", "Haryana", 10, 0, 0, 1, flags: ""),
-            Leaf(2, "B", "Haryana", 10, 0, 0, 1, flags: "high_ownerless"),
+            Leaf(2, "B", "Haryana", 10, 0, 0, 1, flags: "single_point_of_failure"),
             Leaf(3, "C", "Haryana", 0, 0, 0, 0, flags: "no_obligations_configured"),
             Leaf(4, "D", "Haryana", 10, 0, 0, 1, flags: ""),
         };
@@ -164,34 +183,6 @@ public sealed class CoverageGridInjectorTests
         Assert.Contains("Locations mapped", result, StringComparison.Ordinal);
         Assert.Contains("di-kpi__pair-val tnum\">3<", result, StringComparison.Ordinal); // 4 leaf - 1 unmapped = 3
         Assert.Contains("75.0% of 4 leaf locations", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Inject_KpiCard_OwnerlessObligationsPair_SumsRealFieldNotStoreCount_SplitsLeafVsRollup()
-    {
-        var rows = new List<LocationRow>
-        {
-            Leaf(1, "A", "Haryana", 10, 0, 3, 1, flags: "high_ownerless"),
-            Leaf(2, "B", "Haryana", 10, 0, 4, 1, flags: "high_ownerless"),
-            new() { BranchID = 3, BranchName = "Rollup", StateName = "Haryana", NodeType = EntityNodeType.Intermediate, Instances = 500, Ownerless = 6, DistinctPerformers = 1 },
-        };
-
-        var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
-
-        Assert.Contains("Ownerless obligations", result, StringComparison.Ordinal);
-        Assert.Contains("di-kpi__pair-val tnum\">13<", result, StringComparison.Ordinal); // 3 + 4 leaf + 6 rollup = 13
-        Assert.Contains("7 on leaf locations", result, StringComparison.Ordinal);
-        Assert.Contains("6 on corporate rollup", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Inject_KpiCard_NoRollupOwnerless_OmitsRollupClauseEntirely_NeverShowsZero()
-    {
-        var rows = new List<LocationRow> { Leaf(1, "A", "Haryana", 10, 0, 3, 1, flags: "high_ownerless") };
-
-        var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
-
-        Assert.DoesNotContain("corporate rollup", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -206,34 +197,31 @@ public sealed class CoverageGridInjectorTests
 
     /// <summary>
     /// [BUG FOUND LIVE, 2026-09-23] .di-kpi__pairs is a fixed 2-column CSS grid
-    /// (05_report_html_fixed_holistic.md's own consolidated declaration). With Peer-coverage gaps
-    /// omitted (UnderConfigured == 0, the common case - see the test above), exactly 3 pairs land
-    /// in that grid, leaving its 4th cell a real blank box - confirmed live on tenant 1008's real
-    /// report. Spanning the last pair (Unmapped locations) full-width closes the gap.
+    /// (05_report_html_fixed_holistic.md's own consolidated declaration) - an odd number of pairs
+    /// leaves a real blank cell (confirmed live on tenant 1008). [2026-09-29] With the ownership
+    /// pair gone, the common case is exactly 2 pairs (Locations mapped + Unmapped locations), which
+    /// fill the grid - no full-width span needed.
     /// </summary>
     [Fact]
-    public void Inject_KpiCard_WithThreePairs_UnmappedLocationsSpansFullWidth_NoDanglingBlankCell()
+    public void Inject_KpiCard_WithTwoPairs_NoFullWidthSpan()
     {
         var rows = new List<LocationRow> { Leaf(1, "A", "Haryana", 10, 0, 0, 1) };
 
         var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
 
-        Assert.Contains("""<div class="di-kpi__pair di-kpi__pair--full"><div class="di-kpi__pair-lbl">Unmapped locations</div>""", result, StringComparison.Ordinal);
+        Assert.Contains("""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped locations</div>""", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("di-kpi__pair--full", result, StringComparison.Ordinal);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(result, "class=\"di-kpi__pair[ \"]").Count);
     }
 
     [Fact]
-    public void Inject_KpiCard_IncludesDescriptionParagraph_MentioningRollupOwnerlessWhenPresent()
+    public void Inject_KpiCard_IncludesDescriptionParagraph()
     {
-        var rows = new List<LocationRow>
-        {
-            Leaf(1, "A", "Haryana", 10, 0, 0, 1),
-            new() { BranchID = 2, BranchName = "Rollup", StateName = "Haryana", NodeType = EntityNodeType.Intermediate, Instances = 500, Ownerless = 6, DistinctPerformers = 1 },
-        };
+        var rows = new List<LocationRow> { Leaf(1, "A", "Haryana", 10, 0, 0, 1) };
 
         var result = CoverageGridInjector.Inject(DocumentWithPlaceholder, rows);
 
         Assert.Contains("one box per location", result, StringComparison.Ordinal);
-        Assert.Contains("is not a leaf location", result, StringComparison.Ordinal);
-        Assert.Contains("6", result, StringComparison.Ordinal);
+        Assert.Contains("Each box is one leaf location", result, StringComparison.Ordinal);
     }
 }

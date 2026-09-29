@@ -36,6 +36,8 @@ ClosureClass / Timeliness (open/closed/on-time metrics keep their meaning).
 | 18_usp_Insights_Dimension_TimelinessFY_v2.sql | TimelinessFY | closure events only on active due dates |
 | 20_usp_Insights_FreeMonthly_LoadFacts_v2.sql | monthly free digest facts | same overdue rule |
 | 21_usp_Insights_GoldenInvariants_v2.sql | golden invariants | G-2 checks the v2 overdue rule (only status 1 Open is overdue-eligible); the v1 identity it used to check no longer applies |
+| 22_licence_report_status_dictionary_v2.sql | dictionary | Semantic `LicenceReportStatus`: each `Lic_tbl_StatusMaster` id -> the label RegTrack's licence report shows (seeded into dictionary v1 and v2, so re-running 01 keeps it) |
+| 23_usp_Insights_Dimension_Licence_v2.sql | usp_Insights_Dimension_Licence | Active / Expired / ... = the licence's latest RegTrack status, one column per label (was: worked out from EndDate) |
 | 99_rollback_v2.sql | all of the above | restores the pre-v2 definitions (as deployed 2026-09-29) and makes dictionary v1 current |
 
 Every procedure/function file is built from the definition **deployed on UAT** on 2026-09-29 (not the
@@ -56,6 +58,25 @@ Written as plain queries against RegTrack's own output (all four statutory tabs,
 | Overdue due dates, as of 2026-09-29 | 2,926* | 2,926 | 2,926 |
 
 \* 174 and 2,932 before the deleted-act rule was added; the 1 + 6 extra were all under a deleted act.
+
+## Licence status (added 2026-09-29, raised by the head of testing)
+
+RegTrack's licence report (`SP_LicenseMyReport_V2`, the Excel testers use) shows each licence's latest status
+(the row at MAX(CreatedOn), `RecentLicenseTransactionView`) through a CASE on the status name. v1 decided
+Active / Lapsed from EndDate instead, so tenant 1285's Transport showed 9 Active where RegTrack shows 5.
+v2 counts RegTrack's label per licence (mapped by status id in the dictionary - the names have whitespace
+duplicates). Rows: `ActiveLicences, Expiring, Expired, Applied, PendingForReview, Rejected,
+ApplicationRejected, Terminated, NotApplicable, OtherStatus` (sum = `TotalLicences`, THROW 51163 otherwise),
+`EndingNext30` (date-based, unchanged rule), `ExpiredPct`. Totals: `TenantActiveLicences`,
+`TenantExpiredLicences`, `TenantExpiredPct`. Removed: `Lapsed`, `ExcludedTerminalState`, `LapsingNext30`,
+`LapsedPct`, `TenantLapsedPct`, `ExcludedTerminalStateLicences`.
+
+Proof (session temp proc, before deploying): 14 users on tenants 1285, 1355, 5 and 23 - every
+(licence type x status) cell equal to RegTrack's own report. 1285 / user 11416: 180 licences, Transport
+Active 5, Expired 2, Applied 24, PendingForReview 38, Not Applicable 15, Rejected 7, Terminated 3,
+Application Rejected 3 - identical to the Excel.
+
+Install order: 22 then 23 (22 must run after 01).
 
 ## Consequences
 

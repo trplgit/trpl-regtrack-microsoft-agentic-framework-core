@@ -187,16 +187,19 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - Departments got the same @WindowStart/@WindowEnd hard
                 // population gate as Act/Event this session; its own "window" data_quality entry
                 // needed the same real-detail-text fix, not the generic-filler default.
-                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v3.md"),
-                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v3.md"),
+                // [ADDED 2026-09-29] v4 on Departments/Location/Risk/Nature/Internal - ownership is no
+                // longer a finding (RegTrack parity: every obligation has an active performer, so the
+                // ownership fields are always 0). v3 files stay untouched.
+                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v4.md"),
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v4.md"),
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
-                ["Location"] = Build("Location", "02_composition_freehand_location_v3.md"),
+                ["Location"] = Build("Location", "02_composition_freehand_location_v4.md"),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // pattern as the five above, not a new mechanism.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same window data_quality fix.
-                ["Risk"] = Build("Risk", "02_composition_freehand_risk_v3.md"),
-                ["Nature"] = Build("Nature", "02_composition_freehand_nature_v3.md"),
-                ["Internal"] = Build("Internal", "02_composition_freehand_internal_v3.md"),
+                ["Risk"] = Build("Risk", "02_composition_freehand_risk_v4.md"),
+                ["Nature"] = Build("Nature", "02_composition_freehand_nature_v4.md"),
+                ["Internal"] = Build("Internal", "02_composition_freehand_internal_v4.md"),
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["Event"] = Build("Event", "02_composition_freehand_event_v3.md"),
                 // [ADDED 2026-09-23] Retires Sambram's fixed single-section Users template - see
@@ -220,7 +223,8 @@ public static class PaidReportAgentsRegistration
 
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",
-            LoadPromptSync(sp, "03_narrative.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>()),
+            // [CHANGED 2026-09-29] 03_narrative.md -> 03_narrative_v2.md (no ownership findings, RegTrack parity).
+            LoadPromptSync(sp, "03_narrative_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>()),
             sp.GetService<IReportEncryptor>(), sp.GetService<IReportDecryptor>(), memoryBlobConnectionString, memoryContainerName,
             sp.GetService<ITenantMemorySummarizer>()));
 
@@ -239,7 +243,8 @@ public static class PaidReportAgentsRegistration
         // composition already runs on that deployment.
         services.AddSingleton<IAnalystNarrativeAgent>(sp => new MafAnalystNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             freehandEndpoint, freehandModel, freehandApiKey, "AnalystNarrativeAgent", "Traces root cause from typed assertions and raw dimension rows.",
-            LoadPromptSync(sp, "v3/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
+            // [CHANGED 2026-09-29] v3/ -> v4/03_narrative_analyst.md (no ownership findings, RegTrack parity).
+            LoadPromptSync(sp, "v4/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort),
             readOnlySqlConnectionString,
             // [WAS null, FIXED 2026-09-23] This was the real gap: the hook existed but nothing
             // durable ever recorded a call. Now every real fetch_scoped_sql_data/write_tenant_memory
@@ -319,14 +324,17 @@ public static class PaidReportAgentsRegistration
 
             // [ADDED 2026-09-27] Every freehand render prompt is now v4 (v3 + section 10 "Atmosphere":
             // hero wash, one corner shape, tinted plot areas). Composition prompts stay v3.
+            // [ADDED 2026-09-29] Location/Departments/Risk/Nature/Internal render prompts are v5, and
+            // fixed_holistic / generic dimension_selection are _v2: ownership is no longer a finding
+            // (RegTrack parity - every obligation has an active performer). Earlier files untouched.
             return new Dictionary<string, IReportHtmlAgent>
             {
                 ["fixed_holistic"] = Build(
                     "ReportHtmlAgent", "Renders the fixed 6-tab Holistic Insights report as self-contained HTML.",
-                    "05_report_html_fixed_holistic.md"),
+                    "05_report_html_fixed_holistic_v2.md"),
                 ["dimension_selection"] = Build(
                     "DimensionSelectionReportHtmlAgent", "Renders a caller-selected subset of dimensions as self-contained HTML, no fixed tabs.",
-                    "05_report_html_dimension_selection.md"),
+                    "05_report_html_dimension_selection_v2.md"),
                 // [ADDED 2026-09-09] Sambram's real, approved "dimension view" design system
                 // (AI-INSIGHTS-BRAND-HANDOFF.md Sec.6, single-section, no tabs, no donut) arrived
                 // AFTER the generic dimension_selection prompt above was built on Trent's design -
@@ -342,7 +350,7 @@ public static class PaidReportAgentsRegistration
                 // own render prompt - see that file's own header for what changed and why.
                 ["dimension_selection:Location"] = Build(
                     "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_location_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_location_v5.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED 2026-09-09, REPLACED AGAIN 2026-09-23] Dimension-
                 // specific override for a single-"Users" request - RenderHtmlActivity's own doc
                 // comment explains the "{ReportType}:{DimensionName}" key-preference rule this
@@ -373,7 +381,7 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v5.md", freehandModel),
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
                     "05_report_html_dimension_selection_backlogaging_v4.md", freehandModel),
@@ -386,20 +394,20 @@ public static class PaidReportAgentsRegistration
                     "05_report_html_dimension_selection_act_v4.md", freehandModel),
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v5.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
                 // fix as Location above.
                 ["dimension_selection:Risk"] = Build(
                     "DimensionSelectionRiskReportHtmlAgent", "Renders a freehand-composed Risk insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_risk_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_risk_v5.md", freehandModel),
                 ["dimension_selection:Nature"] = Build(
                     "DimensionSelectionNatureReportHtmlAgent", "Renders a freehand-composed Nature-of-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_nature_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_nature_v5.md", freehandModel),
                 ["dimension_selection:Internal"] = Build(
                     "DimensionSelectionInternalReportHtmlAgent", "Renders a freehand-composed Statutory-vs-Internal insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_internal_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_internal_v5.md", freehandModel),
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",

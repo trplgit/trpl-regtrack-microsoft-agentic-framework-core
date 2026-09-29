@@ -34,8 +34,9 @@ public static partial class CoverageScriptInjector
     // themselves copied from). The earlier version invented a 3-state model (healthy/"dark" no-
     // obligations/has_ownerless) that silently dropped the RED "unmapped" state entirely and
     // renamed under_configured - not a simplification, a different taxonomy. Never invent
-    // business meaning: this class's job is to reproduce the reference's real 4-state model,
-    // never a new one.
+    // business meaning: this class's job is to reproduce the reference's real model, never a new one.
+    // [2026-09-29, RegTrack parity] has_ownerless removed: Insights now counts only obligations with
+    // an active performer (RegTrack's own rule), so ownership can never be a Coverage status.
     //
     // "Coverage %" and "Peer gap" (both m/n-derived, n = obligations-mapped-count peer norm)
     // degrade to the reference's OWN designed '-' fallback (covCoverPctLabel/covPeerGapLabel
@@ -64,18 +65,16 @@ public static partial class CoverageScriptInjector
               });
             });
           });
-          var LBL = { healthy: 'Mapped', under_configured: 'Under-configured', has_ownerless: 'Has ownerless', unmapped: 'Unmapped' };
+          var LBL = { healthy: 'Mapped', under_configured: 'Under-configured', unmapped: 'Unmapped' };
           var TITLE_SUFFIX = ' in ';
           var SUMMARY = {
             healthy: function (d) { return 'Fully mapped: ' + d.m + ' obligations' + (d.n ? ', at or near the regional norm of ' + d.n + '.' : '.'); },
             under_configured: function (d) { return 'Carries ' + d.m + ' obligations' + (d.n ? ', materially fewer than the ~' + d.n + ' its regional peers carry.' : ', likely under-configured relative to its regional peers.'); },
-            has_ownerless: function (d) { return d.o + ' of ' + d.m + ' obligations have no performer assigned.'; },
             unmapped: function () { return 'No compliance mapped, so this location is invisible to every overdue report. Verify whether it is an operating store or a structural/incomplete record.'; }
           };
           var RECO = {
             healthy: 'No coverage action needed.',
             under_configured: 'Review applicability and complete configuration from the regional template.',
-            has_ownerless: 'Assign a performer at this store.',
             unmapped: 'If operating, configure from the regional template; if structural, exclude from the operating estate.'
           };
           function pctLabel(m, n) { return n ? Math.round((m / n) * 100) + '%' : '—'; }
@@ -87,7 +86,6 @@ public static partial class CoverageScriptInjector
             var m = parseInt(tile.getAttribute('data-instances'), 10) || 0;
             var nRaw = tile.getAttribute('data-peer-norm');
             var n = nRaw ? parseInt(nRaw, 10) : null;
-            var o = parseInt(tile.getAttribute('data-ownerless'), 10) || 0;
             var od = parseInt(tile.getAttribute('data-overdue'), 10) || 0;
             var performerAssigned = tile.getAttribute('data-performer') === 'true';
 
@@ -105,7 +103,7 @@ public static partial class CoverageScriptInjector
             var titleEl = aside.querySelector('.di-covdetail__title');
             if (titleEl) titleEl.textContent = branchName + TITLE_SUFFIX + region;
             var summaryEl = aside.querySelector('.di-covdetail__summary');
-            if (summaryEl) summaryEl.textContent = SUMMARY[st]({ m: m, n: n, o: o });
+            if (summaryEl) summaryEl.textContent = SUMMARY[st]({ m: m, n: n });
 
             var mv = aside.querySelectorAll('.di-covdetail__mv');
             if (mv[0]) {
@@ -118,13 +116,12 @@ public static partial class CoverageScriptInjector
               }
             }
             if (mv[1]) mv[1].textContent = pctLabel(m, n);
-            if (mv[2]) mv[2].textContent = String(o);
-            if (mv[3]) mv[3].textContent = String(od);
-            if (mv[4]) {
-              mv[4].textContent = performerAssigned ? 'Assigned' : 'Unassigned';
-              mv[4].classList.toggle('di-covdetail__mv--bad', !performerAssigned);
+            if (mv[2]) mv[2].textContent = String(od);
+            if (mv[3]) {
+              mv[3].textContent = performerAssigned ? 'Assigned' : 'Unassigned';
+              mv[3].classList.toggle('di-covdetail__mv--bad', !performerAssigned);
             }
-            if (mv[5]) mv[5].textContent = gapLabel(m, n);
+            if (mv[4]) mv[4].textContent = gapLabel(m, n);
 
             var recoEl = aside.querySelector('.di-covdetail__action p');
             if (recoEl) recoEl.textContent = RECO[st];

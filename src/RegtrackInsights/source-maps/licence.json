@@ -2,7 +2,7 @@
   "dimension": "Licence",
   "rowKeyField": "LicenseTypeID",
   "rowNameField": "LicenseTypeName",
-  "note": "Written from usp_Insights_Dimension_Licence (sql/21_dimension_licence.sql) as deployed. Verified by SourceMapVerificationTests - every query must return exactly what the report's procedure returned. Licences are counted as of today (no report period). A licence is 'lapsed' when its end date has passed and it did not end another way (terminated, rejected, renewed or not applicable). Date-based figures move every day.",
+  "note": "Written from usp_Insights_Dimension_Licence (sql/v2/23_usp_Insights_Dimension_Licence_v2.sql) as deployed. Verified by SourceMapVerificationTests - every query must return exactly what the report's procedure returned. Licences are counted as of today (no report period). Active, Expired and every other status column are the licence's latest status exactly as the Status column of RegTrack's own licence report shows it - not worked out from the end date.",
   "setup": [
     "DECLARE @UserID INT = {UserID};",
     "DECLARE @CustomerID INT = {CustomerID};",
@@ -15,7 +15,7 @@
     "DECLARE @LicRole VARCHAR(10) = (SELECT r.Code FROM [User] u JOIN Role r ON r.ID = u.LicenseRoleID WHERE u.ID = @UserID AND u.IsDeleted = 0);",
     "IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;",
     "--         A perpetual licence (IsPermanantActive = 1) has no expiry: its end date is ignored (blanked here, as RegTrack's own",
-    "--         licence report does) and it counts as active, never lapsed.",
+    "--         licence report does), so it never counts as ending in the next 30 days.",
     "SELECT li.ID AS LicenseId, li.CustomerBranchID AS BranchID, NULLIF(li.LicenseTypeID, -1) AS LicenseTypeID,",
     "       CASE WHEN ISNULL(li.IsPermanantActive, 0) = 1 THEN NULL ELSE li.EndDate END AS EndDate,",
     "       CAST(ISNULL(li.IsPermanantActive, 0) AS INT) AS IsPerpetual INTO #lic",
@@ -42,18 +42,21 @@
     "                       AND lst.CreatedOn = (SELECT MAX(l2.CreatedOn) FROM Lic_tbl_LicenseStatusTransaction l2 WHERE l2.LicenseID = li.ID))",
     "                AND EXISTS (SELECT 1 FROM ComplianceTransaction ct WHERE ct.ComplianceScheduleOnID = m.ComplianceScheduleOnID));",
     "",
-    "-- Step 2. Each licence's latest status (Lic_tbl_LicenseStatusTransaction, newest StatusChangeOn) and whether that",
-    "--         status can count as a lapse (status dictionary InsightsEnumPolarity, Semantic = LicenceStatus:",
-    "--         terminated / rejected / renewed / not_applicable can not). No status row at all = can lapse.",
-    "IF OBJECT_ID('tempdb..#lapse') IS NOT NULL DROP TABLE #lapse;",
-    "WITH ranked AS (SELECT lst.LicenseID, lst.StatusID, ROW_NUMBER() OVER (PARTITION BY lst.LicenseID ORDER BY lst.StatusChangeOn DESC) AS rn",
-    "                FROM Lic_tbl_LicenseStatusTransaction lst JOIN #lic l ON l.LicenseId = lst.LicenseID),",
-    "     cls AS (SELECT TRY_CAST(p.RawValue AS INT) AS StatusId,",
-    "                    CASE WHEN p.Meaning IN (N'terminated', N'rejected', N'renewed', N'not_applicable') THEN 0 ELSE 1 END AS LapseEligible",
+    "-- Step 2. Each licence's latest status as RegTrack's own licence report reads it (RecentLicenseTransactionView):",
+    "--         the Lic_tbl_LicenseStatusTransaction row with the newest CreatedOn (IsActive = 1), and the label RegTrack's",
+    "--         report shows for that status id (status dictionary InsightsEnumPolarity, Semantic = LicenceReportStatus -",
+    "--         by id, because status names have whitespace duplicates).",
+    "IF OBJECT_ID('tempdb..#status') IS NOT NULL DROP TABLE #status;",
+    "WITH mx AS (SELECT lst.LicenseID, MAX(lst.CreatedOn) AS Dated FROM Lic_tbl_LicenseStatusTransaction lst",
+    "            JOIN #lic l ON l.LicenseId = lst.LicenseID GROUP BY lst.LicenseID),",
+    "     ranked AS (SELECT lst.LicenseID, lst.StatusID, ROW_NUMBER() OVER (PARTITION BY lst.LicenseID ORDER BY lst.ID DESC) AS rn",
+    "                FROM Lic_tbl_LicenseStatusTransaction lst JOIN mx ON mx.LicenseID = lst.LicenseID AND mx.Dated = lst.CreatedOn",
+    "                WHERE lst.IsActive = 1),",
+    "     lbl AS (SELECT TRY_CAST(p.RawValue AS INT) AS StatusId, p.Meaning AS Label",
     "             FROM dbo.InsightsEnumPolarity p JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1",
-    "             WHERE p.Semantic = 'LicenceStatus' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL)",
-    "SELECT l.LicenseId, c.LapseEligible INTO #lapse",
-    "FROM #lic l LEFT JOIN ranked r ON r.LicenseID = l.LicenseId AND r.rn = 1 LEFT JOIN cls c ON c.StatusId = r.StatusID;",
+    "             WHERE p.Semantic = 'LicenceReportStatus' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL)",
+    "SELECT l.LicenseId, b.Label INTO #status",
+    "FROM #lic l LEFT JOIN ranked r ON r.LicenseID = l.LicenseId AND r.rn = 1 LEFT JOIN lbl b ON b.StatusId = r.StatusID;",
     "",
     "-- Keep today's date for the checks below (each check runs on its own).",
     "IF OBJECT_ID('tempdb..#asof') IS NOT NULL DROP TABLE #asof;",
@@ -80,13 +83,13 @@
     },
     {
       "id": "Z3",
-      "name": "Overall lapsed rate (%)",
-      "compare": "totals|TenantLapsedPct",
-      "tables": "Lapsed licences that have a licence type / ALL licences (typed or not) x 100 - exactly as the procedure does it. Licences with no type (LicenseTypeID -1) count in the bottom number but never as lapsed, so untyped licences pull this rate down.",
+      "name": "Overall Expired share (%)",
+      "compare": "totals|TenantExpiredPct",
+      "tables": "Licences with a licence type whose RegTrack status is Expired / ALL licences (typed or not) x 100 - exactly as the procedure does it.",
       "query": [
         "SELECT CAST(CASE WHEN COUNT(*) = 0 THEN 0",
-        "  ELSE 100.0 * SUM(CASE WHEN l.LicenseTypeID IS NOT NULL AND l.EndDate < a.AsOf AND ISNULL(x.LapseEligible, 1) = 1 THEN 1 ELSE 0 END) / COUNT(*) END AS DECIMAL(5,1)) AS Value",
-        "FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a;"
+        "  ELSE 100.0 * SUM(CASE WHEN l.LicenseTypeID IS NOT NULL AND s.Label = N'Expired' THEN 1 ELSE 0 END) / COUNT(*) END AS DECIMAL(5,1)) AS Value",
+        "FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId;"
       ]
     },
     {
@@ -100,12 +103,22 @@
     },
     {
       "id": "Z5",
-      "name": "Licences past end date that ended another way",
-      "compare": "totals|ExcludedTerminalStateLicences",
-      "tables": "End date passed and latest status is terminated / rejected / renewed / not applicable.",
+      "name": "Active licences (RegTrack status)",
+      "compare": "totals|TenantActiveLicences",
+      "tables": "Licences with a licence type whose RegTrack status is Active.",
       "query": [
-        "SELECT COUNT(*) AS Value FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a",
-        "WHERE l.EndDate < a.AsOf AND x.LapseEligible = 0 AND l.LicenseTypeID IS NOT NULL;"
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID IS NOT NULL AND s.Label = N'Active';"
+      ]
+    },
+    {
+      "id": "Z6",
+      "name": "Expired licences (RegTrack status)",
+      "compare": "totals|TenantExpiredLicences",
+      "tables": "Licences with a licence type whose RegTrack status is Expired.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID IS NOT NULL AND s.Label = N'Expired';"
       ]
     },
     {
@@ -119,45 +132,116 @@
     },
     {
       "id": "Y2",
-      "name": "A licence type's licences still in force",
+      "name": "A licence type's licences with RegTrack status Active",
       "compare": "row|ActiveLicences",
-      "tables": "Perpetual, or end date today or later.",
+      "tables": "Step 2 label = Active.",
       "query": [
-        "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey} AND (IsPerpetual = 1 OR EndDate >= a.AsOf);"
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Active';"
       ]
     },
     {
       "id": "Y3",
-      "name": "A licence type's lapsed licences",
-      "compare": "row|Lapsed",
-      "tables": "End date passed and did not end another way (step 2).",
+      "name": "A licence type's licences with RegTrack status Expired",
+      "compare": "row|Expired",
+      "tables": "Step 2 label = Expired.",
       "query": [
-        "SELECT COUNT(*) AS Value FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a",
-        "WHERE l.LicenseTypeID = {RowKey} AND l.EndDate < a.AsOf AND ISNULL(x.LapseEligible, 1) = 1;"
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Expired';"
       ]
     },
     {
       "id": "Y4",
-      "name": "A licence type's licences that ended another way",
-      "compare": "row|ExcludedTerminalState",
-      "tables": "End date passed and latest status is terminated / rejected / renewed / not applicable.",
+      "name": "A licence type's licences with RegTrack status Expiring",
+      "compare": "row|Expiring",
+      "tables": "Step 2 label = Expiring.",
       "query": [
-        "SELECT COUNT(*) AS Value FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a",
-        "WHERE l.LicenseTypeID = {RowKey} AND l.EndDate < a.AsOf AND x.LapseEligible = 0;"
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Expiring';"
       ]
     },
     {
       "id": "Y5",
+      "name": "A licence type's licences with RegTrack status Applied",
+      "compare": "row|Applied",
+      "tables": "Step 2 label = Applied.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Applied';"
+      ]
+    },
+    {
+      "id": "Y6",
+      "name": "A licence type's licences with RegTrack status PendingForReview",
+      "compare": "row|PendingForReview",
+      "tables": "Step 2 label = PendingForReview.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'PendingForReview';"
+      ]
+    },
+    {
+      "id": "Y7",
+      "name": "A licence type's licences with RegTrack status Rejected",
+      "compare": "row|Rejected",
+      "tables": "Step 2 label = Rejected.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Rejected';"
+      ]
+    },
+    {
+      "id": "Y8",
+      "name": "A licence type's licences with RegTrack status Application Rejected",
+      "compare": "row|ApplicationRejected",
+      "tables": "Step 2 label = Application Rejected.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Application Rejected';"
+      ]
+    },
+    {
+      "id": "Y9",
+      "name": "A licence type's licences with RegTrack status Terminated",
+      "compare": "row|Terminated",
+      "tables": "Step 2 label = Terminated.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Terminated';"
+      ]
+    },
+    {
+      "id": "Y10",
+      "name": "A licence type's licences with RegTrack status Not Applicable",
+      "compare": "row|NotApplicable",
+      "tables": "Step 2 label = Not Applicable.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label = N'Not Applicable';"
+      ]
+    },
+    {
+      "id": "Y11",
+      "name": "A licence type's licences with any other RegTrack status",
+      "compare": "row|OtherStatus",
+      "tables": "Step 2 label = Draft, Registered, Registered & Renewal Filed or Validity Expired.",
+      "query": [
+        "SELECT COUNT(*) AS Value FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId",
+        "WHERE l.LicenseTypeID = {RowKey} AND s.Label IN (N'Draft', N'Registered', N'Registered & Renewal Filed', N'Validity Expired');"
+      ]
+    },
+    {
+      "id": "Y12",
       "name": "A licence type's licences ending in the next 30 days",
-      "compare": "row|LapsingNext30",
-      "tables": "End date after today and within 30 days.",
+      "compare": "row|EndingNext30",
+      "tables": "Not perpetual; end date after today and within 30 days.",
       "query": [
         "SELECT COUNT(*) AS Value FROM #lic CROSS JOIN #asof a WHERE LicenseTypeID = {RowKey}",
         "  AND EndDate > a.AsOf AND EndDate <= DATEADD(DAY, 30, a.AsOf);"
       ]
     },
     {
-      "id": "Y6",
+      "id": "Y13",
       "name": "Locations holding a licence type",
       "compare": "row|BranchesCovered",
       "tables": "Distinct CustomerBranch of this type's licences.",
@@ -166,14 +250,14 @@
       ]
     },
     {
-      "id": "Y7",
-      "name": "A licence type's lapsed rate (%)",
-      "compare": "row|LapsedPct",
+      "id": "Y14",
+      "name": "A licence type's Expired share (%)",
+      "compare": "row|ExpiredPct",
       "tables": "Y3 / Y1 x 100.",
       "query": [
         "SELECT CAST(CASE WHEN COUNT(*) = 0 THEN 0",
-        "  ELSE 100.0 * SUM(CASE WHEN l.EndDate < a.AsOf AND ISNULL(x.LapseEligible, 1) = 1 THEN 1 ELSE 0 END) / COUNT(*) END AS DECIMAL(5,1)) AS Value",
-        "FROM #lic l JOIN #lapse x ON x.LicenseId = l.LicenseId CROSS JOIN #asof a WHERE l.LicenseTypeID = {RowKey};"
+        "  ELSE 100.0 * SUM(CASE WHEN s.Label = N'Expired' THEN 1 ELSE 0 END) / COUNT(*) END AS DECIMAL(5,1)) AS Value",
+        "FROM #lic l JOIN #status s ON s.LicenseId = l.LicenseId WHERE l.LicenseTypeID = {RowKey};"
       ]
     }
   ]

@@ -547,11 +547,12 @@ public sealed record LicenceControlTotals
     public int ScopedLicences { get; init; }
     public int TypedLicences { get; init; }
     public bool Reconciled { get; init; }
-    public decimal TenantLapsedPct { get; init; }
+    public int TenantActiveLicences { get; init; }
+    public int TenantExpiredLicences { get; init; }
+    public decimal TenantExpiredPct { get; init; }
     public int LicenceTypesReported { get; init; }
     public int LicenceTypesWithLicences { get; init; }
     public int UntypedLicences { get; init; }
-    public int ExcludedTerminalStateLicences { get; init; }
 }
 
 public sealed record LicenceRow
@@ -560,12 +561,21 @@ public sealed record LicenceRow
     public string? LicenseTypeName { get; init; }
     public bool IsRetired { get; init; }
     public int TotalLicences { get; init; }
+    // One column per label in the Status column of RegTrack's own licence report (sql/v2/23) -
+    // they sum to TotalLicences. Not worked out from EndDate.
     public int ActiveLicences { get; init; }
-    public int Lapsed { get; init; }
-    public int ExcludedTerminalState { get; init; }
-    public int LapsingNext30 { get; init; }
+    public int Expiring { get; init; }
+    public int Expired { get; init; }
+    public int Applied { get; init; }
+    public int PendingForReview { get; init; }
+    public int Rejected { get; init; }
+    public int ApplicationRejected { get; init; }
+    public int Terminated { get; init; }
+    public int NotApplicable { get; init; }
+    public int OtherStatus { get; init; }
+    public int EndingNext30 { get; init; }
     public int BranchesCovered { get; init; }
-    public decimal? LapsedPct { get; init; }
+    public decimal? ExpiredPct { get; init; }
     public int? OverdueRank { get; init; }
     public string? Flags { get; init; }
 }

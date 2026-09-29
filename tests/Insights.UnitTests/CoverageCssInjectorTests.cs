@@ -27,12 +27,13 @@ public sealed class CoverageCssInjectorTests
     {
         var result = CoverageCssInjector.Inject(DocumentWithGrid);
 
-        foreach (var status in new[] { "healthy", "under_configured", "has_ownerless", "unmapped" })
+        foreach (var status in new[] { "healthy", "under_configured", "unmapped" })
         {
             Assert.Contains($".di-covtile--{status}{{background:", result, StringComparison.Ordinal);
             Assert.Contains($".di-covchip__sw--{status}{{background:", result, StringComparison.Ordinal);
             Assert.Contains($".di-covdetail__pill--{status}{{background:", result, StringComparison.Ordinal);
         }
+        Assert.DoesNotContain("has_ownerless", result, StringComparison.Ordinal); // [2026-09-29] RegTrack parity
     }
 
     [Fact]
@@ -42,7 +43,6 @@ public sealed class CoverageCssInjectorTests
 
         Assert.Contains(".di-covtile--healthy{background:#2e9e5b}", result, StringComparison.Ordinal);
         Assert.Contains(".di-covtile--under_configured{background:#e0a106}", result, StringComparison.Ordinal);
-        Assert.Contains(".di-covtile--has_ownerless{background:#e07a1f}", result, StringComparison.Ordinal);
         Assert.Contains(".di-covtile--unmapped{background:#c0392b}", result, StringComparison.Ordinal);
     }
 

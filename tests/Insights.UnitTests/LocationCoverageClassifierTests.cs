@@ -22,12 +22,13 @@ public sealed class LocationCoverageClassifierTests
         Assert.Equal(CoverageStatus.Unmapped, LocationCoverageClassifier.Classify(row));
     }
 
+    /// <summary>[2026-09-29, RegTrack parity] Every obligation has an active performer now, so a stale high_ownerless flag is not a Coverage status.</summary>
     [Fact]
-    public void Classify_FlagsContainHighOwnerless_ReturnsHasOwnerless()
+    public void Classify_FlagsContainHighOwnerless_IsStillHealthy()
     {
         var row = new LocationRow { BranchID = 1, Flags = "high_ownerless,peer_coverage_gap" };
 
-        Assert.Equal(CoverageStatus.HasOwnerless, LocationCoverageClassifier.Classify(row));
+        Assert.Equal(CoverageStatus.Healthy, LocationCoverageClassifier.Classify(row));
     }
 
     [Fact]
@@ -70,9 +71,8 @@ public sealed class LocationCoverageClassifierTests
         var counts = LocationCoverageClassifier.ComputeCounts(rows);
 
         Assert.Equal(5, counts.Total);
-        Assert.Equal(2, counts.Healthy);
+        Assert.Equal(3, counts.Healthy);
         Assert.Equal(0, counts.UnderConfigured);
-        Assert.Equal(1, counts.HasOwnerless);
         Assert.Equal(2, counts.Unmapped);
     }
 
@@ -84,7 +84,6 @@ public sealed class LocationCoverageClassifierTests
         Assert.Equal(0, counts.Total);
         Assert.Equal(0, counts.Healthy);
         Assert.Equal(0, counts.UnderConfigured);
-        Assert.Equal(0, counts.HasOwnerless);
         Assert.Equal(0, counts.Unmapped);
     }
 }

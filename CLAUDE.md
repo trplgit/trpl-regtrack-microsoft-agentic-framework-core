@@ -240,6 +240,13 @@ Violating any of these is a build-breaking error, not a style preference.
   obligation needs an **active performer** (`RoleID = 3`), a non-deleted act and a visible compliance;
   only active due dates count. Changed objects + dictionary v2 + parity proof: `sql/v2/README.md`.
   Before changing any definition, check what RegTrack's own report SP does.
+  Consequence: ownership / "no owner" is never a finding any more (the fields are always 0). The
+  prompts that mentioned it were versioned (composition `_v4`, render `_v5`, `v4/03_narrative_analyst.md`,
+  `03_narrative_v2.md`, `05_report_html_fixed_holistic_v2.md`, `05_report_html_dimension_selection_v2.md`)
+  and the Coverage tab lost its "Has ownerless" status/KPI/chip. Don't reintroduce ownership findings.
+  Same rule for licences (2026-09-29, head of testing): Active / Expired / ... are the licence's latest status
+  exactly as RegTrack's licence report (`SP_LicenseMyReport_V2`) labels it - dictionary `LicenceReportStatus`,
+  `sql/v2/23` - never worked out from EndDate. Only `EndingNext30` is date-based.
 - Use `SUM(CASE WHEN ... NOT EXISTS (...) ...)` — SQL Server rejects an aggregate
   over a subquery. Use a `LEFT JOIN` and test for `NULL`.
 - Put `EXISTS` or `NOT EXISTS` inside a `CASE` that is an argument to an
