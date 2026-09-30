@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
+    <ProjectReference Include="../../tools/DrainCheck/DrainCheck.csproj" />
   </ItemGroup>
 
   <!-- Trplclientsecret.dll is a raw file Reference, not a PackageReference, in RegtrackInsights.csproj -
