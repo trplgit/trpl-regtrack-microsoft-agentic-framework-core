@@ -16,8 +16,12 @@ public static class DrainCheckQuery
         await connection.OpenAsync(ct);
 
         await using var command = connection.CreateCommand();
+        // [FIXED 2026-09-30, code review finding] 'Suspended' was missing - DurableTaskRunStatusReader
+        // itself maps OrchestrationStatus.Suspended to "running" (still alive, just paused), so a
+        // suspended instance under this version is exactly as unsafe to strand as a Running one:
+        // deleting its class while it is Suspended reproduces the original incident.
         command.CommandText =
-            "SELECT COUNT(*) FROM dt.Instances WHERE Version = @version AND RuntimeStatus IN ('Pending', 'Running')";
+            "SELECT COUNT(*) FROM dt.Instances WHERE Version = @version AND RuntimeStatus IN ('Pending', 'Running', 'Suspended')";
         command.Parameters.AddWithValue("@version", version);
 
         var result = await command.ExecuteScalarAsync(ct);

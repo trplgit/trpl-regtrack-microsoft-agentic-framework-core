@@ -112,6 +112,22 @@ CREATE TABLE dt.Instances (
         Assert.Equal(2, count);
     }
 
+    /// <summary>
+    /// [ADDED 2026-09-30, code review finding] Suspended was missing from the original IN-list.
+    /// DurableTaskRunStatusReader itself treats Suspended as still-alive ("running"), so a suspended
+    /// instance not counted here would let its frozen class get deleted out from under it - the
+    /// same failure class this whole tool exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task CountInFlightAsync_CountsSuspendedInstances()
+    {
+        await InsertRow("i1", "4.4", "Suspended");
+
+        var count = await DrainCheck.DrainCheckQuery.CountInFlightAsync(_testDbConnectionString, "4.4");
+
+        Assert.Equal(1, count);
+    }
+
     [Fact]
     public async Task CountInFlightAsync_ReturnsZero_WhenNothingMatches()
     {
