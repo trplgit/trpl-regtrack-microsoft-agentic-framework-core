@@ -418,7 +418,19 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         asking the render agent to author it. No-op (empty Figures list) for every
         ReportType/dimension combination other than dimension_selection:Licence - narrow trial
         scope on purpose. [VERIFY BEFORE DEPLOY] in-flight 4.3 instances not checked this
-        session. */
+        session.
+
+        [ADDED 2026-09-30] Multi-version dispatch is now available - see docs/superpowers/specs/
+        2026-09-30-orchestrator-multi-version-dispatch-design.md. From the NEXT bump onward: before
+        changing Version below, copy this file into Orchestration/Archived/
+        InsightsReportOrchestratorV{old}.cs, rename the class, strip its changelog to one frozen-
+        header line, and add it to WorkerRegistration.OrchestrationRegistrations under its OLD
+        version string. This is what lets an in-flight run from the outgoing version keep running
+        to completion across this deploy, instead of becoming permanently stuck (the 2026-09-30
+        incident this whole mechanism exists to prevent - see PROJECT_STATE_HANDOFF.md section 1a).
+        Retire the frozen class later via tools/DrainCheck, once it reports zero in-flight instances
+        under that version - no forced timeline, and multiple frozen versions may coexist if a
+        second bump happens before the first has drained. */
     public const string Version = "4.4";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
