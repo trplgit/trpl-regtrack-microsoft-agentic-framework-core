@@ -157,6 +157,7 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
   transition:opacity .18s ease,transform .18s ease,visibility 0s linear .3s}
 .hr:hover .hr-panel,.hr:has(.hr-toggle:checked) .hr-panel{opacity:1;visibility:visible;transform:none;transition-delay:0s}
 .hr:hover .hr-panel{z-index:61}
+.hr.hr-just-closed .hr-panel{opacity:0!important;visibility:hidden!important;transition:none!important}
 .hr-close{position:absolute;top:16px;right:18px;width:32px;height:32px;display:grid;place-items:center;border-radius:8px;
   font-size:26px;line-height:1;color:#6b7280;cursor:pointer}
 .hr-close:hover{background:var(--c-mist);color:#1f2937}
@@ -175,9 +176,10 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
 @media print{.hr-i,.hr-panel{display:none}}
 ```
 
-Add this one small script once, at the end of `<body>`, so Escape closes any pinned panel:
+Add this one small script once, at the end of `<body>`, so Escape closes any pinned panel, and so the close [x] actually hides the panel right away and KEEPS it hidden while the pointer rests on it (found live, 2026-09-30: the [x] sits INSIDE `.hr-panel`, so the pointer is still over `.hr` the instant it is clicked - without this, the `:hover` half of the rule above keeps showing the panel until the mouse fully leaves, which reads as "the close button does nothing"; a fixed timer instead of a real mouseleave check was tried first and failed the same way once the timer ran out while the pointer was still resting there):
 ```js
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.hr-toggle').forEach(function(t){t.checked=false;});}});
+document.querySelectorAll('.hr-close').forEach(function(btn){btn.addEventListener('click',function(){var hr=btn.closest('.hr');if(!hr)return;hr.classList.add('hr-just-closed');hr.addEventListener('mouseleave',function onLeave(){hr.classList.remove('hr-just-closed');hr.removeEventListener('mouseleave',onLeave);});});});
 ```
 
 Each chart's `id` (`hr-load` above) must be unique on the page.
@@ -189,7 +191,7 @@ showing how it is worked out. Reference: a real product screenshot showing exact
 an underlined percentage in a sentence, hover reveals a card with a title, one plain sentence, and
 a "HOW IT IS CALCULATED" fraction box with the real numbers on it.
 
-**Scope - percentages only, never counts.** This dimension has three real percentage shapes: a branch's own overdue rate, the tenant-wide overdue rate, and the tenant-wide on-time rate. Never wrap a plain count ("12 branches, 340 obligations")
+**Scope - percentages only, never counts.** This dimension has five real percentage shapes: a branch's own overdue rate, the tenant-wide overdue rate, the tenant-wide on-time rate, the leaf-branch share of all reported branches, and the single-person-dependency share of branches with obligations. Never wrap a plain count ("12 branches, 340 obligations")
 - only a number that is itself a percentage figure, and only one of the fields below. If you never
 write one of these percentages in your prose this run, this section produces nothing - never invent
 one to have something to wrap.
@@ -273,6 +275,8 @@ percentage or a new formula:**
 | `OverduePct` (a branch row) | Overdue percentage | "The percentage of {BranchName}'s obligations counted this period that are overdue." | Overdue obligations (this branch) | Obligations counted (this branch) |
 | `TenantOverduePct` | Overdue percentage | "The percentage of all obligations counted this period that are overdue." | Overdue obligations (across all branches) | Obligations counted (across all branches) |
 | `TenantOnTimePct` | On-time percentage | "The percentage of completed events across all branches that finished on time." | Completed on time (across all branches) | Completed events (across all branches) |
+| `GhostEntities` / `BranchesReported` (count the `no_obligations_configured`-flagged leaf rows yourself if you state this share - both numbers are real, already in `dimension_rows`/`dimension_control_totals`) | Leaf-branch share | "The percentage of all reported branches that are leaf branches with no obligations in this period." | Leaf branches with no obligations | Branches reported |
+| Count of rows flagged `single_point_of_failure` with `Instances > 0`, over count of rows with `Instances > 0` (both counted from `dimension_rows` - never invented) | Single-person dependency share | "The percentage of branches with obligations in this period that depend on exactly one performer or exactly one reviewer." | Branches depending on one performer or reviewer | Branches with obligations in this period |
 
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
@@ -290,6 +294,53 @@ Rules:
 - Each `id` (`pf-{unique}` above) must be unique on the page, distinct from every chart's own
   `hr-load`-style id and from every other `pf-` id.
 
+
+**7c. Percentage-POINT DIFFERENCES also become a hover-link (NEW, 2026-09-30 - closes a real gap: section 7b above covers plain percentage shares only, so every comparative "X points above/below ..." sentence this dimension's own style rules ask for was shipping as plain, unlinked text - found live via a headless audit of real rendered reports).** Wherever your prose states a point difference between two of this dimension's real percentages, wrap just the point figure (e.g. `46.8 points`) the same way section 7b wraps a plain percentage - same `.hr` mechanism, same hover-to-preview/click-to-pin/Escape-to-close - but the panel shows a SUBTRACTION, not a fraction.
+
+**Scope - only the point-difference shapes below, and only when you actually write that comparison in prose. Never invent a comparison not in this table:**
+
+| Comparison | Title (value substituted; "above" when Value A > Value B, "below" when Value A < Value B) | Description | Value A label | Value B label |
+|---|---|---|---|---|
+| branch `OverduePct` vs `TenantOverduePct` | "{value} points above/below the company-wide rate" | "How {BranchName}'s overdue percentage compares with the company-wide overdue percentage this period." | {BranchName}'s own overdue percentage | Company-wide overdue percentage |
+| branch `OverduePct` vs its own `PeerStateOverduePct` (the reconciling field is `VsPeerStateNormPP`) | "{value} points above/below the {StateName} median" | "How {BranchName}'s overdue percentage compares with the median overdue percentage for company branches in {StateName}." | {BranchName}'s own overdue percentage | {StateName} median overdue percentage |
+
+Reuse `span`-only markup (same reason as 7b above - this sits inside running prose too, never `aside`/`div`/`h4`/`p`):
+```html
+<span class="hr">
+  <input type="checkbox" class="hr-toggle" id="pd-{unique}" aria-label="How this difference is worked out">
+  <label for="pd-{unique}" class="hr-i pf" title="How this difference is worked out">46.8 points</label>
+  <span class="hr-panel pf-panel" role="dialog" aria-label="How this difference is worked out">
+    <label for="pd-{unique}" class="hr-close" aria-label="Close">&times;</label>
+    <span class="hr-title pf-title">46.8 points above the company-wide rate</span>
+    <span class="hr-intro pf-intro">How Baleshwar's overdue percentage compares with the company-wide overdue percentage this period.</span>
+    <span class="pf-formula">
+      <span class="pf-formula-label">HOW IT IS CALCULATED</span>
+      <span class="pf-diff">
+        <span class="pf-diff-row"><span class="pf-diff-value">100.0%</span><span class="pf-diff-label">Baleshwar's own overdue percentage</span></span>
+        <span class="pf-diff-op">&minus;</span>
+        <span class="pf-diff-row"><span class="pf-diff-value">53.2%</span><span class="pf-diff-label">Company-wide overdue percentage</span></span>
+        <span class="pf-diff-op">=</span>
+        <span class="pf-diff-row pf-diff-result"><span class="pf-diff-value">46.8 points</span><span class="pf-diff-label">Difference</span></span>
+      </span>
+    </span>
+  </span>
+</span>
+```
+```css
+.pf-diff{display:flex;flex-direction:column;align-items:center;gap:2px}
+.pf-diff-row{display:flex;align-items:baseline;gap:8px;justify-content:center}
+.pf-diff-value{font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap}
+.pf-diff-label{font-size:11px;color:var(--c-text-2);white-space:nowrap}
+.pf-diff-op{font-size:14px;font-weight:600;color:#1f2937}
+.pf-diff-result .pf-diff-value{color:var(--c-brand)}
+```
+Everything else is identical to section 7b above and already covers `.pf` generically - do not redeclare `.pf-panel`'s `position:fixed`, the `pfPlace` positioning script, or the Escape/close-button script; they already fire for every `.pf` element on the page, this one included.
+
+Rules:
+- **Title** = "{value} points {above/below} {the comparator's plain-English name from the table}" - `above` when Value A > Value B, `below` when Value A < Value B - and the point value itself is always written positive (never a negative number of points).
+- **Value A minus Value B must equal the point figure** (to the same rounding the surrounding prose already uses) - if it does not, you have the wrong scope's numbers, fix it before returning.
+- **Description** = ONE plain sentence naming both real scopes being compared, matching the table's wording with the real names substituted in.
+- Each `id` (`pd-{unique}` above) must be unique on the page, distinct from every other id on the page (charts' `hr-load`, section 7b's own `pf-` ids, and every other `pd-`).
 
 **What goes in the panel.** The composition plan gives you each section's content after the marker
 `HOW TO READ:` inside its `emphasis` - use it as your source, one `.hr-row` per component, and fill

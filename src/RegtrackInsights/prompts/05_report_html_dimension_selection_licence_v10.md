@@ -257,6 +257,7 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
   transition:opacity .18s ease,transform .18s ease,visibility 0s linear .3s}
 .hr:hover .hr-panel,.hr:has(.hr-toggle:checked) .hr-panel{opacity:1;visibility:visible;transform:none;transition-delay:0s}
 .hr:hover .hr-panel{z-index:61}
+.hr.hr-just-closed .hr-panel{opacity:0!important;visibility:hidden!important;transition:none!important}
 .hr-close{position:absolute;top:16px;right:18px;width:32px;height:32px;display:grid;place-items:center;border-radius:8px;
   font-size:26px;line-height:1;color:#6b7280;cursor:pointer}
 .hr-close:hover{background:var(--c-mist);color:#1f2937}
@@ -275,9 +276,10 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
 @media print{.hr-i,.hr-panel{display:none}}
 ```
 
-Add this one small script once, at the end of `<body>`, so Escape closes any pinned panel:
+Add this one small script once, at the end of `<body>`, so Escape closes any pinned panel, and so the close [x] actually hides the panel right away and KEEPS it hidden while the pointer rests on it (found live, 2026-09-30: the [x] sits INSIDE `.hr-panel`, so the pointer is still over `.hr` the instant it is clicked - without this, the `:hover` half of the rule above keeps showing the panel until the mouse fully leaves, which reads as "the close button does nothing"; a fixed timer instead of a real mouseleave check was tried first and failed the same way once the timer ran out while the pointer was still resting there):
 ```js
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.hr-toggle').forEach(function(t){t.checked=false;});}});
+document.querySelectorAll('.hr-close').forEach(function(btn){btn.addEventListener('click',function(){var hr=btn.closest('.hr');if(!hr)return;hr.classList.add('hr-just-closed');hr.addEventListener('mouseleave',function onLeave(){hr.classList.remove('hr-just-closed');hr.removeEventListener('mouseleave',onLeave);});});});
 ```
 
 Each chart's `id` (`hr-load` above) must be unique on the page.
@@ -665,6 +667,8 @@ the next 30 days), `BranchesCovered`, `ExpiredPct`, `OverdueRank`, `Flags`.
 
 **Every real tenant-level total** (`dimension_control_totals`), verbatim: `ScopedLicences`,
 `TypedLicences`, `Reconciled`, `TenantActiveLicences`, `TenantExpiredLicences`, `TenantExpiredPct`,
+`TenantExpiring`, `TenantApplied`, `TenantPendingForReview`, `TenantRejected`,
+`TenantApplicationRejected`, `TenantTerminated`, `TenantNotApplicable`, `TenantOtherStatus`,
 `LicenceTypesReported`, `LicenceTypesWithLicences`, `UntypedLicences` (all for the period only),
 `WindowStart`, `WindowEnd`, and the all-licences context `AllLicences`, `AllActiveLicences`,
 `AllExpiredLicences`.
@@ -675,7 +679,7 @@ the next 30 days), `BranchesCovered`, `ExpiredPct`, `OverdueRank`, `Flags`.
 | "Across all {A} licences, {X} are Active and {E} are Expired" | **REAL** — `AllLicences`, `AllActiveLicences`, `AllExpiredLicences`. Context only - one line, never in a period share or chart. |
 | "{N} of {M} licences are Active" | **REAL** — N = `TenantActiveLicences`; M = `ScopedLicences` (both for the period). Per type: `ActiveLicences` of `TotalLicences`. |
 | "{N} of {M} licences are Expired ({X}%)" | **REAL** — N = `TenantExpiredLicences`, X = `TenantExpiredPct`; M = `ScopedLicences`. Cross-check against the `A-TENANT` assertion's value; if they disagree, use the assertion value and add a data-quality callout. |
-| "{N} licences are Applied / Pending for review / Rejected / Terminated / Not applicable ..." | **REAL** — the matching status column summed over rows. Use the status words. |
+| "{N} licences are Applied / Pending for review / Rejected / Application rejected / Terminated / Not applicable / OtherStatus" | **REAL** — the matching `Tenant*` field (`TenantApplied`, `TenantPendingForReview`, `TenantRejected`, `TenantApplicationRejected`, `TenantTerminated`, `TenantNotApplicable`, `TenantOtherStatus`). **[FOUND LIVE 2026-09-30, REQ-1085] Never sum the per-row status column over `dimension_rows` yourself** — a real report said "8 licences are Pending for review" when the correctly-summed total was 9 (108 rows, only 3 non-zero, easy to drop one by hand). The per-row fields are for naming which TYPE contributes what; the tenant-wide count always comes from its own pre-summed `Tenant*` field. |
 | "{N} licences have lapsed / are past their end date / are overdue" | **NOT AVAILABLE** — statuses are recorded statuses, not end-date based. Never say it. |
 | "All {M} licences are categorised across {T} types" | **REAL only when `UntypedLicences == 0`** — otherwise state the real untyped count instead. |
 | "{N} licences have an end date within the next 30 days (from today)" | **REAL** — `SUM(row.EndingNext30)`. Counted from today, not from the period. |

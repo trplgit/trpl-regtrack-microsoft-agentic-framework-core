@@ -82,6 +82,7 @@ public static class NumberFormulaInjector
               transition:opacity .18s ease,transform .18s ease,visibility 0s linear .3s}
             .hr:hover .hr-panel,.hr:has(.hr-toggle:checked) .hr-panel{opacity:1;visibility:visible;transform:none;transition-delay:0s}
             .hr:hover .hr-panel{z-index:61}
+            .hr.hr-just-closed .hr-panel{opacity:0!important;visibility:hidden!important;transition:none!important}
             .hr-close{position:absolute;top:16px;right:18px;width:32px;height:32px;display:grid;place-items:center;border-radius:8px;
               font-size:26px;line-height:1;color:#6b7280;cursor:pointer}
             .hr-close:hover{background:#f7f8fc;color:#1f2937}
@@ -92,8 +93,22 @@ public static class NumberFormulaInjector
             </style>
             """;
 
+        // [FIX 2026-09-30, found live via headless Playwright audit] The close [x] sits INSIDE
+        // .hr-panel, so the mouse is still over .hr when it is clicked - the CSS ":hover" rule
+        // above keeps the panel visually open regardless of the checkbox state until the pointer
+        // leaves entirely, making the close button look broken. This handler forces it shut on
+        // click via the hr-just-closed class (declared above).
+        // [FIX, same audit, found on the SECOND pass] A fixed setTimeout to lift the suppression
+        // (originally 400ms) reopens the panel out from under the user if their cursor is still
+        // resting on the close button when the timer fires - which it always is, since that is
+        // where they just clicked. The suppression must last until the pointer actually leaves
+        // `.hr`, not until a clock runs out - only then is it safe to lift, because `:hover` has
+        // also gone false by that point, so no reopen-flash is possible.
         const string script = """
-            <script>document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.hr-toggle').forEach(function(t){t.checked=false;});}});</script>
+            <script>
+            document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.hr-toggle').forEach(function(t){t.checked=false;});}});
+            document.querySelectorAll('.hr-close').forEach(function(btn){btn.addEventListener('click',function(){var hr=btn.closest('.hr');if(!hr)return;hr.classList.add('hr-just-closed');hr.addEventListener('mouseleave',function onLeave(){hr.classList.remove('hr-just-closed');hr.removeEventListener('mouseleave',onLeave);});});});
+            </script>
             """;
 
         return style + "<section class=\"mi-block\"><h3>How your numbers are worked out</h3><div class=\"mi-grid\">" + rows + "</div></section>" + script;
