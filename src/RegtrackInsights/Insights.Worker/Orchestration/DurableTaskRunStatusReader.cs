@@ -30,6 +30,40 @@ public sealed class DurableTaskRunStatusReader(
     /// </summary>
     private const string FailureMessage = "Report generation failed. Please try again.";
 
+    /// <summary>
+    /// [ADDED 2026-09-30, FOUND LIVE] A run whose history was written under an orchestrator
+    /// version this worker no longer registers (<see cref="InsightsReportOrchestrator.Version"/>
+    /// bumped since the run started, e.g. 4.3 -> 4.4) can never be resumed by any pod running the
+    /// new build - WorkerRegistration.cs registers exactly one version string, so there is no
+    /// handler left for the old one once a version-bumping deploy lands. A run that has simply
+    /// gone quiet for a long time looks the same from here regardless of whether its version
+    /// still matches - the underlying symptom (a hung activity call the SQL provider's own
+    /// retry/dequeue-count tracking never gives up on) is the same either way.
+    ///
+    /// Confirmed live: 3 real tenant-1285 runs stuck reporting "running" for 4+ hours after a
+    /// version-bumping deploy landed mid-render - zero further history, no queued work item for
+    /// any of them, cancel requests against them silently stuck in the same unreachable queue.
+    /// </summary>
+    private const int StaleMinutes = 30;
+
+    internal static bool IsOrphaned(OrchestrationState state, out string reason)
+    {
+        if (state.Version != InsightsReportOrchestrator.Version)
+        {
+            reason = $"orchestrator version mismatch (run={state.Version}, current={InsightsReportOrchestrator.Version})";
+            return true;
+        }
+
+        if (DateTime.UtcNow - state.LastUpdatedTime > TimeSpan.FromMinutes(StaleMinutes))
+        {
+            reason = $"no progress for over {StaleMinutes} minutes (last update {state.LastUpdatedTime:O})";
+            return true;
+        }
+
+        reason = "";
+        return false;
+    }
+
     public async Task<InsightsRunStatus?> GetStatusAsync(string runId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(runId))
@@ -42,6 +76,18 @@ public sealed class DurableTaskRunStatusReader(
             return null;
 
         var status = MapStatus(state.OrchestrationStatus);
+
+        // CLAUDE.md non-negotiable #2 (fail closed, fail loudly): report this as failed the
+        // moment anyone asks, rather than leaving a false "running" spinner forever - no new
+        // monitoring, no background job, just a truthful answer at read time. Scoped to "running"
+        // only - a "queued" run legitimately has no progress yet, that is a capacity wait, not an
+        // orphaned run, and is not what this check is for.
+        if (status == "running" && IsOrphaned(state, out var orphanReason))
+        {
+            logger.LogError(
+                "Report run {RunId} treated as failed - orphaned ({Reason}).", runId, orphanReason);
+            status = "failed";
+        }
 
         if (status == "failed")
         {
