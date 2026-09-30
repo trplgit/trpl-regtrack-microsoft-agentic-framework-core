@@ -625,20 +625,16 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     internalDiagnostics: [$"ReportType '{input.ReportType}' is neither '{FixedHolisticComposition.ReportType}' nor '{DimensionSelectionComposition.ReportType}' - dynamic composition (compliance_health) was removed 2026-09-11."]);
             }
 
-            // [ADDED 2026-09-30, TRIAL] Node 8i's figures (see that node's own comment further
-            // down for why this is deterministic code, not a render-prompt instruction). Pure JSON
-            // deserialization of already-composed data, no I/O/clock/randomness of its own - safe
-            // directly in the orchestrator body, same reasoning as locationRows/backlogAgingResult/
-            // forwardRiskResult further below. Empty for every dimension other than Licence -
-            // narrow trial scope on purpose.
+            // [ADDED 2026-09-30, DISABLED SAME DAY] Node 8i's figures. Built and proven live
+            // (14/14 real fields rendered correctly, commit d9e3968) but the user asked for the
+            // bottom-of-page reference strip to be taken back out of the report after seeing it -
+            // they want the INLINE percentage hover-link (section 7b in the Licence render prompt)
+            // instead, not a separate strip. Left at `[]` unconditionally rather than deleting the
+            // feature outright: NumberFormulaInjector/LicenceNumberFormulas/InjectNumberFormulaActivity
+            // are still real, tested, reusable code (Insights.UnitTests) - only this one call site
+            // is disabled. Node 8i itself (further down) still runs every time, correctly no-ops on
+            // an empty list.
             IReadOnlyList<NumberFormulaInjector.Figure> numberFormulaFigures = [];
-            if (freehandDimensionName == "Licence" && freehandControlTotalsJson is not null && freehandRowsJson is not null)
-            {
-                var licenceTotals = System.Text.Json.JsonSerializer.Deserialize<LicenceControlTotals>(freehandControlTotalsJson);
-                var licenceRows = System.Text.Json.JsonSerializer.Deserialize<List<LicenceRow>>(freehandRowsJson);
-                if (licenceTotals is not null && licenceRows is not null)
-                    numberFormulaFigures = LicenceNumberFormulas.Build(licenceTotals, licenceRows);
-            }
 
             SetStage(InsightsRunStage.Narrating);
             NarrativeResult narrative;
