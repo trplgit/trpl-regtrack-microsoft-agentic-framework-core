@@ -430,7 +430,18 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         incident this whole mechanism exists to prevent - see PROJECT_STATE_HANDOFF.md section 1a).
         Retire the frozen class later via tools/DrainCheck, once it reports zero in-flight instances
         under that version - no forced timeline, and multiple frozen versions may coexist if a
-        second bump happens before the first has drained. */
+        second bump happens before the first has drained.
+
+        [ADDED 2026-09-30, code review finding] Freezing this FILE does not freeze whatever
+        Insights.Domain helpers RunTask below calls directly (in-process, not via ScheduleTask) -
+        FreehandDimensions.Names, FixedHolisticComposition.Build/.Dimensions,
+        DimensionSelectionComposition.Build. A frozen instance replays against whatever those
+        classes look like NOW, not what they looked like when it was frozen - same residual-risk
+        category as activities (see the spec's section 3.4), not something the freeze step protects
+        against. This already changed once for exactly this reason (Users joining
+        FreehandDimensions.Names drove the 3.8 -> 3.9 bump) - if a future bump touches one of these
+        again while an earlier frozen version is still draining, that is worth a second look before
+        assuming the freeze alone is sufficient. */
     public const string Version = "4.4";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for

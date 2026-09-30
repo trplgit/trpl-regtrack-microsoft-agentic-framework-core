@@ -97,10 +97,11 @@ confirmation of the root cause.
   before writing code. A lighter variant (register the old version as a stub that cleanly refuses
   with "report interrupted by an update, please regenerate" instead of trying to let it finish) was
   also discussed - still just a discussion, nothing built.
-- Neither A nor B is implemented. If you pick this up, brainstorm/scope B properly first per the
-  project's own process convention (this file's own history shows every prior orchestrator
-  call-sequence change gets a full doc-comment changelog entry in `InsightsReportOrchestrator.cs`
-  BEFORE shipping - don't skip that discipline for whichever option gets built).
+- **[UPDATED 2026-09-30, later the same day] B is now built** - see this file's own section 4 item 1
+  and `docs/superpowers/specs/2026-09-30-orchestrator-multi-version-dispatch-design.md` /
+  `docs/superpowers/plans/2026-09-30-orchestrator-multi-version-dispatch.md`. Option A (auto-purge
+  on detection) was superseded by B rather than built separately. Read section 4 item 1 for the
+  current state - this paragraph is left in place only for the incident's own history/context.
 
 **Files to read for this specific incident, in order:**
 1. `src/RegtrackInsights/Insights.Worker/Orchestration/InsightsReportOrchestrator.cs` - the

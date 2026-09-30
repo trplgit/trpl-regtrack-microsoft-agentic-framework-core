@@ -115,6 +115,22 @@ this project's actual orchestrator version bumps (per `InsightsReportOrchestrato
 changelog) have been call-sequence changes - which order/how many activities get called - not
 changes to an individual activity's own input/output shape. If that pattern ever changes, revisit.
 
+**[ADDED 2026-09-30, code review finding] The same residual risk applies to shared static helpers
+the orchestrator body calls IN-PROCESS, not just activities scheduled via `ScheduleTask`.** A frozen
+copy is only literally a byte-for-byte copy of `InsightsReportOrchestrator.cs` itself (section 3.1)
+- it does NOT freeze whatever `Insights.Domain` classes that file's `RunTask` calls directly, e.g.
+`FreehandDimensions.Names.Contains(...)`, `FixedHolisticComposition.Build()`/`.Dimensions`,
+`DimensionSelectionComposition.Build(...)`. This has already changed once for exactly this reason:
+Users joining `FreehandDimensions.Names` is what drove the 3.8 -> 3.9 bump. If such a helper changes
+shape or behavior while a frozen version is still draining, that frozen instance replays against the
+NEW helper code, not the code it originally ran under - best case a real non-determinism error
+(no worse than today); worse case, replay succeeds but takes a silently different branch, producing
+an internally inconsistent report. Same accepted-scope-limit reasoning as activities: freezing every
+transitively-called helper is a much bigger undertaking than this design attempts, and most bumps
+don't touch these helpers. If a future bump specifically changes one of these shared helpers, treat
+that as a signal to reconsider scope for that bump specifically (e.g. snapshot the helper too),
+not a reason to change this default.
+
 ## 4. Guardrails
 
 - **Unit test:** the real `WorkerRegistration` registration list contains no duplicate
