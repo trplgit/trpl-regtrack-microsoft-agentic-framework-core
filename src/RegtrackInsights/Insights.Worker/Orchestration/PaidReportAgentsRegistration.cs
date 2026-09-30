@@ -358,9 +358,11 @@ public static class PaidReportAgentsRegistration
                 // Licence entries below: real LLM composition ahead of render, sol deployment.
                 // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix, same as Act's
                 // own render prompt - see that file's own header for what changed and why.
+                // [ADDED 2026-09-30] v7 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Location"] = Build(
                     "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_location_v6.md", freehandModel),
+                    "05_report_html_dimension_selection_location_v7.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED 2026-09-09, REPLACED AGAIN 2026-09-23] Dimension-
                 // specific override for a single-"Users" request - RenderHtmlActivity's own doc
                 // comment explains the "{ReportType}:{DimensionName}" key-preference rule this
@@ -374,9 +376,11 @@ public static class PaidReportAgentsRegistration
                 // risk mix, dept-head fan-out, an "Approver" role) - see the prompt file's own "Real
                 // vs. NOT AVAILABLE" table, unchanged by this move.
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
+                // [ADDED 2026-09-30] v6 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Users"] = Build(
                     "DimensionSelectionUserReportHtmlAgent", "Renders a freehand-composed Users insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_user_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_user_v6.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Same reasoning as the Users entry
                 // immediately above. The Concentration tab and closure-status strip the earlier
                 // Angular-mirroring version carried (both honest not-available blocks, no real
@@ -389,19 +393,25 @@ public static class PaidReportAgentsRegistration
                 // build from rather than a fixed document shape. Deliberately on the sol deployment
                 // (freehandModel), not the shared `model` every other agent in this file uses.
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
+                // [ADDED 2026-09-30] v7 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department_v6.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v7.md", freehandModel),
+                // [ADDED 2026-09-30] v6 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_backlogaging_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_backlogaging_v6.md", freehandModel),
                 // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix (Act's own
                 // period-scoping change) - see that file's own header for what changed and why.
                 // [ADDED 2026-09-27] v3 - "i" / "How to read this chart" panel on every chart,
                 // interactive charts, chart craft rules. Users uses the same v3 sections.
+                // [ADDED 2026-09-30] v5 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Act"] = Build(
                     "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_act_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_act_v5.md", freehandModel),
                 // [ADDED 2026-09-30] v10 - retires section 7a's per-number formula instruction
                 // (never once fired across 3 real trials); the "How your numbers are worked out"
                 // hover-link strip is now added deterministically instead, see
