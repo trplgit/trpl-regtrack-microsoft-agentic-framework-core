@@ -1,16 +1,22 @@
 # Report Generation — Licences, freehand (v10, 2026-09-30)
 
-**[v10, 2026-09-30] Section 7a below (the per-number formula hover-link) is RETIRED - do not follow
-it.** Two prompt-only phrasings (attach an "i" to a `.kpi` tile, then wrap the number inline in its
-own prose) were tried across 3 real tenant-1285 renders and NEITHER ever produced the markup - this
-freehand dimension's real layout varies too much per run (even the outer container class differed:
-"report-stack"/"report"/"sections" across the 3 runs) for a free-text instruction to have a
-reliable anchor. Fixed the same way every other exact-shape requirement in this pipeline is fixed
-(see `InsightsReportOrchestrator`'s node 8i / `NumberFormulaInjector` / `LicenceNumberFormulas`):
-a deterministic post-render step now appends a "How your numbers are worked out" hover-link strip,
-built from the real reconciled totals, not authored by you. Left in place below only as a record of
-what was tried and why it does not work - everything else in this file (sections 1-6, 8-15) is
-otherwise unchanged from v9.
+**[v10, 2026-09-30] Section 7a below (the per-number formula hover-link for EVERY key-metric
+number) is RETIRED - do not follow it.** Two prompt-only phrasings (attach an "i" to a `.kpi` tile,
+then wrap the number inline in its own prose) were tried across 3 real tenant-1285 renders and
+NEITHER ever produced the markup - this freehand dimension's real layout varies too much per run
+(even the outer container class differed: "report-stack"/"report"/"sections" across the 3 runs) for
+a free-text instruction covering EVERY number to have a reliable anchor. The fixed reference strip
+at the bottom of the page is now handled the same way every other exact-shape requirement in this
+pipeline is fixed (see `InsightsReportOrchestrator`'s node 8i / `NumberFormulaInjector` /
+`LicenceNumberFormulas`): a deterministic post-render step, not authored by you.
+
+**[SAME DAY] Section 7b (NEW) narrows this to PERCENTAGES ONLY, inline in your own prose** - a real
+product reference screenshot showed a percentage figure itself as a hover-link to its formula, and
+the user asked for exactly that pattern (not the bottom-of-page strip) for percentage/
+percentage-point figures specifically, never plain counts. Narrower and more mechanically
+identifiable than 7a's blanket attempt (a percentage always has a literal `%`/`pp` to trigger on),
+so worth a fresh prompt-only try before reaching for code injection again. Everything else in this
+file (sections 1-6, 8-15) is unchanged from v9.
 
 **[2026-09-29, from a real user review] PLAIN LANGUAGE - write for a compliance manager, not for the
 developer who built the report.** Only the WORDS change in this version: keep the same sections, the same
@@ -276,11 +282,82 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.qu
 
 Each chart's `id` (`hr-load` above) must be unique on the page.
 
-**7a. [RETIRED 2026-09-30]** Was a per-number formula hover-link instruction; never once produced
-the markup across 3 real trial renders (see the note at the top of this file). Replaced by a
-deterministic post-render step (`NumberFormulaInjector`/`LicenceNumberFormulas` in
-`Insights.Presentation`, wired as node 8i in `InsightsReportOrchestrator`) - nothing for you to do
-here.
+**7a. [RETIRED 2026-09-30]** Was a per-number formula hover-link instruction for EVERY key-metric
+number (counts included); never once produced the markup across 3 real trial renders (see the note
+at the top of this file). Superseded by 7b below, which is narrower (percentages only) and by a
+deterministic post-render step for the fixed reference strip (`NumberFormulaInjector`/
+`LicenceNumberFormulas` in `Insights.Presentation`, node 8i) - neither is your job.
+
+**7b. Percentage figures become a hover-link to their formula (NEW, 2026-09-30).** Wherever a
+percentage or percentage-point figure appears in your OWN written prose - a headline, a section's
+description text, a card's `.note` - wrap just that figure (e.g. `(5.3%)`, `84.8%`) as a hover-link
+to a small popup showing how it is worked out. Reference: a real product screenshot showing exactly
+this pattern - an underlined percentage in a sentence, hover reveals a card with a title, one plain
+sentence, and a "HOW IT IS CALCULATED" fraction box.
+
+**Scope - percentages only, never counts.** This dimension has one real percentage shape: the share
+of licences with a given status out of the licences counted in that same scope (tenant-wide, or one
+licence type) - always `{status count} / {counted total} x 100` (`TenantExpiredPct` tenant-wide,
+`ExpiredPct` per licence type - the only percentage fields you have). Never wrap a plain count
+("21 licences", "3 types", "5 Applied") - only a number that is itself a percentage figure. If you
+never write a percentage in your prose this run, this section produces nothing - never invent one
+to have something to wrap.
+
+Reuse the SAME `.hr` mechanism section 7 already requires (same checkbox/label/panel, same
+hover-to-preview / click-to-pin / Escape-to-close) - just styled and triggered differently: the
+trigger is the percentage text itself (dotted underline, not a round "i" badge), and the panel body
+is a title, one plain sentence, and a fraction formula box instead of `.hr-row`s.
+
+```html
+<span class="hr">
+  <input type="checkbox" class="hr-toggle" id="pf-{unique}" aria-label="How this percentage is worked out">
+  <label for="pf-{unique}" class="hr-i pf" title="How this percentage is worked out">(5.3%)</label>
+  <aside class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
+    <label for="pf-{unique}" class="hr-close" aria-label="Close">&times;</label>
+    <h4 class="hr-title">Expired percentage - 5.3%</h4>
+    <p class="hr-intro">The share of Transport licences counted this period whose status is Expired.</p>
+    <div class="pf-formula">
+      <p class="pf-formula-label">HOW IT IS CALCULATED</p>
+      <div class="pf-frac">
+        <div class="pf-frac-stack">
+          <span class="pf-num">Expired licences (this scope)</span>
+          <span class="pf-den">Licences counted (this scope)</span>
+        </div>
+        <span class="pf-times">&times; 100</span>
+      </div>
+    </div>
+  </aside>
+</span>
+```
+```css
+.pf{display:inline;width:auto;height:auto;padding:0;margin:0;border-radius:0;background:none;
+  color:inherit;font:inherit;font-weight:inherit;border-bottom:1.5px dotted var(--c-brand);cursor:help}
+.pf:hover,.hr-toggle:checked+.pf{background:var(--c-light-blue)}
+.pf-panel{width:min(340px,calc(100vw - 32px));padding:20px 22px 22px}
+.pf-formula{background:var(--c-light-blue);border-radius:10px;padding:14px 16px 16px;margin-top:4px}
+.pf-formula-label{font-size:11px;font-weight:700;color:var(--c-brand);letter-spacing:.03em;margin:0 0 10px}
+.pf-frac{display:flex;align-items:center;justify-content:center;gap:10px}
+.pf-frac-stack{display:flex;flex-direction:column;align-items:center;font-size:12.5px;color:#1f2937}
+.pf-num{padding-bottom:4px;border-bottom:1.5px solid #1f2937;white-space:nowrap}
+.pf-den{padding-top:4px;white-space:nowrap}
+.pf-times{font-size:14px;font-weight:600;color:#1f2937}
+```
+
+Rules:
+- **Title** = "{Status word} percentage - {the real value}%" (e.g. "Expired percentage - 5.3%").
+  Never any other percentage type - `Expired` is the only status this dimension turns into a share.
+- **Description** = ONE plain sentence naming the real scope: "all licences counted this period"
+  (tenant-wide `TenantExpiredPct`) or "{real LicenceTypeName} licences counted this period" (a
+  type's own `ExpiredPct`) - the exact same scope word the surrounding sentence already used.
+- **Numerator/denominator labels** are exactly "Expired licences (this scope)" and "Licences
+  counted (this scope)" - never a raw field name (`TenantExpiredPct`, `ExpiredPct`,
+  `TenantExpiredLicences`, `ScopedLicences`...) anywhere the reader can see, same rule as every
+  other panel in this file.
+- **Wrap the figure only at its one home appearance** (section 2/3's "say each fact once" rule
+  already decided where that is) - never re-wrap the same value if it legitimately repeats inside a
+  chart's own hover/focus detail (that is covered by the chart's own "i" panel, not this one).
+- Each `id` (`pf-{unique}` above) must be unique on the page, distinct from every chart's own
+  `hr-load`-style id and from every other `pf-` id.
 
 **What goes in the panel.** The composition plan gives you each section's content after the marker
 `HOW TO READ:` inside its `emphasis` - use it as your source, one `.hr-row` per component, and fill
@@ -608,6 +685,10 @@ chart must follow these rules, whatever its shape:
 
 ## Self-check before returning
 
+- (2026-09-30) Section 7b: every percentage figure in your own prose (not inside a chart's own
+  panel) is wrapped as a `.pf` dotted-underline hover-link with title/description/fraction-box
+  built exactly as specified - no raw field name in the panel, no count wrapped, no invented
+  percentage-point figure, every `pf-` id unique.
 - (v4) Section 15: no two labels overlap and none is cut off at any chart edge; no text inside tiles or bars too small for it; no letters stacked vertically.
 - (v4) Section 14: the page starts with the small blue label = exact `tenant_name` and nothing else, then the big headline, one line, then the blue "Reporting window: ..." box.
 - (v4) No developer/tester messages anywhere on the page: no "reconciled", "verified", "no fabricated data", ids, field names or notes on how the report was built.
