@@ -308,51 +308,104 @@ hover-to-preview / click-to-pin / Escape-to-close) - just styled and triggered d
 trigger is the percentage text itself (dotted underline, not a round "i" badge), and the panel body
 is a title, one plain sentence, and a fraction formula box instead of `.hr-row`s.
 
+**[FIX - found live in this project's own local lab, 2026-09-30] Every tag inside `.hr` here must be
+inline (`span`), never `aside`/`div`/`h4`/`p`.** This block sits INSIDE a `<p>` of running prose
+(unlike section 7's chart version, which sits inside a `<div>` chart-head, never inside a `<p>`). A
+browser auto-closes a `<p>` the instant it meets a BLOCK-level start tag inside it (`aside`, `div`,
+`h4`, `p` are all block) - the panel silently ends up as a sibling of your paragraph instead of
+nested inside `.hr`, so it renders sanely as flat text but the popup can never open (confirmed live:
+the "44.9%" link rendered fine, but clicking/hovering it did nothing - `.hr-panel` had been ripped
+out of `.hr` by the browser's own parser). Use ONLY `span` for every element below - the CSS below
+already declares `display:block`/`flex` on each one where a block layout is still wanted, so the
+visual result is identical:
+
 ```html
 <span class="hr">
   <input type="checkbox" class="hr-toggle" id="pf-{unique}" aria-label="How this percentage is worked out">
   <label for="pf-{unique}" class="hr-i pf" title="How this percentage is worked out">(5.3%)</label>
-  <aside class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
+  <span class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
     <label for="pf-{unique}" class="hr-close" aria-label="Close">&times;</label>
-    <h4 class="hr-title">Expired percentage - 5.3%</h4>
-    <p class="hr-intro">The share of Transport licences counted this period whose status is Expired.</p>
-    <div class="pf-formula">
-      <p class="pf-formula-label">HOW IT IS CALCULATED</p>
-      <div class="pf-frac">
-        <div class="pf-frac-stack">
-          <span class="pf-num">Expired licences (this scope)</span>
-          <span class="pf-den">Licences counted (this scope)</span>
-        </div>
+    <span class="hr-title pf-title">Expired percentage - 5.3%</span>
+    <span class="hr-intro pf-intro">The share of Transport licences counted this period whose status is Expired.</span>
+    <span class="pf-formula">
+      <span class="pf-formula-label">HOW IT IS CALCULATED</span>
+      <span class="pf-frac">
+        <span class="pf-frac-stack">
+          <span class="pf-num"><span class="pf-num-value">1</span><span class="pf-num-label">Expired licences (this scope)</span></span>
+          <span class="pf-den"><span class="pf-den-value">19</span><span class="pf-den-label">Licences counted (this scope)</span></span>
+        </span>
         <span class="pf-times">&times; 100</span>
-      </div>
-    </div>
-  </aside>
+      </span>
+    </span>
+  </span>
 </span>
 ```
 ```css
 .pf{display:inline;width:auto;height:auto;padding:0;margin:0;border-radius:0;background:none;
   color:inherit;font:inherit;font-weight:inherit;border-bottom:1.5px dotted var(--c-brand);cursor:help}
 .pf:hover,.hr-toggle:checked+.pf{background:var(--c-light-blue)}
-.pf-panel{width:min(340px,calc(100vw - 32px));padding:20px 22px 22px}
-.pf-formula{background:var(--c-light-blue);border-radius:10px;padding:14px 16px 16px;margin-top:4px}
-.pf-formula-label{font-size:11px;font-weight:700;color:var(--c-brand);letter-spacing:.03em;margin:0 0 10px}
+.pf-panel{display:block;right:auto;bottom:auto;width:min(340px,calc(100vw - 32px));padding:18px 20px 20px}
+.pf-panel::before{content:"";position:absolute;top:-8px;left:20px;width:14px;height:14px;background:#fff;
+  border-left:1px solid #e6e9ef;border-top:1px solid #e6e9ef;transform:rotate(45deg);border-radius:2px}
+.pf-title{display:block;margin:0 40px 6px 0;font-size:20px;font-weight:700;color:#1f2937}
+.pf-intro{display:block;margin:0 0 14px;font-size:14px;line-height:1.55;color:var(--c-text-2)}
+.pf-formula{display:block;background:var(--c-light-blue);border-radius:10px;padding:14px 16px 16px;margin-top:4px}
+.pf-formula-label{display:block;font-size:11px;font-weight:700;color:var(--c-brand);letter-spacing:.03em;margin:0 0 10px}
 .pf-frac{display:flex;align-items:center;justify-content:center;gap:10px}
-.pf-frac-stack{display:flex;flex-direction:column;align-items:center;font-size:12.5px;color:#1f2937}
-.pf-num{padding-bottom:4px;border-bottom:1.5px solid #1f2937;white-space:nowrap}
-.pf-den{padding-top:4px;white-space:nowrap}
+.pf-frac-stack{display:flex;flex-direction:column;align-items:center}
+.pf-num{display:flex;flex-direction:column;align-items:center;padding-bottom:6px;border-bottom:1.5px solid #1f2937}
+.pf-den{display:flex;flex-direction:column;align-items:center;padding-top:6px}
+.pf-num-value,.pf-den-value{font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap}
+.pf-num-label,.pf-den-label{font-size:11px;color:var(--c-text-2);white-space:nowrap}
 .pf-times{font-size:14px;font-weight:600;color:#1f2937}
 ```
 
+**[FIX - found live in the same local lab test, 2026-09-30] `.pf-panel` must stay `position:fixed`
+(inherited from the shared `.hr-panel` rule in section 7 - do not override it to `absolute` or
+`relative`), with its `top`/`left` set by the small script below, not by CSS alone.** Every section
+card is `overflow:hidden` (section 10 - needed for its own corner-circle decoration); a
+`position:absolute` popup nested inside one gets silently clipped to the card's edges the instant it
+grows taller than the card's remaining space (confirmed live: the card cut the popup off right after
+its description, before the formula box). `position:fixed` escapes that clipping entirely (same
+reason chart panels already use it) - only the exact screen position needs to track the link instead
+of docking to a fixed screen edge, which plain CSS cannot do on its own.
+
+**[FIX - found live, SAME lab test, immediately after the fix above] The shared `.hr-panel` rule
+also sets `bottom:16px` (its own right-docked layout) - `.pf-panel` above already overrides this
+with `right:auto;bottom:auto`, and that override matters: leaving `bottom:16px` in place while the
+script sets `top` to some large value makes the browser stretch the panel's HEIGHT all the way down
+to 16px from the viewport bottom (confirmed live: a card 500px+ tall with a large blank area below
+the real content). `right:auto;bottom:auto` lets height/width go back to fitting the real content,
+same as any ordinary element.** Copy the `.pf-panel` rule above exactly, including both overrides -
+do not drop them because the popup "looks fine" in a quick read-through of the CSS.
+
+Add this ONE small script once, right next to the Escape-close script already required in section 7 above (both go at the end
+of `<body>`, in the same `<script>` or a second one - either is fine):
+```js
+function pfPlace(el){var panel=el.closest('.hr').querySelector('.pf-panel');if(!panel)return;var r=el.getBoundingClientRect();var w=panel.offsetWidth||340;var left=Math.min(Math.max(8,r.left),window.innerWidth-w-8);panel.style.left=left+'px';panel.style.top=(r.bottom+10)+'px';}
+document.querySelectorAll('.pf').forEach(function(el){el.addEventListener('mouseenter',function(){pfPlace(el);});el.addEventListener('focus',function(){pfPlace(el);});el.addEventListener('click',function(){pfPlace(el);});});
+```
+(No `<` characters appear in this script, so the "space after every `<`" rule in technical
+constraint 3 does not apply here - still double-check before returning, same as every other script.)
+
 Rules:
+- **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`, even though section
+  7's chart panel uses those (that one is never inside running prose, this one always is).
 - **Title** = "{Status word} percentage - {the real value}%" (e.g. "Expired percentage - 5.3%").
   Never any other percentage type - `Expired` is the only status this dimension turns into a share.
 - **Description** = ONE plain sentence naming the real scope: "all licences counted this period"
   (tenant-wide `TenantExpiredPct`) or "{real LicenceTypeName} licences counted this period" (a
   type's own `ExpiredPct`) - the exact same scope word the surrounding sentence already used.
-- **Numerator/denominator labels** are exactly "Expired licences (this scope)" and "Licences
-  counted (this scope)" - never a raw field name (`TenantExpiredPct`, `ExpiredPct`,
-  `TenantExpiredLicences`, `ScopedLicences`...) anywhere the reader can see, same rule as every
-  other panel in this file.
+- **Numerator/denominator show the REAL NUMBER first, then its caption** (NEW, 2026-09-30 - real
+  user feedback: the fraction is more useful with the actual count on it, not just the bare words).
+  `pf-num-value`/`pf-den-value` = the real whole numbers for THIS scope - the Expired count and the
+  total counted, same scope as the title/description (e.g. one licence type's own Expired/Total, or
+  the tenant-wide `TenantExpiredLicences`/`ScopedLicences`). `pf-num-label`/`pf-den-label` stay
+  exactly "Expired licences (this scope)" and "Licences counted (this scope)" underneath each number
+  - never a raw field name (`TenantExpiredPct`, `ExpiredPct`, `TenantExpiredLicences`,
+  `ScopedLicences`...) anywhere the reader can see, same rule as every other panel in this file. The
+  two real numbers you write here, divided and multiplied by 100, must equal the percentage in the
+  title - if they do not, you have the wrong scope's numbers, fix it before returning.
 - **Wrap the figure only at its one home appearance** (section 2/3's "say each fact once" rule
   already decided where that is) - never re-wrap the same value if it legitimately repeats inside a
   chart's own hover/focus detail (that is covered by the chart's own "i" panel, not this one).
