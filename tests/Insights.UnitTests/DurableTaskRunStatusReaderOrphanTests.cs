@@ -16,6 +16,7 @@ public sealed class DurableTaskRunStatusReaderOrphanTests
 {
     private static OrchestrationState State(string version, DateTime lastUpdatedUtc) => new()
     {
+        Name = InsightsReportOrchestrator.Name,
         Version = version,
         LastUpdatedTime = lastUpdatedUtc,
         OrchestrationInstance = new OrchestrationInstance { InstanceId = "insights-1285-test" },
@@ -74,5 +75,47 @@ public sealed class DurableTaskRunStatusReaderOrphanTests
 
         Assert.True(orphaned);
         Assert.Contains("version mismatch", reason);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-30, code review finding on the multi-version dispatch design] The original
+    /// IsOrphaned compared only against InsightsReportOrchestrator.Version (the CURRENT version).
+    /// Once a frozen version is kept registered alongside the current one (docs/superpowers/specs/
+    /// 2026-09-30-orchestrator-multi-version-dispatch-design.md), every run resumed by that frozen
+    /// class would still fail this check and get reported "failed" the moment anyone polled it -
+    /// defeating the whole point (the run finishes for real, but the user is told it failed). Fixed
+    /// by checking registration-list MEMBERSHIP (any currently-registered version) instead of exact
+    /// equality with the current version. These tests use the explicit-list overload with a fake
+    /// registration set, since no real frozen class exists yet (freezing happens at the NEXT
+    /// version bump - see InsightsReportOrchestrator.cs's own changelog note).
+    /// </summary>
+    [Fact]
+    public void RegisteredNonCurrentVersion_IsNotOrphaned_WhenStillInRegistrationList()
+    {
+        var registrations = new (string Name, string Version, Type Type)[]
+        {
+            (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+            (InsightsReportOrchestrator.Name, "4.3", typeof(InsightsReportOrchestrator)), // stand-in for a frozen class
+        };
+        var state = State("4.3", DateTime.UtcNow);
+
+        var orphaned = DurableTaskRunStatusReader.IsOrphaned(state, registrations, out _);
+
+        Assert.False(orphaned);
+    }
+
+    [Fact]
+    public void UnregisteredVersion_IsOrphaned_EvenIfItWasNeverTheCurrentVersion()
+    {
+        var registrations = new (string Name, string Version, Type Type)[]
+        {
+            (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+        };
+        var state = State("3.9", DateTime.UtcNow); // an old, retired, no-longer-registered version
+
+        var orphaned = DurableTaskRunStatusReader.IsOrphaned(state, registrations, out var reason);
+
+        Assert.True(orphaned);
+        Assert.Contains("3.9", reason);
     }
 }

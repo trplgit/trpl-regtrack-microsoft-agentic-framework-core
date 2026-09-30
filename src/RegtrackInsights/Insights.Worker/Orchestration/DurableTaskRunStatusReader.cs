@@ -46,11 +46,28 @@ public sealed class DurableTaskRunStatusReader(
     /// </summary>
     private const int StaleMinutes = 30;
 
-    internal static bool IsOrphaned(OrchestrationState state, out string reason)
+    /// <summary>
+    /// [CHANGED 2026-09-30, code review finding on the multi-version dispatch design] Originally
+    /// compared state.Version against ONLY InsightsReportOrchestrator.Version (the current one).
+    /// Once a frozen version is kept registered alongside the current one (docs/superpowers/specs/
+    /// 2026-09-30-orchestrator-multi-version-dispatch-design.md), every run the frozen class
+    /// resumes would still fail that check and get reported "failed" the moment anyone polled it -
+    /// defeating the whole point of freezing it (the run finishes for real; the user would be told
+    /// it failed). Now checks registration-list MEMBERSHIP: any version WorkerRegistration still
+    /// registers for this orchestrator name is not orphaned on version grounds, current or frozen.
+    /// </summary>
+    internal static bool IsOrphaned(OrchestrationState state, out string reason) =>
+        IsOrphaned(state, Insights.Worker.WorkerRegistration.OrchestrationRegistrations, out reason);
+
+    internal static bool IsOrphaned(
+        OrchestrationState state,
+        IReadOnlyList<(string Name, string Version, Type Type)> knownRegistrations,
+        out string reason)
     {
-        if (state.Version != InsightsReportOrchestrator.Version)
+        if (!knownRegistrations.Any(r => r.Name == state.Name && r.Version == state.Version))
         {
-            reason = $"orchestrator version mismatch (run={state.Version}, current={InsightsReportOrchestrator.Version})";
+            reason = $"orchestrator version mismatch - '{state.Version}' is not registered by any " +
+                $"currently-deployed worker version (run name={state.Name})";
             return true;
         }
 
