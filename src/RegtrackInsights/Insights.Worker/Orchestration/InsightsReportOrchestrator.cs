@@ -400,8 +400,26 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         report itself uses) - it is NO LONGER inert on a normally-configured host. Every freehand-
         single-dimension run now bills one extra small-model call and one extra blob write after
         persist. Still fails soft (never blocks/fails the real report) and still resolves to a true
-        no-op ONLY on a host that genuinely has none of those services registered. */
-    public const string Version = "4.3";
+        no-op ONLY on a host that genuinely has none of those services registered.
+
+        Bumped 4.3 -> 4.4: new ScheduleTask call, InjectNumberFormulaActivity (node 8i), runs right
+        after InjectForwardLookCssActivity and before the first Normalize call - an extra call
+        mid-sequence, not just a payload shape change, same load-bearing reasoning as every prior
+        mid-sequence insertion in this file. Closes a real gap found live: the per-number "i"
+        formula/definition hover-link (reference: a real product screenshot showing a hover-link on
+        each KPI number revealing its formula) was tried twice as a render-prompt instruction
+        across 3 real tenant-1285 Licence renders and NEVER once produced the markup - this
+        freehand dimension's layout varies too much per run for a free-text instruction to have a
+        reliable anchor (confirmed live: even the outer container class differed -
+        "report-stack"/"report"/"sections" - across the 3 runs). Same class of problem
+        InjectCoverageGridActivity/InjectBacklogAgeBarActivity already solved for their own pieces,
+        closed the same way here: build it from the real, already-reconciled Licence totals/rows
+        deterministically (LicenceNumberFormulas.Build -> NumberFormulaInjector.Inject) instead of
+        asking the render agent to author it. No-op (empty Figures list) for every
+        ReportType/dimension combination other than dimension_selection:Licence - narrow trial
+        scope on purpose. [VERIFY BEFORE DEPLOY] in-flight 4.3 instances not checked this
+        session. */
+    public const string Version = "4.4";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
     // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
@@ -605,6 +623,21 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     "UNSUPPORTED_REPORT_TYPE",
                     "This report type is not supported.",
                     internalDiagnostics: [$"ReportType '{input.ReportType}' is neither '{FixedHolisticComposition.ReportType}' nor '{DimensionSelectionComposition.ReportType}' - dynamic composition (compliance_health) was removed 2026-09-11."]);
+            }
+
+            // [ADDED 2026-09-30, TRIAL] Node 8i's figures (see that node's own comment further
+            // down for why this is deterministic code, not a render-prompt instruction). Pure JSON
+            // deserialization of already-composed data, no I/O/clock/randomness of its own - safe
+            // directly in the orchestrator body, same reasoning as locationRows/backlogAgingResult/
+            // forwardRiskResult further below. Empty for every dimension other than Licence -
+            // narrow trial scope on purpose.
+            IReadOnlyList<NumberFormulaInjector.Figure> numberFormulaFigures = [];
+            if (freehandDimensionName == "Licence" && freehandControlTotalsJson is not null && freehandRowsJson is not null)
+            {
+                var licenceTotals = System.Text.Json.JsonSerializer.Deserialize<LicenceControlTotals>(freehandControlTotalsJson);
+                var licenceRows = System.Text.Json.JsonSerializer.Deserialize<List<LicenceRow>>(freehandRowsJson);
+                if (licenceTotals is not null && licenceRows is not null)
+                    numberFormulaFigures = LicenceNumberFormulas.Build(licenceTotals, licenceRows);
             }
 
             SetStage(InsightsRunStage.Narrating);
@@ -906,6 +939,22 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 var forwardStyled = await context.ScheduleTask<InjectForwardLookCssOutput>(
                     typeof(InjectForwardLookCssActivity).Name, "1.0", new InjectForwardLookCssInput(forwarded.Html));
 
+                // Node 8i - [ADDED 2026-09-30, TRIAL, Licence only] deterministic "How your numbers
+                // are worked out" hover-link strip, one entry per known Licence figure. NOT the
+                // render agent's job: two real prompt-only attempts (attach an "i" to a `.kpi` tile,
+                // then wrap the number inline in its own prose) were tried across 3 real tenant-1285
+                // renders and NONE of the 3 produced the markup - even the outer page's own container
+                // class varied run to run ("report-stack"/"report"/"sections"), so there was no
+                // reliable anchor a free-text instruction could count on. Same lesson as every other
+                // Inject*Activity above: a mechanical, exact-shape requirement is not something to
+                // gamble on prose generation getting right - build it from the real, already-
+                // reconciled totals instead (numberFormulaFigures, built once above). No-op for every
+                // dimension other than Licence (NumberFormulaInjector.Inject returns html unchanged
+                // when Figures is empty) - narrow trial scope on purpose.
+                var numberFormulaed = await context.ScheduleTask<InjectNumberFormulaOutput>(
+                    typeof(InjectNumberFormulaActivity).Name, "1.0",
+                    new InjectNumberFormulaInput(forwardStyled.Html, numberFormulaFigures));
+
                 // Structural invariant gate (CLAUDE.md Sec.11), not cosmetic QA - throws
                 // OrchestrationRefusedException on the actual persisted HTML if the score-component
                 // count or a blocked-tab badge is wrong (FixedHolisticStructureGate's own doc comment
@@ -959,7 +1008,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                             internalDiagnostics: [$"Render attempt {renderAttempt}: numbers not traceable to the data: {string.Join(", ", untraced)}"]);
                     }
 
-                    var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(forwardStyled.Html));
+                    var normalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(numberFormulaed.Html));
                     var sanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(normalized.Html));
                     // Second normalize call: the loop-closing re-check (item 13, already built and tested) -
                     // catches DOMPurify's own serialization side effects, e.g. the DOCTYPE-drop bug.

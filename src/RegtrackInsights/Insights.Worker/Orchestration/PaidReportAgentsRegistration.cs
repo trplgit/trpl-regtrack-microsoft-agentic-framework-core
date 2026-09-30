@@ -402,9 +402,13 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection:Act"] = Build(
                     "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
                     "05_report_html_dimension_selection_act_v4.md", freehandModel),
+                // [ADDED 2026-09-30] v10 - retires section 7a's per-number formula instruction
+                // (never once fired across 3 real trials); the "How your numbers are worked out"
+                // hover-link strip is now added deterministically instead, see
+                // InsightsReportOrchestrator's node 8i / NumberFormulaInjector / LicenceNumberFormulas.
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v9.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v10.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality

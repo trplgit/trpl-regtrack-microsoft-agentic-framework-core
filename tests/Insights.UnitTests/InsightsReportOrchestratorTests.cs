@@ -63,6 +63,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -136,6 +138,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -274,6 +278,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -565,6 +571,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -653,6 +661,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new NormalizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))

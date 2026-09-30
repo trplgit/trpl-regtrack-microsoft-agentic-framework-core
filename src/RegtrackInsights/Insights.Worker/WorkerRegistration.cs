@@ -134,6 +134,7 @@ public static class WorkerRegistration
         services.AddTransient<InjectBacklogAgeBarCssActivity>();
         services.AddTransient<InjectForwardLookActivity>();
         services.AddTransient<InjectForwardLookCssActivity>();
+        services.AddTransient<InjectNumberFormulaActivity>();
         // [ADDED 2026-09-15, THROWAWAY DIAGNOSTIC] Same Reports:LocalFallbackDirectory as
         // PersistActivity below, reused only to decide where NormalizeActivity dumps a rejected
         // document - see that class's own doc comment. Revert alongside it.
@@ -232,6 +233,7 @@ public static class WorkerRegistration
                 ActivityCreator<InjectCoverageCssActivity>(sp), ActivityCreator<InjectCoverageScriptActivity>(sp),
                 ActivityCreator<InjectBacklogAgeBarActivity>(sp), ActivityCreator<InjectBacklogAgeBarCssActivity>(sp),
                 ActivityCreator<InjectForwardLookActivity>(sp), ActivityCreator<InjectForwardLookCssActivity>(sp),
+                ActivityCreator<InjectNumberFormulaActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
