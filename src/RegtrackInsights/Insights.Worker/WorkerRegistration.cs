@@ -21,6 +21,28 @@ namespace Insights.Worker;
 /// </summary>
 public static class WorkerRegistration
 {
+    /// <summary>
+    /// Every orchestrator this worker knows how to run, as data instead of a sequence of
+    /// AddTaskOrchestrations calls - lets a unit test assert no two entries collide on
+    /// (Name, Version) without touching a real task hub. Read ONLY by the worker factory below;
+    /// nothing else may call AddTaskOrchestrations directly, so this list is never stale.
+    ///
+    /// [ADDED 2026-09-30] Multi-version dispatch (docs/superpowers/specs/2026-09-30-orchestrator-
+    /// multi-version-dispatch-design.md). From the NEXT InsightsReportOrchestrator.Version bump
+    /// onward: before bumping the live Version, copy the current InsightsReportOrchestrator.cs
+    /// into Orchestration/Archived/InsightsReportOrchestratorV{old}.cs, rename the class, strip its
+    /// changelog to one frozen-header line, and add an entry for it here under its OLD version
+    /// string. Retire a frozen entry (delete the class + this line) only once tools/DrainCheck
+    /// reports zero in-flight instances under that exact version - see the spec's section 3.3.
+    /// </summary>
+    internal static readonly IReadOnlyList<(string Name, string Version, Type Type)> OrchestrationRegistrations =
+    [
+        (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+        (FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)),
+        (FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)),
+        (FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)),
+    ];
+
     public static IServiceCollection AddInsightsWorker(this IServiceCollection services)
     {
         /*  The publish gate (build order step 8) - the deterministic arbiter that runs after
@@ -210,17 +232,13 @@ public static class WorkerRegistration
             // CreateOrchestrationInstanceAsync call use - not relying on whatever Type-based
             // AddTaskOrchestrations(typeof(...)) would have derived internally, which is
             // unconfirmed and was exactly the kind of guess that broke ActivityCreator below.
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)));
-
-            // ADR-0001 (2026-09-10) - the two-phase digest's orchestrations. Same explicit
-            // Name/Version treatment as every other orchestration registered above.
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)));
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)));
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)));
+            //
+            // [CHANGED 2026-09-30] Reads OrchestrationRegistrations (declared at the top of this
+            // class) instead of four separate calls - same registrations, same order, now data a
+            // unit test can inspect without building a TaskHubWorker. See that field's own doc
+            // comment for the multi-version dispatch convention this exists for.
+            foreach (var (name, version, type) in OrchestrationRegistrations)
+                worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(name, version, type));
 
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
