@@ -288,6 +288,12 @@ percentage or a new formula:**
 | `GhostEntities` / `BranchesReported` (count the `no_obligations_configured`-flagged leaf rows yourself if you state this share - both numbers are real, already in `dimension_rows`/`dimension_control_totals`) | Leaf-branch share | "The percentage of all reported branches that are leaf branches with no compliances in this period." | Leaf branches with no compliances | Branches reported |
 | Count of rows flagged `single_point_of_failure` with `Instances > 0`, over count of rows with `Instances > 0` (both counted from `dimension_rows` - never invented) | Single-person dependency share | "The percentage of branches with compliances in this period that depend on exactly one performer or exactly one reviewer." | Branches depending on one performer or reviewer | Branches with compliances in this period |
 
+**[ADDED 2026-10-01] "Compliances counted (across all branches)" means `SumOfRows`, never `ScopedInstances`.**
+`ScopedInstances` is the distinct-OBLIGATION count; `TenantOverduePct` is computed against `SumOfRows`,
+the scoped OCCURRENCE total (one obligation recurring 3 times in the period counts as 3). The two
+numbers differ on a real tenant - if a numerator/denominator pair you show is meant to multiply back
+to a shown percentage, the "total compliances" side of that pair is `SumOfRows`.
+
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
 - **Title** = "{Field's own name above} - {the real value}%" (e.g. "Overdue percentage - 12.3%").

@@ -123,8 +123,11 @@ menu, not a list you must use - invent your own if something fits better):
   `FinancialPenaltyInstances`, `ClosureRiskInstances`, `ImprisonmentInstances`, cell shade by count.
 - **Jail-risk share dot plot** - `ImprisonmentSharePct` per nature with a line at
   `TenantImprisonmentSharePct`.
-- **Categorisation waffle** - `CategorisedInstances` vs `OthersBucketInstances` vs
-  `UntaggedInstances`/`UncategorisedInstances` of `ScopedInstances`.
+- **Categorisation waffle** - `CategorisedInstances` vs `UncategorisedInstances` (the two ADD UP to
+  the scoped occurrence total themselves - [FIXED 2026-10-01] never cite `ScopedInstances` as that
+  whole, it is the distinct-obligation count and differs from `CategorisedInstances +
+  UncategorisedInstances` on a real tenant); `OthersBucketInstances`/`UntaggedInstances` are the
+  named sub-parts within those two.
 - **Retired-nature strip** - natures with `IsRetired` still carrying live work.
 
 Every visual must be **interactive**: hover (or focus) on a mark shows that mark's real values

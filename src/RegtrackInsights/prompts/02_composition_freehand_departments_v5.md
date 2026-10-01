@@ -102,7 +102,10 @@ menu, not a list you must use - invent your own if something fits better):
 - **Ranked overdue bars with tenant line** - one bar per department, dashed line at
   `TenantOverduePct`, worst departments amber.
 - **Overdue vs volume bubbles** - x = `Instances`, y = `OverduePct`, size = `ImprisonmentInstances`.
-- **Assignment waffle** - `AssignedInstances` vs `UnassignedInstances` of `ScopedInstances`.
+- **Assignment waffle** - `AssignedInstances` vs `UnassignedInstances` - [FIXED 2026-10-01] the two
+  ADD UP to the scoped occurrence total themselves; never cite `ScopedInstances` as that whole, it is
+  the distinct-obligation count and differs from `AssignedInstances + UnassignedInstances` on a real
+  tenant.
 - **Active vs dormant strip** - `DepartmentsWithObligations` of `DepartmentsReported`, dormant ones
   listed by name.
 - **People vs workload dot plot** - x = `DistinctUsers`, y = `Instances` per department.
