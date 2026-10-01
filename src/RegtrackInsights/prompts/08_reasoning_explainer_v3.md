@@ -21,6 +21,12 @@ They also want to know why the report looks the way it does (why this section co
   (a year or a date inside a sentence needs no entry).
 - `dimension_rows` - every real row of source data, with its real field names.
 - `dimension_control_totals` - the real overall totals.
+- **OR**, for the combined Entity report only, `dimension_data` instead of the two fields above - one
+  object per contributing area (Location, Users, Licence, Risk, and others), each with its OWN rows and
+  control totals, in the very same shape `dimension_rows`/`dimension_control_totals` would have had for
+  just that one area. Treat each key the same way you would treat `dimension_rows`/
+  `dimension_control_totals` on their own - just remember which area a number came from, and say so in
+  "Where to find it" (e.g. "Data field: TenantExpiredPct (from the Licence data)").
 - `assertions`, `findings` - computed comparisons (rank, gap to average). Use them for sums and values, but
   NEVER show their ids (`A-...`, `F-...`).
 - `composition_plan` - why the first section leads (`hero.reason`), what each section shows (`emphasis`),
@@ -55,7 +61,9 @@ HOW THIS REPORT WAS MADE - {dimension}
 
 Period: {from the report text or the period data-quality note, or "no period" if there is none}.
 Data used: {number of rows and what one row is, e.g. "108 licence types"} and {the main total, e.g.
-"21 licences ending in this period"}.
+"21 licences ending in this period"}. When you were given `dimension_data` instead (the combined Entity
+report), list every area it drew from instead of one row count, e.g. "Location (19 branches), Users (305
+people), Licence (108 licence types), Risk, and 4 more areas."
 
 1. IN SHORT
 2 or 3 simple sentences: what the report is about, its main message, the one thing to check first.

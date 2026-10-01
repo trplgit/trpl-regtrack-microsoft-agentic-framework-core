@@ -48,7 +48,22 @@ public static partial class ForwardLookInjector
         if (!haveRisk && !haveBuckets)
             return PlaceholderToken().Replace(html, ""); // no real forward data at all this run - head-only pane.
 
-        return PlaceholderToken().Replace(html, BuildCard(riskTotals, pipelineTotals, pipelineRows, haveRisk, haveBuckets));
+        var result = PlaceholderToken().Replace(html, BuildCard(riskTotals, pipelineTotals, pipelineRows, haveRisk, haveBuckets));
+
+        // The carried-forward sentence above may have wrapped its own percentage in the shared
+        // .hr/.pf mechanism (EntityScoreFormulaInjector/EntityTilePercentageInjector normally carry
+        // this in, but neither is guaranteed to run - a degraded composite score, for instance) -
+        // make sure the CSS/script backing it is actually present rather than relying on another
+        // injector happening to run afterward in the same pipeline.
+        if (result.Contains("id=\"pf-forward-carried\"", StringComparison.Ordinal)
+            && !result.Contains(".hr-just-closed", StringComparison.Ordinal))
+        {
+            var bodyClose = result.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+            if (bodyClose >= 0)
+                result = result.Insert(bodyClose, NumberFormulaInjector.SharedStyle + NumberFormulaInjector.SharedScript);
+        }
+
+        return result;
     }
 
     private static string BuildCard(
@@ -93,8 +108,18 @@ public static partial class ForwardLookInjector
                 var healthyPct = 100.0 * healthy / denom;
                 var carriedShare = 100.0 * carried / due;
 
+                // [ADDED 2026-10-01, real user ask: every percentage gets a formula hover-link]
+                // Built inline, not matched afterward - this class already holds the real
+                // numerator/denominator the moment it writes the sentence, so there is nothing to
+                // find-and-wrap later the way EntityTilePercentageInjector has to for render-agent
+                // prose. Same `.hr`/`.pf` mechanism, same shared style/script.
+                var carriedShareText = carriedShare.ToString("0.0", CultureInfo.InvariantCulture);
+                var carriedShareFigure = new EntityTilePercentageInjector.FractionFigure(
+                    "Carried-forward share", carried, due,
+                    "Already-overdue obligations due again in this window", "Obligations due in the next 90 days");
+                var carriedSharePanel = EntityTilePercentageInjector.BuildFractionPanel("pf-forward-carried", carriedShareText, carriedShareFigure);
                 sb.Append("<p class=\"di-kpi__narr\">")
-                  .Append($"<b class=\"tnum\">{carried:N0}</b> of them ({carriedShare.ToString("0.0", CultureInfo.InvariantCulture)}%) are <b>already overdue today</b> and coming due again - old trouble returning, not new work.")
+                  .Append($"<b class=\"tnum\">{carried:N0}</b> of them ({carriedSharePanel}%) are <b>already overdue today</b> and coming due again - old trouble returning, not new work.")
                   .Append("</p>");
 
                 sb.Append("<div class=\"di-stackbar\" aria-hidden=\"true\">")

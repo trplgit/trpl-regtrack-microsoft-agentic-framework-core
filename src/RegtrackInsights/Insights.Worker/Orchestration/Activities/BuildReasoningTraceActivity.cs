@@ -16,7 +16,10 @@ public sealed record BuildReasoningTraceInput(
     string? ReportHtml = null,
     // [ADDED 2026-09-27] Needed to fill the testers' database checks (ReasoningSourceMap) with
     // the exact user, tenant and period the report used. Trailing optional: replay-safe.
-    int? UserId = null, DateTime? WindowStart = null, DateTime? WindowEnd = null);
+    int? UserId = null, DateTime? WindowStart = null, DateTime? WindowEnd = null,
+    // [ADDED 2026-10-01] fixed_holistic (Entity) only - see ReasoningTraceBundle.AllDimensionDataJson's
+    // own doc comment. Null for the freehand single-dimension path, unchanged behaviour.
+    IReadOnlyDictionary<string, string>? AllDimensionDataJson = null);
 
 // [FIX 2026-09-27] TotalTokens: the explainer's real token spend, so the orchestrator can add it to
 // the tenant's recorded usage (it was billed but never counted). Trailing optional: a run recorded
@@ -70,8 +73,12 @@ public sealed class BuildReasoningTraceActivity(
                 : System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<DataQualityNote>>(input.DataQualityJson) ?? [];
 
             var reportText = input.ReportHtml is null ? null : ReportClaimExtractor.VisibleText(input.ReportHtml);
-            var numbers = reportText is null ? null
-                : ReportClaimExtractor.ExtractNumbers(reportText, ReportClaimExtractor.NumbersToIgnore(input.DimensionRowsJson));
+            // [ADDED 2026-10-01] fixed_holistic (Entity) ignores across all contributing dimensions'
+            // rows, not one - see ReportClaimExtractor.NumbersToIgnore's dictionary overload.
+            var ignoreNumbers = input.AllDimensionDataJson is not null
+                ? ReportClaimExtractor.NumbersToIgnore(input.AllDimensionDataJson)
+                : ReportClaimExtractor.NumbersToIgnore(input.DimensionRowsJson);
+            var numbers = reportText is null ? null : ReportClaimExtractor.ExtractNumbers(reportText, ignoreNumbers);
 
             // [REMOVED 2026-09-28] The testers' database checks (ReasoningSourceMap SQL) are no longer
             // put in the file - the testing team works from formulas, not SQL (user decision). The
@@ -79,7 +86,7 @@ public sealed class BuildReasoningTraceActivity(
             var bundle = new ReasoningTraceBundle(
                 input.DimensionName, runId, input.Plan, input.Assertions, input.Findings,
                 input.DimensionRowsJson, input.DimensionControlTotalsJson, dataQuality, reasoningLog, toolInvocations,
-                reportText, numbers);
+                reportText, numbers, input.AllDimensionDataJson);
 
             var explainResult = await explainerAgent.ExplainAsync(bundle);
             explainTokens = explainResult.TotalTokens;

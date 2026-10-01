@@ -55,14 +55,52 @@ public static partial class ReportClaimExtractor
     public static IReadOnlySet<string> NumbersToIgnore(string? rowsJson)
     {
         var ignore = new HashSet<string>();
-        if (string.IsNullOrWhiteSpace(rowsJson))
+        AddIgnoredFromRowsArray(ignore, rowsJson);
+        return ignore;
+    }
+
+    /// <summary>
+    /// [ADDED 2026-10-01] fixed_holistic (Entity) shape - up to 15 dimensions' worth of rows, each
+    /// already a {Rows, ControlTotals, DataQuality} JSON object (FetchDimensionsOutput.DimensionResults'
+    /// own real per-dimension serialization, unchanged) instead of one dimension's bare rows array.
+    /// Same ignore rule as <see cref="NumbersToIgnore(string?)"/>, just applied across every
+    /// dimension's own "Rows" property instead of one - without this, every real ActID/BranchID/
+    /// UserID on a fixed_holistic report would misreport as an "unexplained number" in the
+    /// completeness check, since none of them would ever be in the ignore set.
+    /// </summary>
+    public static IReadOnlySet<string> NumbersToIgnore(IReadOnlyDictionary<string, string>? allDimensionDataJson)
+    {
+        var ignore = new HashSet<string>();
+        if (allDimensionDataJson is null)
             return ignore;
+
+        foreach (var dimensionJson in allDimensionDataJson.Values)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(dimensionJson);
+            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("Rows", out var rows))
+            {
+                AddIgnoredFromRowsElement(ignore, rows);
+            }
+        }
+        return ignore;
+    }
+
+    private static void AddIgnoredFromRowsArray(HashSet<string> ignore, string? rowsJson)
+    {
+        if (string.IsNullOrWhiteSpace(rowsJson))
+            return;
 
         using var doc = System.Text.Json.JsonDocument.Parse(rowsJson);
-        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
-            return ignore;
+        AddIgnoredFromRowsElement(ignore, doc.RootElement);
+    }
 
-        foreach (var row in doc.RootElement.EnumerateArray())
+    private static void AddIgnoredFromRowsElement(HashSet<string> ignore, System.Text.Json.JsonElement rows)
+    {
+        if (rows.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return;
+
+        foreach (var row in rows.EnumerateArray())
         {
             if (row.ValueKind != System.Text.Json.JsonValueKind.Object)
                 continue;
@@ -80,7 +118,6 @@ public static partial class ReportClaimExtractor
                 }
             }
         }
-        return ignore;
     }
 
     [GeneratedRegex(@"\d+")]

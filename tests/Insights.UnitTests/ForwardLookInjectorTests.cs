@@ -54,6 +54,26 @@ public sealed class ForwardLookInjectorTests
         Assert.DoesNotContain("style=\"margin-top", result, StringComparison.Ordinal); // rhythm comes from CSS
     }
 
+    // [ADDED 2026-10-01, real user ask] The carried-forward share is now a real hover-link,
+    // wrapped inline (this class already holds the real numerator/denominator when it writes the
+    // sentence - no find-and-match pass needed, unlike EntityTilePercentageInjector's job for
+    // render-agent-authored prose).
+    [Fact]
+    public void Inject_RealSegments_CarriedForwardShareIsARealFractionHoverLink()
+    {
+        var result = ForwardLookInjector.Inject(DocWithPlaceholder, Risk(due: 74561, carried: 22132, clean: 2179, healthy: 50250));
+
+        Assert.Contains("id=\"pf-forward-carried\"", result, StringComparison.Ordinal);
+        Assert.Contains("class=\"hr-i pf\"", result, StringComparison.Ordinal);
+        Assert.Contains(">29.7<", result, StringComparison.Ordinal);
+        Assert.Contains("pf-num-value\">22132<", result, StringComparison.Ordinal);
+        Assert.Contains("pf-den-value\">74561<", result, StringComparison.Ordinal);
+        // The shared style/script must actually be present - this injector does not assume
+        // another one runs afterward and supplies it.
+        Assert.Contains(".hr-just-closed", result, StringComparison.Ordinal);
+        Assert.Contains("addEventListener('mouseleave'", result, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Inject_CarriedForwardDominates_FillsVerdictTagBad()
     {

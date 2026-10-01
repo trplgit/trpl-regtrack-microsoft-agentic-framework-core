@@ -5,6 +5,7 @@ using Insights.Data;
 using Insights.Persistence;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Insights.Worker.Orchestration.Archived;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,6 +39,10 @@ public static class WorkerRegistration
     internal static readonly IReadOnlyList<(string Name, string Version, Type Type)> OrchestrationRegistrations =
     [
         (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+        // [FROZEN 2026-10-01] Superseded by 4.5 (Entity/fixed_holistic reasoning-trace explainer -
+        // see InsightsReportOrchestrator's own changelog). Retire via tools/DrainCheck once it
+        // reports zero in-flight "4.4" instances.
+        (InsightsReportOrchestrator.Name, "4.4", typeof(InsightsReportOrchestratorV4_4)),
         (FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)),
         (FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)),
         (FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)),

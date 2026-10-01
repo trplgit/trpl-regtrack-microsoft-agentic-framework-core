@@ -127,7 +127,7 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
   <h3>Your real chart title - all 42 locations in this period</h3>
   <div class="hr">
     <input type="checkbox" class="hr-toggle" id="hr-load" aria-label="How to read this chart">
-    <label for="hr-load" class="hr-i" title="How to read this chart">i</label>
+    <label for="hr-load" class="hr-i">i</label>
     <aside class="hr-panel" role="dialog" aria-label="How to read this chart">
       <label for="hr-load" class="hr-close" aria-label="Close">&times;</label>
       <h4 class="hr-title">How to read this chart</h4>
@@ -211,7 +211,7 @@ renders sanely as flat text but the popup can never open.
 ```html
 <span class="hr">
   <input type="checkbox" class="hr-toggle" id="pf-{unique}" aria-label="How this percentage is worked out">
-  <label for="pf-{unique}" class="hr-i pf" title="How this percentage is worked out">(12.3%)</label>
+  <label for="pf-{unique}" class="hr-i pf">(12.3%)</label>
   <span class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
     <label for="pf-{unique}" class="hr-close" aria-label="Close">&times;</label>
     <span class="hr-title pf-title">Overdue percentage - 12.3%</span>
@@ -233,7 +233,7 @@ renders sanely as flat text but the popup can never open.
 .pf{display:inline;width:auto;height:auto;padding:0;margin:0;border-radius:0;background:none;
   color:inherit;font:inherit;font-weight:inherit;border-bottom:1.5px dotted var(--c-brand);cursor:help}
 .pf:hover,.hr-toggle:checked+.pf{background:var(--c-light-blue)}
-.pf-panel{display:block;right:auto;bottom:auto;width:min(340px,calc(100vw - 32px));padding:18px 20px 20px}
+.pf-panel{display:block;right:auto;bottom:auto;width:min(340px,calc(100vw - 32px));max-height:calc(100vh - 24px);overflow-y:auto;padding:18px 20px 20px}
 .pf-panel::before{content:"";position:absolute;top:-8px;left:20px;width:14px;height:14px;background:#fff;
   border-left:1px solid #e6e9ef;border-top:1px solid #e6e9ef;transform:rotate(45deg);border-radius:2px}
 .pf-title{display:block;margin:0 40px 6px 0;font-size:20px;font-weight:700;color:#1f2937}
@@ -261,8 +261,18 @@ leaving a large blank area under the real content - copy both overrides exactly.
 Add this ONE small script once, right next to the Escape-close script already required in section 7
 above (both go at the end of `<body>`, in the same `<script>` or a second one - either is fine):
 ```js
-function pfPlace(el){var panel=el.closest('.hr').querySelector('.pf-panel');if(!panel)return;var r=el.getBoundingClientRect();var w=panel.offsetWidth||340;var left=Math.min(Math.max(8,r.left),window.innerWidth-w-8);panel.style.left=left+'px';panel.style.top=(r.bottom+10)+'px';}
+function pfPlace(el){
+  var panel=el.closest('.hr').querySelector('.pf-panel');if(!panel)return;
+  var margin=12,r=el.getBoundingClientRect(),vw=window.innerWidth,vh=window.innerHeight;
+  var w=panel.offsetWidth||340,h=panel.offsetHeight||200;
+  var left=Math.min(Math.max(margin,r.left),vw-w-margin);
+  var spaceBelow=vh-r.bottom-margin,spaceAbove=r.top-margin;
+  var top=(h<=spaceBelow||spaceBelow>=spaceAbove)?r.bottom+10:r.top-h-10;
+  top=Math.max(margin,Math.min(top,vh-margin-Math.min(h,vh-2*margin)));
+  panel.style.left=left+'px';panel.style.top=top+'px';
+}
 document.querySelectorAll('.pf').forEach(function(el){el.addEventListener('mouseenter',function(){pfPlace(el);});el.addEventListener('focus',function(){pfPlace(el);});el.addEventListener('click',function(){pfPlace(el);});});
+window.addEventListener('resize',function(){document.querySelectorAll('.hr-toggle:checked').forEach(function(cb){var hr=cb.closest('.hr'),trig=hr&&hr.querySelector('.pf');if(trig)pfPlace(trig);});});
 ```
 (No `<` characters appear in this script, so the "space after every `<`" rule in technical
 constraint 3 does not apply here - still double-check before returning, same as every other script.)
@@ -308,7 +318,7 @@ Reuse `span`-only markup (same reason as 7b above - this sits inside running pro
 ```html
 <span class="hr">
   <input type="checkbox" class="hr-toggle" id="pd-{unique}" aria-label="How this difference is worked out">
-  <label for="pd-{unique}" class="hr-i pf" title="How this difference is worked out">46.8 points</label>
+  <label for="pd-{unique}" class="hr-i pf">46.8 points</label>
   <span class="hr-panel pf-panel" role="dialog" aria-label="How this difference is worked out">
     <label for="pd-{unique}" class="hr-close" aria-label="Close">&times;</label>
     <span class="hr-title pf-title">46.8 points above the company-wide rate</span>

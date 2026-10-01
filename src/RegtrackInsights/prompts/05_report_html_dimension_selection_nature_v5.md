@@ -113,7 +113,7 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
   <h3>Your real chart title - all 42 compliance types in this period</h3>
   <div class="hr">
     <input type="checkbox" class="hr-toggle" id="hr-load" aria-label="How to read this chart">
-    <label for="hr-load" class="hr-i" title="How to read this chart">i</label>
+    <label for="hr-load" class="hr-i">i</label>
     <aside class="hr-panel" role="dialog" aria-label="How to read this chart">
       <label for="hr-load" class="hr-close" aria-label="Close">&times;</label>
       <h4 class="hr-title">How to read this chart</h4>

@@ -7,6 +7,18 @@ public sealed class NumberFormulaInjectorTests
     private static readonly NumberFormulaInjector.Figure ActiveFigure = new(
         "Active licences", "21", "Counted from each licence's current recorded status: this is how many have the status 'Active' right now.");
 
+    // [REGRESSION, found live via user-supplied screenshots 2026-10-01] The trigger label carried a
+    // `title` attribute, so the browser's own native tooltip rendered as a second black box stacked
+    // on top of the custom `.hr-panel` on every single hover-link - across every dimension that uses
+    // this shared mechanism.
+    [Fact]
+    public void Trigger_NeverCarriesANativeTitleAttribute()
+    {
+        var result = NumberFormulaInjector.Inject("<html><body><p>t</p></body></html>", [ActiveFigure]);
+
+        Assert.DoesNotMatch("""class="hr-i[^"]*"[^>]*\stitle=""", result);
+    }
+
     [Fact]
     public void WithNoFigures_ReturnsHtmlUnchanged()
     {

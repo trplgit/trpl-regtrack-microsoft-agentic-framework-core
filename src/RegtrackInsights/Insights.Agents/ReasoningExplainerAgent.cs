@@ -27,7 +27,14 @@ public sealed record ReasoningTraceBundle(
     // [ADDED 2026-09-27] What the reader actually sees, and every number on it (code-extracted) -
     // the explainer must cover each one. Null when the finished report was not available.
     string? ReportText = null,
-    IReadOnlyList<string>? NumbersOnReport = null);
+    IReadOnlyList<string>? NumbersOnReport = null,
+    // [ADDED 2026-10-01] fixed_holistic (Entity) spans up to 15 dimensions, not one - no single
+    // CompositionPlan-for-one-dimension shape exists for it. When present, this REPLACES
+    // DimensionRowsJson/DimensionControlTotalsJson in the payload the explainer agent is given
+    // (dimension name -> its own {Rows, ControlTotals, DataQuality} JSON, straight from
+    // FetchDimensionsOutput.DimensionResults - no new data, no new claim, same as every other
+    // field on this bundle). Null for the freehand single-dimension path, unchanged.
+    IReadOnlyDictionary<string, string>? AllDimensionDataJson = null);
     // [REMOVED 2026-09-28] DatabaseChecksJson - testers work from formulas, not SQL (user decision).
 
 /// <summary>
@@ -58,24 +65,7 @@ public sealed class MafReasoningExplainerAgent(AIAgent agent) : IReasoningExplai
 
     public async Task<AgentCallResult<string>> ExplainAsync(ReasoningTraceBundle bundle, CancellationToken cancellationToken = default)
     {
-        var payload =
-            $$"""
-            {
-              "dimension_name": {{JsonSerializer.Serialize(bundle.DimensionName)}},
-              "run_id": {{JsonSerializer.Serialize(bundle.RunId)}},
-              "composition_plan": {{JsonSerializer.Serialize(bundle.Plan, JsonOptions)}},
-              "assertions": {{JsonSerializer.Serialize(bundle.Assertions, JsonOptions)}},
-              "findings": {{JsonSerializer.Serialize(bundle.Findings, JsonOptions)}},
-              "dimension_rows": {{bundle.DimensionRowsJson}},
-              "dimension_control_totals": {{bundle.DimensionControlTotalsJson ?? "null"}},
-              "data_quality": {{JsonSerializer.Serialize(bundle.DataQuality, JsonOptions)}},
-              "reasoning_log": {{JsonSerializer.Serialize(bundle.ReasoningLog, JsonOptions)}},
-              "tool_invocations": {{JsonSerializer.Serialize(ToolCallsWithoutSql(bundle.ToolInvocations), JsonOptions)}},
-              "report_text": {{JsonSerializer.Serialize(bundle.ReportText)}},
-              "numbers_on_report": {{JsonSerializer.Serialize(bundle.NumbersOnReport ?? [])}}
-            }
-            """;
-
+        var payload = BuildPayload(bundle);
         var message = "Here is the real trace bundle for one report, as JSON - write the explainer document:\n" + payload;
 
         var response = await agent.RunAsync(message, cancellationToken: cancellationToken);
@@ -94,4 +84,39 @@ public sealed class MafReasoningExplainerAgent(AIAgent agent) : IReasoningExplai
     /// </summary>
     internal static IReadOnlyList<object> ToolCallsWithoutSql(IReadOnlyList<ToolInvocationLogEntry> calls) =>
         calls.Select(c => (object)new { c.Stage, c.ToolName, c.Success, c.ResultLength }).ToList();
+
+    /// <summary>
+    /// [ADDED 2026-10-01] Extracted so a unit test can assert the real JSON shape without a fake
+    /// AIAgent. fixed_holistic's multi-dimension shape (<see cref="ReasoningTraceBundle.AllDimensionDataJson"/>)
+    /// replaces the two singular dimension_* keys with one dimension_data object keyed by dimension
+    /// name; the freehand single-dimension path (the only shape that existed before today) is
+    /// completely unchanged.
+    /// </summary>
+    internal static string BuildPayload(ReasoningTraceBundle bundle)
+    {
+        var dimensionDataBlock = bundle.AllDimensionDataJson is null
+            ? $$"""
+              "dimension_rows": {{bundle.DimensionRowsJson}},
+              "dimension_control_totals": {{bundle.DimensionControlTotalsJson ?? "null"}},
+              """
+            : $$"""
+              "dimension_data": { {{string.Join(",", bundle.AllDimensionDataJson.Select(kv => $"{JsonSerializer.Serialize(kv.Key)}: {kv.Value}"))}} },
+              """;
+
+        return $$"""
+            {
+              "dimension_name": {{JsonSerializer.Serialize(bundle.DimensionName)}},
+              "run_id": {{JsonSerializer.Serialize(bundle.RunId)}},
+              "composition_plan": {{JsonSerializer.Serialize(bundle.Plan, JsonOptions)}},
+              "assertions": {{JsonSerializer.Serialize(bundle.Assertions, JsonOptions)}},
+              "findings": {{JsonSerializer.Serialize(bundle.Findings, JsonOptions)}},
+              {{dimensionDataBlock}}
+              "data_quality": {{JsonSerializer.Serialize(bundle.DataQuality, JsonOptions)}},
+              "reasoning_log": {{JsonSerializer.Serialize(bundle.ReasoningLog, JsonOptions)}},
+              "tool_invocations": {{JsonSerializer.Serialize(ToolCallsWithoutSql(bundle.ToolInvocations), JsonOptions)}},
+              "report_text": {{JsonSerializer.Serialize(bundle.ReportText)}},
+              "numbers_on_report": {{JsonSerializer.Serialize(bundle.NumbersOnReport ?? [])}}
+            }
+            """;
+    }
 }

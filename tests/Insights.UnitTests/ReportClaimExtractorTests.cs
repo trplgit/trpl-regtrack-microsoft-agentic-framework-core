@@ -54,4 +54,28 @@ public sealed class ReportClaimExtractorTests
 
         Assert.Equal(["7"], missing);
     }
+
+    // [ADDED 2026-10-01] fixed_holistic (Entity) shape: several dimensions' own {Rows, ControlTotals}
+    // JSON objects, keyed by dimension name, instead of one dimension's bare rows array.
+    [Fact]
+    public void NumbersToIgnore_DictionaryOverload_IgnoresIdsAcrossEveryContributingDimension()
+    {
+        const string text = "Branch 23156 has 9 obligations. Act 2812 row. Odisha has 9.";
+        var allDimensionData = new Dictionary<string, string>
+        {
+            ["Location"] = """{"Rows":[{"BranchID":23156,"BranchName":"Odisha"}],"ControlTotals":{}}""",
+            ["Act"] = """{"Rows":[{"ActID":2812,"ActName":"Azure Act"}],"ControlTotals":{}}""",
+        };
+
+        var numbers = ReportClaimExtractor.ExtractNumbers(text, ReportClaimExtractor.NumbersToIgnore(allDimensionData));
+
+        Assert.Equal(["9"], numbers);
+    }
+
+    [Fact]
+    public void NumbersToIgnore_DictionaryOverload_NullOrEmpty_IgnoresNothing()
+    {
+        Assert.Empty(ReportClaimExtractor.NumbersToIgnore((IReadOnlyDictionary<string, string>?)null));
+        Assert.Empty(ReportClaimExtractor.NumbersToIgnore(new Dictionary<string, string>()));
+    }
 }

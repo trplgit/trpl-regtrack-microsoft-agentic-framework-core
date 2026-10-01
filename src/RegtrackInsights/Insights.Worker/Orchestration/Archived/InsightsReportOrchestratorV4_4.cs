@@ -3,7 +3,7 @@ using Insights.Domain;
 using Insights.Presentation;
 using Insights.Worker.Orchestration.Activities;
 
-namespace Insights.Worker.Orchestration;
+namespace Insights.Worker.Orchestration.Archived;
 
 /// <summary>
 /// Wraps ReportCompositionPipeline's compose-reflect-narrate-reflect-gate-render-normalize-
@@ -11,453 +11,12 @@ namespace Insights.Worker.Orchestration;
 /// (CLAUDE.md build order item 11). Deterministic body only - every LLM call, every DB read,
 /// every DateTime read lives in an activity (CLAUDE.md 6, spec 5).
 /// </summary>
-public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput, InsightsReportOrchestrationInput>
+public sealed class InsightsReportOrchestratorV4_4 : TaskOrchestration<PersistOutput, InsightsReportOrchestrationInput>
 {
     public const string Name = "InsightsReportOrchestrator";
 
-    /*  Bumped 1.0 -> 1.1 for build order item 14 (real persistence replacing PersistStubActivity) -
-        RunTask's return type and its final ScheduleTask call both changed shape, which is exactly
-        what CLAUDE.md 6's "orchestration versioning ON from day one" exists to protect: an in-flight
-        1.0 instance replayed against this code would hit a non-determinism error otherwise. Safe to
-        bump now - every 1.0 instance created so far is already terminal.
-
-        Bumped 1.1 -> 1.2 for item 17's per-run token budget - ComposeOutput/ReflectOnComposition
-        Output/NarrateOutput/ReflectOnNarrativeOutput/RenderHtmlOutput all gained a TotalTokens
-        field. The ScheduleTask call SEQUENCE this method makes is unchanged (same activities, same
-        order), so a bump is not strictly required by DTFx's replay check - bumped anyway, matching
-        this file's own 1.0->1.1 precedent, since it costs nothing and removes any doubt. Safe now
-        for the same reason: every prior instance is terminal.
-
-        Bumped 1.2 -> 1.3 for design doc Sec.11.4 (Partial generation) - FetchDimensionsOutput
-        gained FailedDimensions, and a new deterministic transform (PartialDimensionPlaceholder.
-        InsertPlaceholders) now runs between the RenderHtml and Normalize ScheduleTask calls. The
-        ScheduleTask call SEQUENCE is unchanged - same activities, same order - so again not
-        strictly required, bumped anyway for the same reason as both prior bumps.
-
-        [VERIFY BEFORE DEPLOY] unlike the 1.0->1.1 and 1.1->1.2 bumps, whether any 1.2 instance is
-        still in-flight (Running/Pending) has not been checked this session - confirm against the
-        real task hub before shipping this if that matters in the target environment.
-
-        Bumped 1.3 -> 1.4 for design doc Sec.12.3 (per-tenant monthly circuit breaker + 80% alert)
-        - a new ScheduleTask call (CheckTenantTokenBudgetActivity) now runs FIRST, before
-        GatherScope, and a new try/finally wraps the rest of the body so RecordTenantTokenUsage
-        Activity runs on every exit path. This DOES change the ScheduleTask call sequence (an
-        extra call at the start, another at the end/on every unwind), unlike the two prior bumps -
-        this one is load-bearing, not just precautionary. [VERIFY BEFORE DEPLOY] same as above:
-        in-flight 1.3 instances not checked this session.
-
-        Bumped 1.4 -> 1.5 for the real self-hosted Poppins fix: a new ScheduleTask call
-        (InjectFontActivity, node 8a) now runs right after PartialDimensionPlaceholder's
-        transform and before the first Normalize call. Load-bearing like the 1.3->1.4 bump -
-        an extra call mid-sequence, not just a payload shape change. [VERIFY BEFORE DEPLOY]
-        in-flight 1.4 instances not checked this session.
-
-        Bumped 1.5 -> 1.6 for the composite score (CompositeScoreCalculator, PROVISIONAL formula
-        - not yet reviewed with the business): a new ScheduleTask call (ComputeScoreActivity,
-        node 4a) now runs right after FetchDimensions and before Compose. Load-bearing, same
-        reasoning as 1.3->1.4 and 1.4->1.5 - an extra call mid-sequence. [VERIFY BEFORE DEPLOY]
-        in-flight 1.5 instances not checked this session - no DB connection available while this
-        was written.
-
-        Bumped 1.6 -> 1.7: RenderHtmlInput gained an Assertions field (same reasoning as the
-        1.1->1.2 TotalTokens bump - the ScheduleTask call SEQUENCE is unchanged, only the payload
-        shape, so not strictly required by DTFx's replay check, bumped anyway per that same
-        precedent). Render can now cite real numbers directly instead of only through Narrate's
-        prose - closes the same class of gap the composite-score fabrication bug (1.5->1.6) found.
-        [VERIFY BEFORE DEPLOY] in-flight 1.6 instances not checked this session.
-
-        Bumped 1.7 -> 1.8: a new ScheduleTask call (ValidateFixedHolisticStructureActivity) now
-        runs right after the second Normalize call and before PlaywrightQa. Load-bearing, same
-        reasoning as 1.3->1.4/1.4->1.5/1.5->1.6 - an extra call mid-sequence, not just a payload
-        shape change. Closes a real gap found live: a render can silently drop score-component
-        cards or ship a fabricated tab-nav badge count on a data-blocked pane (see
-        FixedHolisticStructureGate's own doc comment) - both are structural invariants (CLAUDE.md
-        Sec.11), so this THROWS rather than just logging for later, unlike PlaywrightQa's cosmetic-
-        only stance right after it. At the time this was added, a no-op on the plain MVP template
-        then live in production (05_report_html.md had no score hero, no data-blocked pane) - safe
-        to add now rather than waiting for the score-hero/fixed-tab template to leave the lab.
-        [CORRECTED 2026-09-01] that plain template and its render path were removed the same day
-        per explicit scoping - this gate is no longer a no-op for any path, it runs on every render
-        unconditionally (see ValidateFixedHolisticStructureActivity's own doc comment). [VERIFY
-        BEFORE DEPLOY] in-flight 1.7 instances not checked this session.
-
-        Bumped 1.8 -> 1.9: the RenderHtmlActivity ScheduleTask call became ScheduleWithRetry (up
-        to 3 attempts, 3s/2x backoff). Load-bearing - DTFx records retry attempts in the
-        orchestration history differently from a single ScheduleTask call, so this changes the
-        history shape for that call, not just a payload change. Found live: a render can fail on a
-        transient network/timeout blip to the LLM provider, or on a one-off malformed/truncated
-        response (now thrown from MafReportHtmlAgent.RenderAsync itself, inside this same retry
-        boundary - see its own [BUG FOUND LIVE] note) - neither is a reason to fail the whole run,
-        both were confirmed live the same afternoon this was added. Excludes
-        OrchestrationRefusedException from retry on purpose - a deterministic refusal must never be
-        retried, only a render that could plausibly come back different on a fresh attempt should
-        be. [VERIFY BEFORE DEPLOY] in-flight 1.8 instances not checked this session.
-
-        Bumped 1.9 -> 2.0 (minor bump number, but the biggest structural change this file has had):
-        Fixed Holistic (FixedHolisticComposition, prompts/05_report_html_fixed_holistic.md) wired
-        into production, gated behind a new explicit ReportType value
-        ("fixed_holistic" = FixedHolisticComposition.ReportType) - a caller opts in, the existing
-        "compliance_health" dynamic path is completely unchanged for every tenant not requesting
-        it. When selected: ComposeActivity/ReflectOnCompositionActivity are skipped ENTIRELY (zero
-        LLM calls, zero tokens) in favour of the deterministic FixedHolisticComposition.Build()
-        call; Narrate/its reflection loop and PublishGate are UNCHANGED, shared by both paths.
-        RenderHtmlActivity itself stays SINGLE-agent - a second IFixedHolisticReportHtmlAgent was
-        tried and removed the same day it was added: once 05_report_html.md (the old
-        "compliance_health" render prompt) was deleted per explicit scoping, there was only ever
-        one IReportHtmlAgent left to pick between, so the branch was dead code (see that class's
-        own [REMOVED 2026-09-01] comment). This DOES change the orchestration history shape for a "fixed_holistic" run (an
-        entirely different set of ScheduleTask calls happen) - a full major-version-worthy change
-        in spirit, kept as a minor bump only because DTFx versions the WHOLE orchestrator, not per
-        report-type, and every "compliance_health" run's own history shape is byte-for-byte
-        unchanged. [VERIFY BEFORE DEPLOY] in-flight 1.9 instances not checked this session - since
-        no "fixed_holistic" instance could have existed before this bump (the report type did not
-        exist), only in-flight "compliance_health" runs need checking, and their own call sequence
-        did not change at all.
-
-        Bumped 2.0 -> 2.1: a new ScheduleTask call (InjectCoverageScriptActivity, node 8b) now runs
-        right after InjectFontActivity and before the first Normalize call - an extra call
-        mid-sequence, not just a payload shape change, same load-bearing reasoning as every prior
-        mid-sequence insertion in this file. Closes a real gap found live: the Coverage-tile
-        driving script was previously something the render agent had to author correctly every
-        run, and three separate live failures (DOMPurify's default script strip, DOMPurify's
-        defensive strip of a script whose content contained HTML-tag-shaped text, and the render
-        agent simply omitting it on a given attempt) all made tiles non-clickable in a real render
-        despite the grid markup itself rendering fine - see CoverageScriptInjector's own [BUG
-        FOUND LIVE] note. A no-op (returns input unchanged) on any document that never rendered a
-        Coverage grid at all - safe on the "compliance_health" dynamic path and on any
-        fixed_holistic run before Coverage's own dimension data exists. [VERIFY BEFORE DEPLOY]
-        in-flight 2.0 instances not checked this session.
-
-        Bumped 2.1 -> 2.2: a new ScheduleTask call (InjectCoverageGridActivity, node 8b) now runs
-        right after InjectFontActivity and before InjectCoverageScriptActivity (renumbered to node
-        8c) - an extra call mid-sequence, not just a payload shape change, same load-bearing
-        reasoning as every prior mid-sequence insertion in this file. Closes a real gap found live:
-        the render agent was hand-authoring the Coverage store grid (one &lt;button&gt; tile per
-        real leaf branch) and silently drew a small SAMPLE (10 of 177 for tenant 29) instead of the
-        full real population, while the chip/legend/KPI numbers elsewhere in the same document
-        correctly stated the true counts - see CoverageGridInjector's own [BUG FOUND LIVE] note.
-        A no-op on any document that never rendered the `di-covgrid-root` placeholder at all - safe
-        on the "compliance_health" dynamic path and on any run where Location degraded.
-        [VERIFY BEFORE DEPLOY] in-flight 2.1 instances not checked this session.
-
-        Bumped 2.2 -> 2.3: a new ScheduleTask call (InjectCoverageCssActivity, node 8c, renumbering
-        the driving-script injection to 8d) now runs right after InjectCoverageGridActivity - an
-        extra call mid-sequence, not just a payload shape change, same load-bearing reasoning as
-        every prior mid-sequence insertion in this file. Closes a real gap found live: the
-        Coverage pane's 4 status colours (chip swatch, tile fill, detail pill) were the one
-        remaining piece asked of the render agent as "declare these rules verbatim" - a real
-        render shipped tiles as unfilled outline boxes and a colourless detail pill because that
-        CSS silently dropped or malformed - see CoverageCssInjector's own [BUG FOUND LIVE] note.
-        A no-op on any document that never rendered a Coverage grid at all.
-        [VERIFY BEFORE DEPLOY] in-flight 2.2 instances not checked this session.
-
-        Bumped 2.3 -> 2.4: the render-through-validate sequence (RenderHtmlActivity through
-        ValidateFixedHolisticStructureActivity) is now wrapped in a bounded retry loop (up to 3
-        attempts) that re-renders from scratch on a FIXED_HOLISTIC_STRUCTURE_INVALID refusal, instead
-        of failing the whole run on the first one. Load-bearing - the ScheduleTask call sequence for
-        any run that needed more than one render attempt is now longer than a 2.3 instance's history
-        could replay against. Confirmed live on tenant 29: FixedHolisticStructureGate's own [BUG
-        FOUND LIVE] Coverage-grid check (documented "found live twice" there) failed two consecutive
-        manual runs with the identical violation before this fix - a per-call rendering miss, not a
-        fixed-input defect, so a fresh render attempt is a legitimate retry here (see this loop's own
-        doc comment). [VERIFY BEFORE DEPLOY] in-flight 2.3 instances not checked this session.
-
-        Bumped 2.4 -> 2.5: new ReportType "dimension_selection" (DimensionSelectionComposition) -
-        a caller-picked subset of dimensions, one pane each, no fixed 6-tab hero, no composite
-        score. Load-bearing for that report type specifically: ComputeScoreActivity's ScheduleTask
-        call is now conditionally SKIPPED (not just given different input) when
-        ReportType == "dimension_selection", a real call-sequence change, not just a payload-shape
-        one. Zero effect on any existing "fixed_holistic" or "compliance_health" instance - both
-        keep calling ComputeScoreActivity exactly as before, so no in-flight instance of either type
-        needs checking before this deploys. [VERIFY BEFORE DEPLOY] no "dimension_selection" instance
-        could have existed before this bump (the report type did not exist), so nothing of that type
-        needs checking either - first bump of this file where a new ReportType branch adds zero
-        replay risk by construction.
-
-        Bumped 2.5 -> 2.6: RenderHtmlInput gained DimensionRowsJson - payload-shape-only change,
-        same reasoning as the 1.1->1.2 TotalTokens bump (the ScheduleTask call SEQUENCE is
-        unchanged, only the payload shape, so not strictly required by DTFx's replay check, bumped
-        anyway per that precedent). Fixes a real gap found live the same day as this fix: the render
-        agent for ReportType "dimension_selection" was only ever given `assertions` (curated,
-        top-5-capped) and never a dimension's complete real row set, so its own prompt instruction
-        to "include a table of real rows" kept getting skipped - not a wording problem, a missing-
-        data problem. [VERIFY BEFORE DEPLOY] in-flight 2.5 instances not checked this session.
-
-        Bumped 2.6 -> 2.7: RenderHtmlInput gained DimensionControlTotalsJson - payload-shape-only
-        change, same precedent as the 2.5->2.6 bump immediately above. Fixes the mirror-image gap:
-        a dimension-specific render prompt (05_report_html_dimension_selection_department.md) asked
-        for real tenant-level aggregates (the untagged/unassigned bucket's size) that live ONLY on
-        a dimension's ControlTotals result set - never a named assertion, never derivable from Rows
-        (confirmed live: the render agent correctly refused rather than fabricate a number it did
-        not have - "I will not infer or invent those values from narrative prose or incomplete
-        data"). [VERIFY BEFORE DEPLOY] in-flight 2.6 instances not checked this session.
-
-        Bumped 2.7 -> 2.8: ValidateFixedHolisticStructureInput gained ReportType - payload-shape-only
-        change, same precedent as 2.5->2.6/2.6->2.7. Fixes a real refusal found live the same day:
-        ValidateFixedHolisticStructureActivity now SKIPS its evaluation entirely for any ReportType
-        other than "fixed_holistic" (previously ran unconditionally on every render's HTML string,
-        with no way to tell a real fixed_holistic score hero apart from a per-dimension prompt's
-        legitimate, unrelated reuse of the same ".di-components" class - see
-        FixedHolisticStructureGate's own corrected doc comment). [VERIFY BEFORE DEPLOY] in-flight 2.7
-        instances not checked this session.
-
-        Bumped 2.8 -> 2.9: a "dimension_selection" request naming exactly ["Entity"] is now
-        translated to a plain "fixed_holistic" request (ReportType and RequestedDimensions both
-        rewritten) in the very first lines of RunTask, before anything else reads either field.
-        Load-bearing, NOT just a payload-shape change - every ScheduleTask call this run makes
-        from that point on is the real fixed_holistic sequence (ComputeScoreActivity now runs
-        instead of being skipped, Coverage-grid injectors receive real Location rows instead of
-        null, ValidateFixedHolisticStructureActivity actually evaluates instead of no-op'ing,
-        composition is FixedHolisticComposition.Build() instead of
-        DimensionSelectionComposition.Build()) - the call sequence for an Entity-named
-        dimension_selection request is now materially longer and different than a 2.8 instance's
-        history would replay against. Real product parity, not a stylistic choice: the real
-        Angular app has no dedicated Entity branch either (confirmed by reading
-        detailed-insights.component.html/.ts) - Entity alone already meant "the full holistic
-        view" there. [VERIFY BEFORE DEPLOY] no dimension_selection request naming exactly
-        ["Entity"] could have taken any other path before this bump (the translation did not
-        exist), so no in-flight instance of that specific shape needs checking; every other
-        dimension_selection shape and every fixed_holistic instance is completely unaffected by
-        this bump.
-
-        Bumped 2.9 -> 3.0: a new ScheduleTask call (InjectBacklogAgeBarActivity, node 8e) now runs
-        right after InjectCoverageScriptActivity and before the first Normalize call - an extra
-        call mid-sequence, not just a payload shape change, same load-bearing reasoning as every
-        prior mid-sequence insertion in this file. Closes a real gap found live: the segmented
-        backlog age-bar (Tab 2 Card 2) was silently skipped in favour of the bigNumber-only
-        fallback on two consecutive real tenant-29 runs, even with real BacklogAging bucket data
-        available both times - same failure family as the Coverage-grid fix already in this file,
-        now closed the same way (deterministic post-render injection instead of asking the render
-        agent to author it). [VERIFY BEFORE DEPLOY] in-flight 2.9 instances not checked this
-        session.
-
-        Bumped 3.0 -> 3.1: a new ScheduleTask call (InjectBacklogAgeBarCssActivity, node 8f) now
-        runs right after InjectBacklogAgeBarActivity and before the first Normalize call - same
-        load-bearing reasoning as every prior mid-sequence insertion in this file. Closes a real
-        gap found live: node 8e's deterministically-injected age-bar markup had no CSS anywhere in
-        the whole pipeline (not in the render agent's prompt instructions, not injected by any
-        activity), so it rendered with real bucket counts and real segment widths but zero colour
-        and no bar chrome - same failure family as the Coverage CSS fix (node 8c) already in this
-        file, closed the same way. [VERIFY BEFORE DEPLOY] in-flight 3.0 instances not checked this
-        session.
-
-        Bumped 3.1 -> 3.2: FetchDimensionsActivity now fetches a fifteenth dimension (ForwardRisk,
-        usp_Insights_Dimension_ForwardRisk / sql/26 - already deployed and live in prod, not
-        modified) - an extra SQL call inside that activity, plus a new ScheduleTask
-        (InjectForwardLookActivity, node 8g) right after InjectBacklogAgeBarCssActivity. Wires the
-        real carried_forward / clean_at_risk / healthy segment counts (the "already late today"
-        figure the live demo shows) into Tab 5, deterministically - those counts are reconciled by
-        the proc but carry no typed assertion, so they cannot travel through the render agent's
-        assertion-only payload. [VERIFY BEFORE DEPLOY] in-flight 3.1 instances not checked this
-        session.
-
-        Bumped 3.2 -> 3.3: FetchDimensionsInput gained optional WindowStart/WindowEnd, and
-        FetchDimensionsActivity now passes a concrete [start, end) window to
-        GetTimelinessFYAsync / GetEvidenceIntegrityAsync - the deployed sql/23 + sql/25 procs now
-        REQUIRE @WindowStart/@WindowEnd (they THROW 51177 / 51178 on NULL). Payload-shape-only for
-        the orchestrator (same ScheduleTask sequence); the new fields default to null and the
-        activity falls back to CURRENT-FY-TO-DATE, preserving today's numbers. **COORDINATED
-        RELEASE**: this worker build and the sql/23 + sql/25 deploy must ship together - deploy
-        either alone and TimelinessFY + EvidenceIntegrity fetch fails (degrades to a placeholder,
-        report still ships) until both are in place. [VERIFY BEFORE DEPLOY] in-flight 3.2 instances
-        not checked this session.
-
-        Bumped 3.3 -> 3.4: InjectForwardLookActivity (node 8g) now also receives ForwardPipeline's
-        control totals + rows (the 5 day-window bucket counts), and ForwardLookInjector renders
-        the ENTIRE Tab 5 pane body deterministically - the `.di-kpi--fwd` card, the due figure,
-        the segment breakdown AND the bucket chart. Was rendering only the 3-segment breakdown;
-        the render agent kept dropping the rest of the pane on real tenants. Payload-shape change
-        to InjectForwardLookInput (two new nullable fields); same ScheduleTask sequence.
-
-        Bumped 3.4 -> 3.5: new ScheduleTask call (InjectForwardLookCssActivity, node 8h) right
-        after node 8g. Once the render agent only authors the Tab 5 shell it stopped emitting the
-        Tab 5 style block, so the injected `.di-fwd` bucket chart rendered with zero height. The
-        CSS is 100% static - injected markup needs injected CSS, same as the age bar (8f) and
-        Coverage. New call-sequence node.
-
-        Bumped 3.5 -> 3.6: "compliance_health" (dynamic LLM composition - ComposeActivity /
-        ReflectOnCompositionActivity) removed per explicit product direction 2026-09-11 -
-        fixed_holistic and dimension_selection are the only two report types now. Any OTHER
-        ReportType now throws OrchestrationRefusedException("UNSUPPORTED_REPORT_TYPE")
-        immediately, instead of scheduling ComposeActivity/ReflectOnCompositionActivity (a real
-        call-sequence change for that branch). [VERIFY BEFORE DEPLOY] every in-flight instance
-        that could have taken this branch already had a DIFFERENT guaranteed failure ahead of it
-        regardless - 05_report_html.md (compliance_health's own render prompt) was deleted
-        2026-09-01, so RenderHtmlActivity has had no agent registered for any ReportType outside
-        fixed_holistic/dimension_selection since then; no in-flight compliance_health instance
-        could have completed successfully after that date. Check for one anyway before deploying -
-        this bump makes its failure immediate (and free) instead of after spending real tokens.
-
-        [TRIED AND REVERTED SAME DAY] briefly widened the Entity redirect below from Entity-ALONE
-        to Entity-ANYWHERE (any RequestedDimensions list containing Entity, dropping every other
-        requested dimension) - reverted before shipping: that silently discarded the other picks,
-        never the actual intent. No version bump needed for the revert; 3.6's own call sequence for
-        every case is unchanged from what it always was.
-
-        [TRIED AND REVERTED SAME DAY] then tried a "stitch Entity into the same document" design
-        (ComputeScoreActivity + full fetch whenever Entity was combined with other dimensions, a
-        new render agent nesting a fixed_holistic mini-dashboard for Entity's block alongside plain
-        sections for the rest) - reverted before shipping per final product direction: a real
-        "Generate" click naming several dimensions produces one INDEPENDENT report PER dimension,
-        not one combined document. That fan-out happens in RunEndpoints.cs, BEFORE anything is
-        enqueued - every real "dimension_selection" orchestration instance now only ever has 0 or 1
-        requested dimensions, same as this file's pre-existing Entity-ALONE redirect already
-        assumed. No version bump needed for this revert either; nothing built on the interim design
-        ever shipped.
-
-        Bumped 3.6 -> 3.7: new InsightsReportOrchestrationInput field UseAnalystNarrative (default
-        false, unchanged for every existing caller). When true AND the request is
-        "dimension_selection" naming exactly one FreehandDimensions.Names member, the Narrating
-        stage schedules ONE AnalyzeAndNarrateActivity call instead of NarrateActivity followed by
-        the up-to-maxReflectionIterations ReflectOnNarrativeActivity/NarrateActivity loop - a real
-        call-sequence change for that specific combination (see AnalyzeAndNarrateActivity's own doc
-        comment and docs/superpowers/specs/2026-09-20-narrative-analyst-agent-design.md). Every
-        other ReportType/dimension combination, and every existing caller that never sets this
-        field, keeps calling NarrateActivity/ReflectOnNarrativeActivity exactly as before - zero
-        history-shape change for any of those. [VERIFY BEFORE DEPLOY] no instance with
-        UseAnalystNarrative=true could have existed before this bump (the field did not exist), so
-        only in-flight dimension_selection freehand-dimension instances need checking, and their
-        own call sequence (the v1 Narrate/Reflect loop) is completely unchanged by this bump.
-
-        Bumped 3.7 -> 3.8: UseAnalystNarrative removed from InsightsReportOrchestrationInput. v2
-        (AnalyzeAndNarrateActivity) is now the ONLY narrate path for the 5 freehand dimensions -
-        real call-sequence change for that combination (was previously conditional on the now-
-        removed flag, defaulting to the v1 Narrate/Reflect loop). Every other ReportType/dimension
-        combination is completely unaffected - still the unchanged v1 loop. [VERIFY BEFORE DEPLOY]
-        any in-flight dimension_selection freehand-dimension instance from a 3.7 build that had
-        UseAnalystNarrative=false (the old default) would replay against a DIFFERENT call sequence
-        under this version - check for in-flight instances of that shape specifically before this
-        deploys; a 3.7 instance that had UseAnalystNarrative=true already matches 3.8's sequence
-        exactly and needs no check.
-
-        Bumped 3.8 -> 3.9: ValidateUserDimensionStructureActivity's ScheduleTask call removed from
-        the dimension_selection render-retry loop entirely - a real call-sequence change, same
-        class as 3.7->3.8's removal. Users joined FreehandDimensions.Names 2026-09-23 (agent-decided
-        structure now, like every other freehand dimension), so the fixed-template structural
-        invariants that activity checked (4 named tabs, donut, role strip, lens toggle) no longer
-        describe what this dimension ever renders - keeping the call would refuse every real
-        freehand Users render. [VERIFY BEFORE DEPLOY] any in-flight 3.8 dimension_selection:Users
-        instance expects this ScheduleTask call in its history; replaying it under 3.9 (which never
-        schedules it) is a real non-determinism mismatch - check for in-flight instances of that
-        exact shape before this deploys. Every other ReportType/dimension combination never took
-        this branch at all (guarded internally on ReportType+RequestedDimensions), so is completely
-        unaffected.
-
-        Bumped 3.9 -> 4.0: new InsightsReportOrchestrationInput fields WindowStart/WindowEnd, passed
-        straight through into FetchDimensionsInput (which already had these fields since 3.2->3.3,
-        just never fed by anything real). Payload-shape-only for the orchestrator itself (same
-        ScheduleTask sequence) - the real threading work is in RunEndpoints (resolves the request's
-        Period string via ReportPeriodResolver before enqueueing) and FetchDimensionsActivity
-        (Act/Event now also take a real window, sql/11 + sql/14 deployed to UAT requiring it).
-        Both fields default to null, so every existing caller (tests, the CLI trigger, any in-flight
-        3.9 instance) keeps its exact current behaviour - TimelinessFY/EvidenceIntegrity still fall
-        back to current-FY-to-date, and Act/Event were never reachable via the public API's
-        dimension_selection path with a real window before this release either way, so there is no
-        in-flight instance whose history this could contradict. **COORDINATED RELEASE**: this
-        worker build and the sql/11 + sql/14 deploy must ship together, same reasoning as 3.2->3.3 -
-        deploy either alone and Act/Event fetch fails (degrades to a placeholder, report still
-        ships) until both are in place.
-
-        Bumped 4.0 -> 4.1: PersistInput (scheduled at the SAME position, same ScheduleTask call -
-        payload-shape-only, not a call-sequence change) gains input.RequestedDimensions, which
-        PersistActivity now writes into the new GeneratedReport.RequestedDimensions column (sql/33,
-        deployed to UAT 2026-09-25) - the real replacement for the interim Period "::dim=" suffix
-        EfCooldownRepository used to parse (see ReportDimensionKey's own doc comment). Trailing
-        optional field, defaults null, so an in-flight 4.0 instance replays identically.
-        **COORDINATED RELEASE, HARDER FAILURE MODE THAN 3.9->4.0's**: sql/33 MUST be live before
-        this worker build deploys - unlike Act/Event's window params (which degrade to a
-        placeholder if the SQL isn't there yet), a worker writing RequestedDimensions against a
-        database that lacks the column gets a hard EF "Invalid column name" error on EVERY SINGLE
-        PersistActivity call, breaking ALL report persistence, not just one dimension. sql/33 is
-        additive-only (nullable column, permissive CHECK) and was deployed to UAT ahead of this code
-        specifically so this ordering constraint is already satisfied there - verify it is live in
-        any OTHER environment before this worker build ships to it.
-
-        Bumped 4.1 -> 4.2: AnalyzeAndNarrateInput (scheduled at the SAME position, same
-        ScheduleTask call - payload-shape-only) gains WindowStart/WindowEnd, threaded straight from
-        input.WindowStart/WindowEnd (already on this orchestrator's own input) into
-        ReadOnlySqlFetchTool's #scoped narrowing - closes a real gap where a live SQL tool call
-        during narrate saw the tenant's full all-time data even when the dimension's own fetch was
-        window-scoped. Trailing optional fields, default null, so an in-flight 4.1 instance replays
-        identically - no coordinated release needed, this is C#-only, no new SQL dependency.
-
-        Bumped 4.2 -> 4.3: a NEW conditional ScheduleTask call, BuildReasoningTraceActivity, added
-        immediately after PersistActivity - a real call-sequence change, not payload-shape-only.
-        Only reachable when freehandDimensionName is not null (the same single-dimension freehand
-        gate AnalyzeAndNarrateActivity already uses) - every fixed_holistic/multi-dimension/non-
-        freehand run's call sequence is completely unchanged. PersistOutput also gains
-        GeneratedAtUtc (the real timestamp this report's row/blob were built with, including on the
-        redelivery/lost-the-race short-circuit paths, which now look it up rather than assuming a
-        freshly re-derived DateTime.UtcNow) - needed so the new activity's reasoning-trace blob path
-        matches what ReportContentService will later re-derive from GeneratedReport.GeneratedAtUtc.
-        [VERIFY BEFORE DEPLOY] any in-flight 4.2 freehand-single-dimension instance replaying past
-        its own PersistActivity call under 4.3 would now also expect this new ScheduleTask call in
-        its history - check for in-flight instances of that exact shape before this deploys, same
-        reasoning as every other additive-call-sequence bump in this file's own history.
-        [UPDATED 2026-09-26] BuildReasoningTraceActivity's collaborators (IReasoningExplainerAgent,
-        IReasoningTraceStore) are now WIRED FOR REAL in PaidReportAgentsRegistration.cs/
-        WorkerRegistration.cs (gpt-4o-mini on the same Llm:Maf endpoint/key, same blob container the
-        report itself uses) - it is NO LONGER inert on a normally-configured host. Every freehand-
-        single-dimension run now bills one extra small-model call and one extra blob write after
-        persist. Still fails soft (never blocks/fails the real report) and still resolves to a true
-        no-op ONLY on a host that genuinely has none of those services registered.
-
-        Bumped 4.3 -> 4.4: new ScheduleTask call, InjectNumberFormulaActivity (node 8i), runs right
-        after InjectForwardLookCssActivity and before the first Normalize call - an extra call
-        mid-sequence, not just a payload shape change, same load-bearing reasoning as every prior
-        mid-sequence insertion in this file. Closes a real gap found live: the per-number "i"
-        formula/definition hover-link (reference: a real product screenshot showing a hover-link on
-        each KPI number revealing its formula) was tried twice as a render-prompt instruction
-        across 3 real tenant-1285 Licence renders and NEVER once produced the markup - this
-        freehand dimension's layout varies too much per run for a free-text instruction to have a
-        reliable anchor (confirmed live: even the outer container class differed -
-        "report-stack"/"report"/"sections" - across the 3 runs). Same class of problem
-        InjectCoverageGridActivity/InjectBacklogAgeBarActivity already solved for their own pieces,
-        closed the same way here: build it from the real, already-reconciled Licence totals/rows
-        deterministically (LicenceNumberFormulas.Build -> NumberFormulaInjector.Inject) instead of
-        asking the render agent to author it. No-op (empty Figures list) for every
-        ReportType/dimension combination other than dimension_selection:Licence - narrow trial
-        scope on purpose. [VERIFY BEFORE DEPLOY] in-flight 4.3 instances not checked this
-        session.
-
-        [ADDED 2026-09-30] Multi-version dispatch is now available - see docs/superpowers/specs/
-        2026-09-30-orchestrator-multi-version-dispatch-design.md. From the NEXT bump onward: before
-        changing Version below, copy this file into Orchestration/Archived/
-        InsightsReportOrchestratorV{old}.cs, rename the class, strip its changelog to one frozen-
-        header line, and add it to WorkerRegistration.OrchestrationRegistrations under its OLD
-        version string. This is what lets an in-flight run from the outgoing version keep running
-        to completion across this deploy, instead of becoming permanently stuck (the 2026-09-30
-        incident this whole mechanism exists to prevent - see PROJECT_STATE_HANDOFF.md section 1a).
-        Retire the frozen class later via tools/DrainCheck, once it reports zero in-flight instances
-        under that version - no forced timeline, and multiple frozen versions may coexist if a
-        second bump happens before the first has drained.
-
-        [ADDED 2026-09-30, code review finding] Freezing this FILE does not freeze whatever
-        Insights.Domain helpers RunTask below calls directly (in-process, not via ScheduleTask) -
-        FreehandDimensions.Names, FixedHolisticComposition.Build/.Dimensions,
-        DimensionSelectionComposition.Build. A frozen instance replays against whatever those
-        classes look like NOW, not what they looked like when it was frozen - same residual-risk
-        category as activities (see the spec's section 3.4), not something the freeze step protects
-        against. This already changed once for exactly this reason (Users joining
-        FreehandDimensions.Names drove the 3.8 -> 3.9 bump) - if a future bump touches one of these
-        again while an earlier frozen version is still draining, that is worth a second look before
-        assuming the freeze alone is sufficient.
-
-        Bumped 4.4 -> 4.5, FIRST REAL USE of the freeze-on-bump process above (4.4 archived verbatim
-        to Orchestration/Archived/InsightsReportOrchestratorV4_4.cs, registered under "4.4" in
-        WorkerRegistration.cs): BuildReasoningTraceActivity (node 12b) now ALSO fires for
-        fixed_holistic (Entity), not just the freehand single-dimension path - real ScheduleTask call
-        sequence change (that node was previously skipped outright for fixed_holistic runs, gated on
-        `freehandDimensionName is not null`; the gate is now `freehandDimensionName is not null ||
-        input.ReportType == FixedHolisticComposition.ReportType`), load-bearing like every prior
-        mid-sequence change in this file. Entity has no single CompositionPlan/Assertions-for-one-
-        dimension shape (fixed_holistic spans up to 15 dimensions) - BuildReasoningTraceInput gained
-        a trailing-optional AllDimensionDataJson (dimension name -> {Rows, ControlTotals} JSON) used
-        INSTEAD OF DimensionRowsJson/DimensionControlTotalsJson when present; DimensionName is passed
-        as "Entity" for this path (matches ReportTypeRouter's own redirect naming). [VERIFY BEFORE
-        DEPLOY] in-flight 4.4 instances not checked this session - the frozen 4.4 class is what lets
-        them keep running unaffected regardless. */
-    public const string Version = "4.5";
+    // Frozen 2026-10-01 (superseded by version 4.5). Drain-check before deleting - see tools/DrainCheck.
+    public const string Version = "4.4";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
     // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
@@ -680,9 +239,14 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             // every other ReportType - same narrow-scope-on-purpose pattern as numberFormulaFigures
             // immediately above (Licence only). Trailing-optional fields on InjectNumberFormulaInput,
             // same already-scheduled node 8i - no new orchestrator node, no version bump needed.
-            // [FIX 2026-10-01, found live against a real render] Real component scores are
-            // fractional (e.g. 94.7) - an (int) cast here silently truncated them before this was
-            // ever actually rendered against real data.
+            // [TYPE-ONLY FIX, 2026-10-01, justified exception to "never edit a frozen file"] This
+            // field was added the SAME DAY as the freeze below, never separately shipped/deployed,
+            // so there is no real in-flight instance whose replay history this could disturb -
+            // EntityScoreFormulaInjector.ScoreComponent.Score changed int -> decimal (a real
+            // precision bug: real component scores are fractional, e.g. "94.7", and (int) truncated
+            // them) in the SAME pass that discovered it. Kept in sync here purely so this file
+            // still COMPILES against the shared class - not a behavior change to anything that was
+            // ever live.
             decimal? entityCompositeScore = null;
             IReadOnlyList<EntityScoreFormulaInjector.ScoreComponent> entityScoreComponents = [];
             if (input.ReportType == FixedHolisticComposition.ReportType)
@@ -782,10 +346,9 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             // comment] Pure deserialization of already-fetched activity output, no I/O/clock/
             // randomness - safe directly in the orchestrator body, same as PartialDimensionPlaceholder
             // above. Null when Location degraded (dimensions.DimensionResults has no "Location" key).
-            var locationResult = dimensions.DimensionResults.TryGetValue("Location", out var locationJson)
-                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson)
+            var locationRows = dimensions.DimensionResults.TryGetValue("Location", out var locationJson)
+                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<LocationControlTotals, LocationRow>>(locationJson)?.Rows
                 : null;
-            var locationRows = locationResult?.Rows;
 
             // [ADDED 2026-09-09] Same deliberate, scoped exception as locationRows immediately
             // above - feeds InjectBacklogAgeBarActivity (node 8e below). Null when BacklogAging
@@ -810,119 +373,6 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             var forwardPipelineResult = dimensions.DimensionResults.TryGetValue("ForwardPipeline", out var forwardPipelineJson)
                 ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<ForwardPipelineControlTotals, ForwardPipelineRow>>(forwardPipelineJson)
                 : null;
-
-            // [ADDED 2026-10-01] Same deliberate, scoped extraction as the dimensions above - feeds
-            // EntityTilePercentageInjector (node 8i) with the real fraction behind every known
-            // headline tile/card percentage. fixed_holistic is the only ReportType these are ever
-            // fetched for today, same reasoning as locationRows/backlogAgingResult above.
-            var licenceResult = dimensions.DimensionResults.TryGetValue("Licence", out var licenceJson)
-                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<LicenceControlTotals, LicenceRow>>(licenceJson)
-                : null;
-            var riskResult = dimensions.DimensionResults.TryGetValue("Risk", out var riskJson)
-                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<RiskControlTotals, RiskRow>>(riskJson)
-                : null;
-            var timelinessFYResult = dimensions.DimensionResults.TryGetValue("TimelinessFY", out var timelinessFYJson)
-                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<TimelinessFYControlTotals, TimelinessFYRow>>(timelinessFYJson)
-                : null;
-            var evidenceIntegrityResult = dimensions.DimensionResults.TryGetValue("EvidenceIntegrity", out var evidenceIntegrityJson)
-                ? System.Text.Json.JsonSerializer.Deserialize<DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>>(evidenceIntegrityJson)
-                : null;
-
-            // [ADDED 2026-10-01] Real user ask: every tile/card headline percentage gets a real
-            // fraction formula, not just the Hero score (EntityScoreFormulaInjector above).
-            // Tab1 Snapshot: keyed by the tile's own label text (a fixed catalog, confirmed stable
-            // across two real renders). Tab2/Tab4: positional WITHIN their own named pane, never by
-            // label text - see EntityTilePercentageInjector.InjectPositional's own doc comment for
-            // why ("Critical overdue" became "Overdue rate", "Liability overlap" became "Personal-
-            // liability overlap", "Previous comparable period" became "Comparator period", all
-            // between two real renders of the exact same report).
-            var entityTileFigures = new Dictionary<string, EntityTilePercentageInjector.FractionFigure>();
-            IReadOnlyList<EntityTilePercentageInjector.FractionFigure?> entityPane2KpiPairFigures = [];
-            IReadOnlyList<EntityTilePercentageInjector.FractionFigure?> entityPane4FybarFigures = [];
-            IReadOnlyList<EntityTilePercentageInjector.FractionFigure?> entityPane4StackLegendFigures = [];
-            if (input.ReportType == FixedHolisticComposition.ReportType)
-            {
-                if (licenceResult is not null)
-                {
-                    entityTileFigures["Licence · Expired"] = new(
-                        "Licence Expired percentage", licenceResult.ControlTotals.TenantExpiredLicences, licenceResult.ControlTotals.ScopedLicences,
-                        "Expired licences", "Licences counted");
-                }
-                if (locationResult is not null)
-                {
-                    entityTileFigures["Backlog · overdue"] = new(
-                        "Tenant-wide overdue percentage", locationResult.ControlTotals.OverdueInstances, locationResult.ControlTotals.ScopedInstances,
-                        "Overdue obligations", "Obligations counted");
-                }
-                TimelinessFYRow? currentFyRow = null;
-                if (timelinessFYResult is not null)
-                {
-                    currentFyRow = timelinessFYResult.Rows.FirstOrDefault(r => r.FyBucket == "current_fy");
-                    if (currentFyRow is not null)
-                    {
-                        entityTileFigures["Timeliness · on-time closure"] = new(
-                            "Current-period on-time percentage", currentFyRow.OnTimeEvents, currentFyRow.CompletedEvents,
-                            "Completed on time", "Completed events");
-                    }
-                }
-                EvidenceIntegrityRow? hasTrailRow = null;
-                if (evidenceIntegrityResult is not null)
-                {
-                    hasTrailRow = evidenceIntegrityResult.Rows.FirstOrDefault(r => r.TrailBucket == "has_trail");
-                    if (hasTrailRow is not null)
-                    {
-                        entityTileFigures["Evidence · review trail"] = new(
-                            "Review-trail percentage", hasTrailRow.ScheduleCount, evidenceIntegrityResult.ControlTotals.DistinctClosedSchedules,
-                            "Closed schedules with a review trail", "Closed schedules");
-                    }
-                }
-
-                // Tab2 (di-pane-2): Risk card's two pairs, in the FIXED order the render prompt
-                // writes them (overdue-rate pair first, liability-overlap pair second) - positional
-                // because the pair's own label wording is free prose, not a fixed catalog.
-                if (riskResult is not null)
-                {
-                    var criticalRow = riskResult.Rows.FirstOrDefault(r => r.RiskLabel is not null && r.RiskLabel.StartsWith("Critical", StringComparison.OrdinalIgnoreCase));
-                    if (criticalRow is not null)
-                    {
-                        entityPane2KpiPairFigures =
-                        [
-                            new("Critical overdue percentage", criticalRow.Overdue, criticalRow.Instances,
-                                "Critical overdue obligations", "Critical obligations"),
-                            new("Imprisonment-on-Critical percentage", criticalRow.ImprisonmentInstances, riskResult.ControlTotals.ImprisonmentInstances,
-                                "Critical obligations carrying imprisonment exposure", "Obligations carrying imprisonment exposure (tenant-wide)"),
-                        ];
-                    }
-                }
-
-                // Tab4 (di-pane-4): Timeliness card's two fybars (current period, then previous),
-                // and the Evidence card's stacklegend (with-trail, then without-trail) - both
-                // positional for the same reason as Tab2 above.
-                if (currentFyRow is not null && timelinessFYResult is not null)
-                {
-                    var previousFyRow = timelinessFYResult.Rows.FirstOrDefault(r => r.FyBucket == "previous_fy");
-                    entityPane4FybarFigures =
-                    [
-                        new("Current-period on-time percentage", currentFyRow.OnTimeEvents, currentFyRow.CompletedEvents,
-                            "Completed on time", "Completed events"),
-                        previousFyRow is null ? null : new(
-                            "Previous-period on-time percentage", previousFyRow.OnTimeEvents, previousFyRow.CompletedEvents,
-                            "Completed on time", "Completed events"),
-                    ];
-                }
-                if (hasTrailRow is not null && evidenceIntegrityResult is not null)
-                {
-                    var noTrailRow = evidenceIntegrityResult.Rows.FirstOrDefault(r => r.TrailBucket == "single_row_only");
-                    entityPane4StackLegendFigures =
-                    [
-                        new("Review-trail percentage", hasTrailRow.ScheduleCount, evidenceIntegrityResult.ControlTotals.DistinctClosedSchedules,
-                            "Closed schedules with a review trail", "Closed schedules"),
-                        noTrailRow is null ? null : new(
-                            "No-review-trail percentage", noTrailRow.ScheduleCount, evidenceIntegrityResult.ControlTotals.DistinctClosedSchedules,
-                            "Closed schedules without a review trail", "Closed schedules"),
-                    ];
-                }
-            }
 
             // [ADDED 2026-09-08] Only meaningful for DimensionSelectionComposition.ReportType - the
             // render agent's own payload only ever carried `assertions` (curated, top-5-capped
@@ -1128,9 +578,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 // when Figures is empty) - narrow trial scope on purpose.
                 var numberFormulaed = await context.ScheduleTask<InjectNumberFormulaOutput>(
                     typeof(InjectNumberFormulaActivity).Name, "1.0",
-                    new InjectNumberFormulaInput(
-                        forwardStyled.Html, numberFormulaFigures, entityCompositeScore, entityScoreComponents, entityTileFigures,
-                        entityPane2KpiPairFigures, entityPane4FybarFigures, entityPane4StackLegendFigures));
+                    new InjectNumberFormulaInput(forwardStyled.Html, numberFormulaFigures, entityCompositeScore, entityScoreComponents));
 
                 // Structural invariant gate (CLAUDE.md Sec.11), not cosmetic QA - throws
                 // OrchestrationRefusedException on the actual persisted HTML if the score-component
@@ -1281,23 +729,13 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             var persistResult = await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
                 new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId, input.RequestedDimensions));
 
-            // [ADDED 2026-09-26] Node 12b - the freehand single-dimension path (the only shape with
-            // a real CompositionPlan + Assertions/Findings for one dimension). Fails soft, always
-            // (see BuildReasoningTraceActivity's own doc comment) - never allowed to affect what
-            // this method returns. LIVE on a normally-configured host (real
+            // [ADDED 2026-09-26] Node 12b - only for the freehand single-dimension path (the only
+            // shape with a real CompositionPlan + Assertions/Findings for one dimension). Fails
+            // soft, always (see BuildReasoningTraceActivity's own doc comment) - never allowed to
+            // affect what this method returns. LIVE on a normally-configured host (real
             // IReasoningExplainerAgent/IReasoningTraceStore - see this class's own Version history
             // comment above), not merely wired-but-inert.
-            //
-            // [WIDENED 2026-10-01, version bump 4.4 -> 4.5] Also fires for fixed_holistic (Entity) -
-            // that report has no single CompositionPlan/Assertions-for-one-dimension shape (it spans
-            // up to 15 real dimensions), so it is given `dimensions.DimensionResults` wholesale
-            // (AllDimensionDataJson) instead of one dimension's rows/control-totals; DimensionName
-            // is "Entity" (matches ReportTypeRouter's own redirect naming), and the required
-            // DimensionRowsJson parameter gets a harmless "[]" placeholder - see
-            // ReasoningExplainerAgent's own doc comment on why AllDimensionDataJson, when present,
-            // replaces it in the payload the explainer agent actually receives.
-            var isEntityFixedHolistic = input.ReportType == FixedHolisticComposition.ReportType;
-            if ((freehandDimensionName is not null || isEntityFixedHolistic) && Guid.TryParse(persistResult.ReportId, out var reportGuid))
+            if (freehandDimensionName is not null && Guid.TryParse(persistResult.ReportId, out var reportGuid))
             {
                 // [FIX 2026-09-27] The explainer's tokens were billed but never counted in the tenant's
                 // recorded usage. Added straight to the total, NOT via ChargeAndCheck: the report is
@@ -1306,16 +744,15 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 var trace = await context.ScheduleTask<BuildReasoningTraceOutput>(typeof(BuildReasoningTraceActivity).Name, "1.0",
                     new BuildReasoningTraceInput(
                         reportGuid, input.TenantId, input.ReportType, persistResult.GeneratedAtUtc,
-                        freehandDimensionName ?? "Entity", plan, dimensions.Assertions, dimensions.Findings,
-                        freehandRowsJson ?? "[]", freehandControlTotalsJson, freehandDataQualityJson,
+                        freehandDimensionName, plan, dimensions.Assertions, dimensions.Findings,
+                        freehandRowsJson!, freehandControlTotalsJson, freehandDataQualityJson,
                         // [ADDED 2026-09-27] Same ScheduleTask call, same position - one extra
                         // trailing optional input field, so an in-flight 4.3 run replays unchanged.
                         // Deliberately NO version bump: a bump strands every in-flight run on
                         // deploy (seen live 2026-09-27, a Users run stuck on v4.1), and a
                         // payload-only change never needed one.
                         ReportHtml: finalStructureChecked.Html,
-                        UserId: input.UserId, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd,
-                        AllDimensionDataJson: isEntityFixedHolistic ? dimensions.DimensionResults : null));
+                        UserId: input.UserId, WindowStart: input.WindowStart, WindowEnd: input.WindowEnd));
                 runTotalTokens += trace?.TotalTokens ?? 0;
             }
 
