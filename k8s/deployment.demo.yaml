@@ -2,22 +2,22 @@ apiVersion: apps/v1
 kind: Deployment
 
 metadata:
-  name: trpl-regtrack-insights-worker
+  name: trpl-regtrack-insights-worker-demo
   namespace: demo
   labels:
-    app: trpl-regtrack-insights-worker
+    app: trpl-regtrack-insights-worker-demo
 
 spec:
   replicas: 1
 
   selector:
     matchLabels:
-      app: trpl-regtrack-insights-worker
+      app: trpl-regtrack-insights-worker-demo
 
   template:
     metadata:
       labels:
-        app: trpl-regtrack-insights-worker
+        app: trpl-regtrack-insights-worker-demo
 
     spec:
       automountServiceAccountToken: false
@@ -26,7 +26,7 @@ spec:
         - name: acr-pull-secret
 
       containers:
-        - name: trpl-regtrack-insights-worker
+        - name: trpl-regtrack-insights-worker-demo
 
           image: conatinerimages.azurecr.io/demo/trpl-regtrack-insights-worker:latest
 
