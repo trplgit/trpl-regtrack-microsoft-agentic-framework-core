@@ -261,7 +261,15 @@ percentage or a new formula:**
 | `OverduePct` (an act row) | Overdue percentage | "The percentage of {ActName}'s compliances counted this period that are overdue." | Overdue compliances (this law) | Compliances counted (this law) |
 | `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across all laws) | Compliances counted (across all laws) |
 | `UnlinkedPct` | Unlinked percentage | "The percentage of all compliances counted this period that are not correctly linked to their law." | Unlinked compliances | Compliances counted (across all laws) |
-| `LargestRegulatorSharePct` (numerator = `LargestRegulatorSharePct` / 100 x `ScopedInstances`, rounded to a whole number - compute it, never invent it; dividing it back by `ScopedInstances` and multiplying by 100 must reproduce `LargestRegulatorSharePct`) | Largest single-regulator share | "The percentage of all compliances counted this period that fall under the single largest regulator (Regulator ID {LargestRegulatorId})." | Compliances under the largest regulator (Regulator ID {LargestRegulatorId}) | Compliances counted (across all laws) |
+| `LargestRegulatorSharePct` (numerator = `LargestRegulatorSharePct` / 100 x `SumOfRows`, rounded to a whole number - compute it, never invent it; dividing it back by `SumOfRows` and multiplying by 100 must reproduce `LargestRegulatorSharePct`) | Largest single-regulator share | "The percentage of all compliances counted this period that fall under the single largest regulator (Regulator ID {LargestRegulatorId})." | Compliances under the largest regulator (Regulator ID {LargestRegulatorId}) | Compliances counted (across all laws) |
+
+**[FIXED 2026-10-01] "Compliances counted" in every row above means `SumOfRows`, never `ScopedInstances`.**
+`ScopedInstances` is the distinct-OBLIGATION count; `OverduePct`/`UnlinkedPct`/`LargestRegulatorSharePct`
+are all computed against `SumOfRows`, the scoped OCCURRENCE total (one obligation recurring 3 times
+in the period counts as 3). The two numbers differ on a real tenant (e.g. 142 vs 280) - if you
+back-compute a numerator from the wrong one, it matches no real data and the report gets refused as
+fabricated. When a numerator/denominator pair must multiply back to a shown percentage, the "total
+compliances" side of that pair is `SumOfRows`.
 
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.

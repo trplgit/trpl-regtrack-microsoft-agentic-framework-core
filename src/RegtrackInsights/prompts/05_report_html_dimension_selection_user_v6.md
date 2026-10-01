@@ -274,6 +274,15 @@ percentage or a new formula:**
 | `OnTimePct` (a user row) | On-time percentage | "The percentage of {UserName}'s completed events that finished on time." | Completed on time (this person) | Completed events (this person) |
 | `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across everyone) | Compliances counted (across everyone) |
 
+**[ADDED 2026-10-01] "Compliances counted (across everyone)" means `ScopedOccurrences`, never `ScopedInstances`.**
+`ScopedInstances` is the distinct-OBLIGATION count; `TenantOverduePct` is computed against
+`ScopedOccurrences`, the scoped OCCURRENCE total (one obligation recurring 3 times in the period
+counts as 3). The two numbers differ on a real tenant - if a numerator/denominator pair you show is
+meant to multiply back to a shown percentage, the "total compliances" side of that pair is
+`ScopedOccurrences`, never `ScopedInstances`. (This dimension's per-user `Instances`/
+`PerformerInstances`/`ReviewerInstances` are already occurrence-grain too - only
+`AssignedInstancesDistinct`/`UnassignedInstances` stay distinct-obligation counts.)
+
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
 - **Title** = "{Field's own name above} - {the real value}%" (e.g. "Overdue percentage - 12.3%").
