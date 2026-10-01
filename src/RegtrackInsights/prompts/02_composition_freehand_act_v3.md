@@ -93,7 +93,9 @@ menu, not a list you must use - invent your own if something fits better):
 - **State tile map / state heat strip** - acts grouped by `State`, colour by overdue share (only if
   `State` is populated for enough rows; central acts shown separately).
 - **Jail-risk lollipop** - acts with `ImprisonmentInstances > 0`, ranked.
-- **Linkage waffle / proportion bar** - `UnlinkedInstances` of `ScopedInstances` (`UnlinkedPct`).
+- **Linkage waffle / proportion bar** - `UnlinkedInstances` of `SumOfRows` (`UnlinkedPct`) - [FIXED
+  2026-10-01] not `ScopedInstances`, which is the distinct-obligation count; `UnlinkedPct` is
+  computed against the scoped occurrence total (`SumOfRows`), and the two differ on a real tenant.
 
 Every visual must be **interactive**: hover (or focus) on a mark shows that mark's real values
 (act name + the real fields that place it). Where useful add a sort toggle, a filter chip (e.g.

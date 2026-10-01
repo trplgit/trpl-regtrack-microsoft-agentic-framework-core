@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 
 metadata:
-  name: trpl-regtrack-insights-worker
+  name: trpl-regtrack-insights-worker-demo
   namespace: demo
 
   annotations:
@@ -14,8 +14,9 @@ metadata:
     # state. The endpoint only emits a frame on status CHANGE (no heartbeat in between) and a real
     # report run regularly goes longer than 60s between changes, so the ingress was cutting every
     # long-running stream off well before either the client or RunEndpoints.cs's own 15-minute
-    # MaxStreamDuration intended. Set to match that same 900s ceiling exactly, so the ingress is
-    # never stricter than the app already chose to be.
+    # MaxStreamDuration intended to be.
+    # Set to match that same 900s ceiling exactly, so the ingress is never stricter than the app
+    # already chose to be.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
 
@@ -30,6 +31,6 @@ spec:
 
             backend:
               service:
-                name: trpl-regtrack-insights-worker
+                name: trpl-regtrack-insights-worker-demo
                 port:
                   number: 80

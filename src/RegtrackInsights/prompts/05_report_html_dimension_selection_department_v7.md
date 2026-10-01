@@ -313,6 +313,14 @@ percentage or a new formula:**
 | `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across all departments) | Compliances counted (across all departments) |
 | `UnassignedPct` | Unassigned percentage | "The percentage of all compliances counted this period that have no department tag." | Unassigned compliances | Compliances counted (across all departments) |
 
+**[FIXED 2026-10-01] "Compliances counted (across all departments)" means `AssignedInstances + UnassignedInstances` added together, never `ScopedInstances`.**
+`ScopedInstances` is the distinct-OBLIGATION count; `TenantOverduePct`/`UnassignedPct` are both
+computed against the scoped OCCURRENCE total (one obligation recurring 3 times in the period counts
+as 3 - the same total `AssignedInstances` and `UnassignedInstances` already sum to between them).
+The two numbers differ on a real tenant (e.g. 142 vs 280) - if a numerator/denominator pair you show
+is meant to multiply back to a shown percentage, the "total compliances" side of that pair is
+`AssignedInstances + UnassignedInstances`, never `ScopedInstances` alone.
+
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
 - **Title** = "{Field's own name above} - {the real value}%" (e.g. "Overdue percentage - 12.3%").
