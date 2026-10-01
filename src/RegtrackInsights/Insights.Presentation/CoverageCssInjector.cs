@@ -32,7 +32,6 @@ public static partial class CoverageCssInjector
         .di-covchip__sw{display:inline-block;width:9px;height:9px;border-radius:2px;flex-shrink:0}
         .di-covchip__sw--healthy{background:#2e9e5b}
         .di-covchip__sw--under_configured{background:#e0a106}
-        .di-covchip__sw--has_ownerless{background:#e07a1f}
         .di-covchip__sw--unmapped{background:#c0392b}
         .di-covregion{padding:8px 0;border-top:1px solid var(--c-border)}
         .di-covregion:first-child{border-top:0;padding-top:2px}
@@ -44,9 +43,8 @@ public static partial class CoverageCssInjector
         .di-covtile--selected{outline:2px solid var(--c-text);outline-offset:-1px;z-index:3}
         .di-covtile--healthy{background:#2e9e5b}
         .di-covtile--under_configured{background:#e0a106}
-        .di-covtile--has_ownerless{background:#e07a1f}
         .di-covtile--unmapped{background:#c0392b}
-        .di-covmap[data-filter="healthy"] .di-covtile:not(.di-covtile--healthy),.di-covmap[data-filter="under_configured"] .di-covtile:not(.di-covtile--under_configured),.di-covmap[data-filter="has_ownerless"] .di-covtile:not(.di-covtile--has_ownerless),.di-covmap[data-filter="unmapped"] .di-covtile:not(.di-covtile--unmapped){opacity:.12;pointer-events:none}
+        .di-covmap[data-filter="healthy"] .di-covtile:not(.di-covtile--healthy),.di-covmap[data-filter="under_configured"] .di-covtile:not(.di-covtile--under_configured),.di-covmap[data-filter="unmapped"] .di-covtile:not(.di-covtile--unmapped){opacity:.12;pointer-events:none}
         .di-covlegend{display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;font-size:var(--fs-di-chip);color:var(--c-text-3)}
         .di-covlegend__item{display:inline-flex;align-items:center;gap:6px}
         .di-covlegend__item b{font-weight:600;color:var(--c-text)}
@@ -58,7 +56,6 @@ public static partial class CoverageCssInjector
         .di-covdetail__pill--healthy{background:#2e9e5b}
         .di-covdetail__pill--under_configured{background:#e0a106;color:#3a2a00}
         .di-covdetail__pill--under_configured .di-covdetail__dot{background:rgba(40,30,0,.55)}
-        .di-covdetail__pill--has_ownerless{background:#e07a1f}
         .di-covdetail__pill--unmapped{background:#c0392b}
         .di-covdetail__ref{font-size:var(--fs-di-chip);color:var(--c-grey);letter-spacing:.02em}
         .di-covdetail__title{font-size:var(--fs-di-snaphead);font-weight:600;letter-spacing:-.01em;margin:0;color:var(--c-text)}

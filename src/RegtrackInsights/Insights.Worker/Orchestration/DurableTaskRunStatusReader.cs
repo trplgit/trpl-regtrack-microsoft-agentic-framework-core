@@ -30,6 +30,57 @@ public sealed class DurableTaskRunStatusReader(
     /// </summary>
     private const string FailureMessage = "Report generation failed. Please try again.";
 
+    /// <summary>
+    /// [ADDED 2026-09-30, FOUND LIVE] A run whose history was written under an orchestrator
+    /// version this worker no longer registers (<see cref="InsightsReportOrchestrator.Version"/>
+    /// bumped since the run started, e.g. 4.3 -> 4.4) can never be resumed by any pod running the
+    /// new build - WorkerRegistration.cs registers exactly one version string, so there is no
+    /// handler left for the old one once a version-bumping deploy lands. A run that has simply
+    /// gone quiet for a long time looks the same from here regardless of whether its version
+    /// still matches - the underlying symptom (a hung activity call the SQL provider's own
+    /// retry/dequeue-count tracking never gives up on) is the same either way.
+    ///
+    /// Confirmed live: 3 real tenant-1285 runs stuck reporting "running" for 4+ hours after a
+    /// version-bumping deploy landed mid-render - zero further history, no queued work item for
+    /// any of them, cancel requests against them silently stuck in the same unreachable queue.
+    /// </summary>
+    private const int StaleMinutes = 30;
+
+    /// <summary>
+    /// [CHANGED 2026-09-30, code review finding on the multi-version dispatch design] Originally
+    /// compared state.Version against ONLY InsightsReportOrchestrator.Version (the current one).
+    /// Once a frozen version is kept registered alongside the current one (docs/superpowers/specs/
+    /// 2026-09-30-orchestrator-multi-version-dispatch-design.md), every run the frozen class
+    /// resumes would still fail that check and get reported "failed" the moment anyone polled it -
+    /// defeating the whole point of freezing it (the run finishes for real; the user would be told
+    /// it failed). Now checks registration-list MEMBERSHIP: any version WorkerRegistration still
+    /// registers for this orchestrator name is not orphaned on version grounds, current or frozen.
+    /// </summary>
+    internal static bool IsOrphaned(OrchestrationState state, out string reason) =>
+        IsOrphaned(state, Insights.Worker.WorkerRegistration.OrchestrationRegistrations, out reason);
+
+    internal static bool IsOrphaned(
+        OrchestrationState state,
+        IReadOnlyList<(string Name, string Version, Type Type)> knownRegistrations,
+        out string reason)
+    {
+        if (!knownRegistrations.Any(r => r.Name == state.Name && r.Version == state.Version))
+        {
+            reason = $"orchestrator version mismatch - '{state.Version}' is not registered by any " +
+                $"currently-deployed worker version (run name={state.Name})";
+            return true;
+        }
+
+        if (DateTime.UtcNow - state.LastUpdatedTime > TimeSpan.FromMinutes(StaleMinutes))
+        {
+            reason = $"no progress for over {StaleMinutes} minutes (last update {state.LastUpdatedTime:O})";
+            return true;
+        }
+
+        reason = "";
+        return false;
+    }
+
     public async Task<InsightsRunStatus?> GetStatusAsync(string runId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(runId))
@@ -42,6 +93,18 @@ public sealed class DurableTaskRunStatusReader(
             return null;
 
         var status = MapStatus(state.OrchestrationStatus);
+
+        // CLAUDE.md non-negotiable #2 (fail closed, fail loudly): report this as failed the
+        // moment anyone asks, rather than leaving a false "running" spinner forever - no new
+        // monitoring, no background job, just a truthful answer at read time. Scoped to "running"
+        // only - a "queued" run legitimately has no progress yet, that is a capacity wait, not an
+        // orphaned run, and is not what this check is for.
+        if (status == "running" && IsOrphaned(state, out var orphanReason))
+        {
+            logger.LogError(
+                "Report run {RunId} treated as failed - orphaned ({Reason}).", runId, orphanReason);
+            status = "failed";
+        }
 
         if (status == "failed")
         {
@@ -58,7 +121,75 @@ public sealed class DurableTaskRunStatusReader(
             Stage: stage,
             StagesComplete: stagesComplete,
             StagesTotal: StagesTotal,
-            Message: status == "failed" ? FailureMessage : null);
+            Message: status == "failed" ? FailureMessage : null,
+            ReportId: status == "complete" ? ParseReportId(state.Output, runId) : null,
+            Dimension: ParseDimension(state.Input, runId));
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-24] Reads the real dimension this run is for straight out of the
+    /// orchestration's OWN stored input (DTFx persists whatever object CreateOrchestrationInstanceAsync
+    /// was called with as InputText) - no new column, no new write path, this data was already
+    /// there. RequestedDimensions is a single-element list for a fanned-out dimension_selection unit
+    /// (RunEndpoints.cs's GenerateOneReportAsync - one orchestration instance per requested
+    /// dimension) - real, verified, never the ORIGINAL caller's full multi-dimension list. Null/
+    /// absent RequestedDimensions with ReportType fixed_holistic means "Entity", the same product-
+    /// facing label ReportTypeRouter's own Entity-alone redirect already uses - never invented here,
+    /// just read back. Same defensive stance as ParseReportId/ParseCustomStatus: unreadable input
+    /// degrades to null, never throws past a status read.
+    /// </summary>
+    private string? ParseDimension(string? input, string runId)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(input);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("RequestedDimensions", out var dimensions)
+                && dimensions.ValueKind == JsonValueKind.Array && dimensions.GetArrayLength() > 0)
+                return dimensions[0].GetString();
+
+            if (root.TryGetProperty("ReportType", out var reportType)
+                && reportType.GetString() == FixedHolisticComposition.ReportType)
+                return "Entity";
+
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Run {RunId} has an unreadable orchestration input; dimension will be reported as unknown.", runId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// PersistActivity's own output (PersistOutput.ReportId) becomes the orchestration's terminal
+    /// Output - state.Output was already being fetched above (and logged on failure) but never
+    /// read on success. Null rather than throwing on anything unreadable: a client that already
+    /// has a "complete" status should never have the response fail underneath it because this one
+    /// extra field could not be parsed - see this class's own doc comment on ParseCustomStatus for
+    /// the same reasoning applied there.
+    /// </summary>
+    private string? ParseReportId(string? output, string runId)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            return document.RootElement.TryGetProperty("ReportId", out var reportIdElement)
+                ? reportIdElement.GetString()
+                : null;
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Run {RunId} completed but its Output could not be parsed for ReportId.", runId);
+            return null;
+        }
     }
 
     /// <summary>

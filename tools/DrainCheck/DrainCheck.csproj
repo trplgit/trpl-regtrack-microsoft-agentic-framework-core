@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Checked-in release-process tool, not deployed. Run before deleting a frozen orchestrator
+    version's class (docs/superpowers/specs/2026-09-30-orchestrator-multi-version-dispatch-design.md,
+    section 3.3) to confirm no in-flight instances still exist under that version.
+
+    Never deployed alongside the worker/API host - sibling of src/ and tests/, matching
+    tools/Insights.ApiDevHost's own placement (RegtrackInsights.csproj's own comment on the SDK's
+    default globs / MSB3030 applies here too).
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DrainCheck</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+  </ItemGroup>
+
+</Project>

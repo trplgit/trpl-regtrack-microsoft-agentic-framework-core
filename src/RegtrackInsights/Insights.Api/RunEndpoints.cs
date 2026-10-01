@@ -110,6 +110,20 @@ public static class RunEndpoints
                     "At least one dimension must be selected for a dimension_selection report.");
             }
 
+            // [ADDED 2026-09-27, FOUND LIVE] A windowed dimension with an unrecognised period used
+            // to be accepted (202 "queued") and then fail minutes later in the worker - which
+            // correctly refuses to invent a window. Refuse the whole request up front instead,
+            // before cooldown or enqueue, so nothing is half-queued.
+            var needsWindow = request.ReportType == FixedHolisticComposition.ReportType
+                || (request.ReportType == DimensionSelectionComposition.ReportType
+                    && dimensionsToGenerate.Any(d => d is not null && ReportPeriodRequestParser.WindowRequiredDimensions.Contains(d)));
+            if (needsWindow && ReportPeriodRequestParser.TryParse(request.Period) is null)
+            {
+                return InsightsResults.Error(
+                    InsightsErrorCode.InvalidPeriod,
+                    $"period must be one of: {ReportPeriodRequestParser.RecognisedValues}.");
+            }
+
             // [BUG FOUND LIVE, 2026-09-11] Originally Task.WhenAll over the units, reasoning that
             // EnqueueAsync's own idempotency made concurrent calls for the same key safe to race -
             // true for EnqueueAsync, but ICooldownRepository (EfCooldownRepository, EF Core-backed)
@@ -204,6 +218,39 @@ public static class RunEndpoints
             return Results.Empty;
         });
 
+        app.MapPost("/api/insights/runs/{runId}/cancel", async (
+            string runId,
+            [FromServices] IInsightsCaller caller,
+            [FromServices] ITenantDirectoryRepository tenants,
+            [FromServices] IRunStatusReader runs,
+            [FromServices] IInsightsRunCanceller canceller,
+            CancellationToken cancellationToken) =>
+        {
+            // Same auth order as the stream endpoint above, same reasoning: the tenant is parsed
+            // out of the (guessable, derived) runId and treated as a claim to verify, never a
+            // grant - checked before anything about the run's existence is revealed.
+            if (!InsightsRunId.TryParse(runId, out var tenantId))
+                return InsightsResults.TenantNotEligible();
+
+            var tenant = await tenants.IsEligibleAsync(caller.UserId, tenantId, cancellationToken);
+            if (tenant is null)
+                return InsightsResults.TenantNotEligible();
+
+            var status = await runs.GetStatusAsync(runId, cancellationToken);
+            if (status is null)
+                return InsightsResults.Error(InsightsErrorCode.ReportNotVisible, "No such report run.");
+
+            // Idempotent, not an error - cancelling a run that already finished (by itself, or via
+            // an earlier cancel call) is a no-op, not a refusal. No new InsightsErrorCode for this:
+            // API_CONTRACTS.md's five codes are locked, and "already finished" is not a failure to
+            // report as one.
+            if (status.IsTerminal)
+                return Results.Ok(new { runId, cancelled = false, status = status.Status });
+
+            var cancelled = await canceller.CancelAsync(runId, $"Cancelled via API by user {caller.UserId}.", cancellationToken);
+            return Results.Ok(new { runId, cancelled, status = cancelled ? "failed" : status.Status });
+        });
+
         app.MapGet("/api/insights/requests/{reqId:guid}/stream", async (
             Guid reqId,
             HttpContext http,
@@ -272,19 +319,46 @@ public static class RunEndpoints
             request.ReportType!, dimension is null ? null : [dimension]);
 
         // [TEMP WORKAROUND 2026-09-09, see ReportDimensionKey's own doc comment] - folds
-        // RequestedDimensions into the period used for BOTH the cooldown check and the enqueue
-        // below, so each fanned-out dimension gets its OWN cooldown/run-id key even though they
-        // all share the caller's one Period value. No-op for every report type except
-        // dimension_selection.
+        // RequestedDimensions into the period used for the enqueue/run-id key below, so each
+        // fanned-out dimension gets its OWN run-id even though they all share the caller's one
+        // Period value. No-op for every report type except dimension_selection.
+        // [NO LONGER feeds the cooldown check as of 2026-09-25 - that now takes `dimension`
+        // directly, see below.]
         var effectivePeriod = ReportDimensionKey.ForCooldownAndRunId(request.Period, requestedDimensions);
 
-        // Step 3 (design doc Sec.2.4's 30-day cooldown) - keyed to (scope, reportType, period),
+        // Step 3 (design doc Sec.2.4's cooldown) - keyed to (scope, reportType, dimension)
+        // [REDESIGNED 2026-09-25, was period - see ICooldownRepository's own doc comment for why],
         // NOT to this caller, so a colleague at the same scope who generated it yesterday locks
-        // this call too.
+        // this call too. `dimension` here is the raw per-unit name (or null for a non-
+        // dimension_selection request) - effectivePeriod stays reserved for the enqueue/run-id
+        // key below, which is unaffected by this redesign.
         var cooldownResult = await cooldown.CheckAsync(
-            request.TenantId, reportType, request.Scope.ToDescriptor(), effectivePeriod, cancellationToken);
+            request.TenantId, reportType, request.Scope.ToDescriptor(), dimension, cancellationToken);
         if (!cooldownResult.IsOpen)
-            return new GeneratedReportUnit(dimension, reportType, "cooldown", NextAvailableUtc: cooldownResult.NextAvailableUtc);
+        {
+            var message = cooldownResult.DaysRemaining is { } daysRemaining
+                ? $"You already generated a report for this. There is a cooldown period and {daysRemaining} day{(daysRemaining == 1 ? "" : "s")} left."
+                : null;
+            return new GeneratedReportUnit(
+                dimension, reportType, "cooldown",
+                NextAvailableUtc: cooldownResult.NextAvailableUtc,
+                DaysRemaining: cooldownResult.DaysRemaining,
+                Message: message);
+        }
+
+        // [ADDED 2026-09-25] The real missing piece flagged since 2026-09-24: request.Period was
+        // free text that never reached any dimension's actual data - ReportPeriodResolver existed,
+        // nothing called it. ReportPeriodRequestParser recognises a closed set of real period-
+        // picker keywords (last_30_days, last_60_days, last_90_days, q1-q4) and resolves them to a
+        // concrete [start, end) window server-side; anything else - including every existing free-
+        // text period string already in use for the cooldown/run-id key - resolves to null, which
+        // preserves EXACTLY today's behaviour (TimelinessFY/EvidenceIntegrity's own current-FY-to-
+        // date fallback; Act/Event were not reachable with a real window before this release
+        // either way). request.Period itself is unchanged either way - this only adds a window
+        // alongside it when the string is recognised, never replaces or validates it for its other
+        // job.
+        var periodChoice = ReportPeriodRequestParser.TryParse(request.Period);
+        var resolvedWindow = periodChoice is null ? null : (ResolvedReportPeriod?)ReportPeriodResolver.Resolve(periodChoice, DateTime.UtcNow);
 
         // Step 4 (the one-active-run-per-key lock) is free: EnqueueAsync derives the run id from
         // (tenant, scope, reportType, period), so a second call for the same key attaches to the
@@ -292,7 +366,8 @@ public static class RunEndpoints
         // request.Period) is what makes that key correctly per-dimension - see above.
         var runId = await enqueuer.EnqueueAsync(
             request.TenantId, reportType, request.Scope, effectivePeriod, callerUserId, cancellationToken,
-            requestedDimensions: requestedDimensions, reqId: reqId.ToString());
+            requestedDimensions: requestedDimensions, reqId: reqId.ToString(),
+            windowStart: resolvedWindow?.StartInclusive, windowEnd: resolvedWindow?.EndExclusive);
 
         return new GeneratedReportUnit(dimension, reportType, "queued", runId, $"/api/insights/runs/{runId}/stream");
     }
@@ -398,12 +473,19 @@ public static class RunEndpoints
         // failure messages. InsightsRunStatus itself is UNCHANGED (still carries Stage/
         // StagesComplete/StagesTotal) - only what this one endpoint puts on the wire changed, so
         // nothing else that reads InsightsRunStatus needed touching.
+        //
+        // [ADDED 2026-09-16] reportId closes a real gap: without it, "complete" told the client
+        // nothing it could act on - API_CONTRACTS.md §5's content endpoint needs this id and
+        // nothing else built exposed it. Only ever non-null when status is "complete" (see
+        // InsightsRunStatus.ReportId's own doc comment) - never leaks on "failed", same as message
+        // never carries internal diagnostics there.
         var payload = JsonSerializer.Serialize(new
         {
             runId = status.RunId,
             status = status.Status,
             // Present only on failure, and user-safe by construction - see InsightsRunStatus.
             message = status.Message,
+            reportId = status.ReportId,
         });
 
         var frame = eventName is null
@@ -432,7 +514,7 @@ public static class RunEndpoints
         var initial = await AggregateStatusAsync(runs, runIds, cancellationToken);
         await WriteRequestFrameAsync(http, eventName: null, reqId, initial, cancellationToken);
 
-        if (IsTerminalRequestStatus(initial))
+        if (IsTerminalRequestStatus(initial.Status))
             return;
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -448,13 +530,20 @@ public static class RunEndpoints
 
                 var current = await AggregateStatusAsync(runs, runIds, deadline.Token);
 
-                if (current != previous)
+                // [CHANGED 2026-09-24] Was `current != previous` on the bare aggregate status
+                // string - real gap: the aggregate can sit on "in_progress" for its WHOLE
+                // lifetime while individual dimensions finish one at a time underneath it, so a
+                // caller would never see a sibling's real reportId land until every dimension was
+                // done. Comparing the per-run detail too means a frame goes out the moment ANY
+                // one dimension's own status/reportId changes, not just when the rollup category
+                // flips.
+                if (RequestStatusChanged(previous, current))
                 {
                     await WriteRequestFrameAsync(http, eventName: null, reqId, current, deadline.Token);
                     previous = current;
                 }
 
-                if (IsTerminalRequestStatus(current))
+                if (IsTerminalRequestStatus(current.Status))
                     return;
             }
         }
@@ -466,28 +555,36 @@ public static class RunEndpoints
     }
 
     /// <summary>
-    /// One status read per sub-run, then RequestStatusAggregator's worst-first rollup. A sub-run
-    /// the instance store has no record of yet (freshly enqueued, before its first checkpoint)
-    /// reports null here - treated as "queued", the same "no stage yet" window a single run's own
-    /// GetStatusAsync already models, not a genuine absence (SaveAsync only ever stores a runId
-    /// this same request just successfully enqueued).
+    /// One status read per sub-run, then RequestStatusAggregator's worst-first rollup - plus, as of
+    /// 2026-09-24, the real per-run detail (dimension/runId/status/reportId) the aggregate rollup
+    /// alone throws away. A sub-run the instance store has no record of yet (freshly enqueued,
+    /// before its first checkpoint) reports null here - treated as "queued", the same "no stage
+    /// yet" window a single run's own GetStatusAsync already models, not a genuine absence
+    /// (SaveAsync only ever stores a runId this same request just successfully enqueued).
     /// </summary>
-    private static async Task<string> AggregateStatusAsync(
+    private static async Task<RequestAggregateStatus> AggregateStatusAsync(
         IRunStatusReader runs, IReadOnlyList<string> runIds, CancellationToken cancellationToken)
     {
         var subStatuses = new List<string>(runIds.Count);
+        var reports = new List<RequestSubReportStatus>(runIds.Count);
         foreach (var runId in runIds)
         {
             var status = await runs.GetStatusAsync(runId, cancellationToken);
-            subStatuses.Add(status?.Status ?? "queued");
+            var runStatus = status?.Status ?? "queued";
+            subStatuses.Add(runStatus);
+            reports.Add(new RequestSubReportStatus(status?.Dimension, runId, runStatus, status?.ReportId));
         }
 
-        return RequestStatusAggregator.Aggregate(subStatuses);
+        return new RequestAggregateStatus(RequestStatusAggregator.Aggregate(subStatuses), reports);
     }
+
+    /// <summary>Record equality on RequestAggregateStatus would use reference equality for its Reports list - compared explicitly instead.</summary>
+    private static bool RequestStatusChanged(RequestAggregateStatus previous, RequestAggregateStatus current) =>
+        previous.Status != current.Status || !previous.Reports.SequenceEqual(current.Reports);
 
     private static bool IsTerminalRequestStatus(string status) => status is "completed" or "error";
 
-    private static async Task TryWriteFinalRequestFrameAsync(HttpContext http, Guid reqId, string last)
+    private static async Task TryWriteFinalRequestFrameAsync(HttpContext http, Guid reqId, RequestAggregateStatus last)
     {
         try
         {
@@ -500,9 +597,17 @@ public static class RunEndpoints
     }
 
     private static async Task WriteRequestFrameAsync(
-        HttpContext http, string? eventName, Guid reqId, string status, CancellationToken cancellationToken)
+        HttpContext http, string? eventName, Guid reqId, RequestAggregateStatus aggregate, CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.Serialize(new { reqId, status });
+        var payload = JsonSerializer.Serialize(new
+        {
+            reqId,
+            status = aggregate.Status,
+            // [ADDED 2026-09-24] Real per-dimension detail - lets a caller polling this one
+            // reqId learn every sibling's runId/reportId without keeping its own separate
+            // mapping from the original POST response.
+            reports = aggregate.Reports.Select(r => new { dimension = r.Dimension, runId = r.RunId, status = r.Status, reportId = r.ReportId }),
+        });
 
         var frame = eventName is null
             ? "data: " + payload + "\n\n"
@@ -512,6 +617,15 @@ public static class RunEndpoints
         await http.Response.Body.FlushAsync(cancellationToken);
     }
 }
+
+/// <summary>
+/// [ADDED 2026-09-24] One sub-run's real detail under a fan-out reqId - see
+/// RunEndpoints.MapInsightsRunEndpoints's AggregateStatusAsync/WriteRequestFrameAsync.
+/// </summary>
+public sealed record RequestSubReportStatus(string? Dimension, string RunId, string Status, string? ReportId);
+
+/// <summary>The combined rollup plus the real per-run detail it rolls up from - see AggregateStatusAsync.</summary>
+public sealed record RequestAggregateStatus(string Status, IReadOnlyList<RequestSubReportStatus> Reports);
 
 /// <summary>
 /// The wire shape of API_CONTRACTS.md §3's POST body.
@@ -553,6 +667,18 @@ public sealed record GenerateReportRequest(
 /// <param name="RunId">Present only when Status is "queued".</param>
 /// <param name="StreamUrl">Present only when Status is "queued" - same shape as the pre-fan-out single-report response.</param>
 /// <param name="NextAvailableUtc">Present only when Status is "cooldown".</param>
+/// <param name="DaysRemaining">
+/// [ADDED 2026-09-25] Present only when Status is "cooldown" - the real whole-days-left figure
+/// (CooldownResult.DaysRemaining, rounded up), so a client doesn't have to compute it itself from
+/// NextAvailableUtc.
+/// </param>
+/// <param name="Message">
+/// [ADDED 2026-09-25] Present only when Status is "cooldown" - a ready-to-show sentence, real
+/// product-specified wording: "You already generated a report for this. There is a cooldown period
+/// and N day(s) left." NextAvailableUtc/DaysRemaining remain the structured data for a client that
+/// wants to build its own copy; this is the literal text for one that doesn't.
+/// </param>
 public sealed record GeneratedReportUnit(
     string? Dimension, string ReportType, string Status,
-    string? RunId = null, string? StreamUrl = null, DateTime? NextAvailableUtc = null);
+    string? RunId = null, string? StreamUrl = null, DateTime? NextAvailableUtc = null,
+    int? DaysRemaining = null, string? Message = null);

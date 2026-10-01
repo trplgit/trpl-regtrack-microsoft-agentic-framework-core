@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Insights.Data;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Insights.IntegrationTests;
@@ -15,7 +16,7 @@ public class FetchDimensionsActivityTests
     public async Task RunAsync_Tenant23_ReturnsAllFourteenDimensionsAsJsonStrings()
     {
         var repository = new SqlDimensionRepository(ConnectionString);
-        var activity = new FetchDimensionsActivity(repository);
+        var activity = new FetchDimensionsActivity(repository, NullLogger<FetchDimensionsActivity>.Instance);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(36, 23));
 

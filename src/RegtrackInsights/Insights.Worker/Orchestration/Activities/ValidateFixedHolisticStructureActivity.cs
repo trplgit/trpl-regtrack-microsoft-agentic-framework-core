@@ -1,11 +1,18 @@
 using DurableTask.Core;
 using Insights.Domain;
 using Insights.Presentation;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
 public sealed record ValidateFixedHolisticStructureInput(string Html, string ReportType);
-public sealed record ValidateFixedHolisticStructureOutput(string Html);
+public sealed record ValidateFixedHolisticStructureOutput(
+    string Html,
+    // [ADDED 2026-09-28] Text a reader cannot read cleanly on the FINAL page (LayoutCollisionChecker):
+    // overlapping labels, text under an icon, text spilling out of its tile or cut off at a chart edge.
+    // Single-dimension reports only, null otherwise or when the check itself failed. Trailing optional:
+    // a run recorded before this existed replays with null - its old path, no orchestrator bump.
+    IReadOnlyList<string>? LayoutIssues = null);
 
 /// <summary>
 /// Deterministic structural gate on the rendered report (FixedHolisticStructureGate,
@@ -37,22 +44,49 @@ public sealed record ValidateFixedHolisticStructureOutput(string Html);
 /// gives for its second call) so it checks the actual HTML that will be persisted, not a
 /// pre-sanitization draft DOMPurify might still alter.
 /// </summary>
-public sealed class ValidateFixedHolisticStructureActivity : AsyncTaskActivity<ValidateFixedHolisticStructureInput, ValidateFixedHolisticStructureOutput>
+public sealed class ValidateFixedHolisticStructureActivity(ILogger<ValidateFixedHolisticStructureActivity> logger, ILayoutChecker? layoutChecker = null)
+    : AsyncTaskActivity<ValidateFixedHolisticStructureInput, ValidateFixedHolisticStructureOutput>
 {
     protected override Task<ValidateFixedHolisticStructureOutput> ExecuteAsync(TaskContext context, ValidateFixedHolisticStructureInput input) => RunAsync(input);
 
-    internal Task<ValidateFixedHolisticStructureOutput> RunAsync(ValidateFixedHolisticStructureInput input)
+    internal async Task<ValidateFixedHolisticStructureOutput> RunAsync(ValidateFixedHolisticStructureInput input)
     {
         if (input.ReportType != FixedHolisticComposition.ReportType)
-            return Task.FromResult(new ValidateFixedHolisticStructureOutput(input.Html));
+            return new ValidateFixedHolisticStructureOutput(input.Html, await FindLayoutIssuesAsync(input.Html));
 
         var result = FixedHolisticStructureGate.Evaluate(input.Html);
         if (!result.Approved)
+        {
+            logger.LogWarning("Fixed-holistic render refused structure gate: {Violations}", string.Join(" | ", result.Violations));
             throw new OrchestrationRefusedException(
                 "FIXED_HOLISTIC_STRUCTURE_INVALID",
                 "We couldn't generate this report to our accuracy standard. Our team has been notified.",
                 result.Violations);
+        }
 
-        return Task.FromResult(new ValidateFixedHolisticStructureOutput(input.Html));
+        return new ValidateFixedHolisticStructureOutput(input.Html);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-28] Layout check for freehand single-dimension reports only - the fixed holistic
+    /// template's designed layout is left alone. Cosmetic, so it fails SOFT: any error means "not
+    /// checked" (null), never a blocked report.
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> FindLayoutIssuesAsync(string html)
+    {
+        if (layoutChecker is null)
+            return null;
+        try
+        {
+            var issues = await layoutChecker.FindIssuesAsync(html);
+            if (issues.Count > 0)
+                logger.LogInformation("Layout check found {Count} issue(s): {Issues}", issues.Count, string.Join(" | ", issues));
+            return issues;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Layout check failed - the report continues unchecked.");
+            return null;
+        }
     }
 }

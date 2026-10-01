@@ -1,11 +1,13 @@
 #pragma warning disable OPENAI001 // ResponseReasoningEffortLevel - experimental in this SDK version, same pragma MafAgentFactory already carries.
 
 using Insights.Agents;
+using Insights.Data;
 using Insights.Domain;
 using Insights.Presentation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
 using OpenAI.Responses;
 
@@ -19,6 +21,24 @@ namespace Insights.Worker.Orchestration;
 /// </summary>
 public static class PaidReportAgentsRegistration
 {
+    /// <summary>
+    /// [ADDED 2026-09-28] The small non-reasoning deployment on the Llm:Maf endpoint - used by the
+    /// tenant-memory summariser (user decision; its output is checked in code before it is stored).
+    /// </summary>
+    internal const string SmallModel = "gpt-4o-mini";
+
+    /// <summary>[ADDED 2026-09-28] The testers' reasoning-file explainer (user decision) - see its registration.</summary>
+    internal const string ExplainerModel = "gpt-5.6-luna";
+
+    /// <summary>
+    /// [DIAG - temporary, ADDED 2026-09-29] One shared logger for every real LLM call this file
+    /// wires up - passed into MafAgentFactory so MeteredChatClient can log the call actually
+    /// starting and either returning or throwing. See MafAgentFactory.Create's own doc comment on
+    /// `logger` for why: real Compose calls hung with zero signal anywhere - no exception, no
+    /// timeout - for over an hour, and this is the fix for that blind spot.
+    /// </summary>
+    private static ILogger? LlmLogger(IServiceProvider sp) => sp.GetService<ILoggerFactory>()?.CreateLogger("Insights.Agents.Llm");
+
     public static IServiceCollection AddInsightsPaidReportAgents(this IServiceCollection services, IConfiguration configuration)
     {
         var endpoint = Require(configuration, "Llm:Maf:Endpoint");
@@ -43,6 +63,36 @@ public static class PaidReportAgentsRegistration
         var freehandReasoningEffort = configuration["FreehandDimensions:ReasoningEffort"] is { Length: > 0 } fre
             ? Enum.Parse<ResponseReasoningEffortLevel>(fre, ignoreCase: true)
             : ResponseReasoningEffortLevel.High;
+
+        // [ADDED 2026-09-22] Activates ReadOnlySqlFetchTool for the narrative analyst - see that
+        // class's own doc comment for the real guardrails (single SELECT only, forced #scoped
+        // reference, row cap, timeout, 3-call budget) that stay in place around this deliberate
+        // exception to CLAUDE.md's "never let an LLM author SQL" rule. Falls back to the app's own
+        // ConnectionStrings:RegTrack (same connection SqlDimensionRepository already uses) so this
+        // is never silently unconfigured - but that means the REAL enforcement on any given
+        // environment is whatever that login's own grants are: confirmed live 2026-09-22 that UAT's
+        // is `sa` (full sysadmin, no DB-level read-only backstop there - the tool's own query-shape
+        // validation is the only wall on UAT) while the SEPARATE prod-readonly replica login
+        // (regtech_dev01_readonly) is genuinely DB-enforced read-only. Whatever ConnectionStrings:
+        // RegTrack resolves to in a REAL prod deployment has never been checked from here - flag
+        // that to whoever owns prod DB credentials before this reaches real prod traffic.
+        var readOnlySqlConnectionString = configuration["FreehandDimensions:ReadOnlySqlConnectionString"] is { Length: > 0 } rosql
+            ? rosql
+            : configuration["ConnectionStrings:RegTrack"];
+
+        // [ADDED 2026-09-22] Tenant memory - see
+        // docs/superpowers/specs/2026-09-22-tenant-memory-blob-design.md. Falls back to the same
+        // storage account reports already use (Azure:BlobConnectionString), different container -
+        // never silently unconfigured on an environment that already has blob persistence working.
+        var memoryBlobConnectionString = configuration["TenantMemory:BlobConnectionString"] is { Length: > 0 } mbcs
+            ? mbcs
+            : configuration["Azure:BlobConnectionString"];
+        // [CHANGED 2026-09-28] Default is now the REPORTS container (Azure:BlobContainer), file
+        // {tenantId}/tenant-memory.md.enc in the tenant's own folder beside its reports - was a
+        // separate "insights-tenant-memory" container. TenantMemory:ContainerName still overrides.
+        var memoryContainerName = configuration["TenantMemory:ContainerName"] is { Length: > 0 } mcn
+            ? mcn
+            : configuration["Azure:BlobContainer"] is { Length: > 0 } rc ? rc : "insights-reports";
 
         // [ADDED 2026-09-14] Vision QA's own deployment - a real, different Azure resource again
         // (trpl-prod-saas-ai-3, not ai-2/sol or the shared Llm:Maf one), same "confirm before
@@ -88,6 +138,24 @@ public static class PaidReportAgentsRegistration
             services.AddSingleton(new LlmConcurrencyGateMetrics(gate));
         }
 
+        // [ADDED 2026-09-23] Backs onSqlToolInvoked/onMemoryWriteInvoked below - see
+        // IToolInvocationRecorder's own doc comment and sql/43_tool_invocation_log.sql. Falls back
+        // to ConnectionStrings:RegTrack, same "never silently unconfigured" reasoning as
+        // readOnlySqlConnectionString above (this always writes to the same DB the app already
+        // has a real connection string for - it is a separate table, not a separate database).
+        var toolInvocationConnectionString = configuration["ToolInvocationLog:ConnectionString"] is { Length: > 0 } tilcs
+            ? tilcs
+            : configuration["ConnectionStrings:RegTrack"];
+        IToolInvocationRecorder toolInvocationRecorder = toolInvocationConnectionString is { Length: > 0 } tics
+            ? new SqlToolInvocationRecorder(tics)
+            : IToolInvocationRecorder.Null;
+        // [ADDED 2026-09-26] Exposes the SAME instance via DI - previously only a local variable
+        // captured in the closures below (onSqlToolInvoked/onMemoryWriteInvoked). BuildReasoningTraceActivity
+        // needs to resolve this independently to read a run's own tool-invocation rows back out;
+        // registering the already-built instance (not a second factory) guarantees both paths
+        // share one recorder rather than opening two separate connections/instances.
+        services.AddSingleton(toolInvocationRecorder);
+
         services.AddSingleton<InsightsCostMetrics>();
         services.AddSingleton<ILlmUsageRecorder>(sp => sp.GetRequiredService<InsightsCostMetrics>());
 
@@ -114,25 +182,90 @@ public static class PaidReportAgentsRegistration
             IFreehandDimensionCompositionAgent Build(string dimension, string promptFile) =>
                 new MafFreehandDimensionCompositionAgent(MafAgentFactory.CreateJsonAgent(
                     freehandEndpoint, freehandModel, freehandApiKey, $"FreehandComposition{dimension}Agent", $"Decides structure/hero/emphasis for a freehand {dimension} insight from real tenant data.",
-                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate, freehandReasoningEffort));
+                    LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate, freehandReasoningEffort, LlmLogger(sp)));
 
+            // [ADDED 2026-09-27] Every freehand dimension now loads its v3 prompt pair: richer interactive
+            // charts, each with an "i" / "How to read this chart" panel. Previous versions stay on disk untouched.
             return new Dictionary<string, IFreehandDimensionCompositionAgent>
             {
-                ["Act"] = Build("Act", "02_composition_freehand_act.md"),
-                ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging.md"),
-                ["Departments"] = Build("Departments", "02_composition_freehand_departments.md"),
-                ["Licence"] = Build("Licence", "02_composition_freehand_licence.md"),
-                ["Location"] = Build("Location", "02_composition_freehand_location.md"),
+                // [ADDED 2026-09-25] v2 - real "window" data_quality entry documented (Act's own
+                // period-scoping change). See that file's own header for what changed and why.
+                // [ADDED 2026-09-27] v3 - richer interactive charts, each with a "How to read"
+                // guide the render step turns into an "i" panel. Lab-verified on real UAT data.
+                ["Act"] = Build("Act", "02_composition_freehand_act_v3.md"),
+                ["BacklogAging"] = Build("BacklogAging", "02_composition_freehand_backlogaging_v4.md"),
+                // [ADDED 2026-09-25] v2 - Departments got the same @WindowStart/@WindowEnd hard
+                // population gate as Act/Event this session; its own "window" data_quality entry
+                // needed the same real-detail-text fix, not the generic-filler default.
+                // [ADDED 2026-09-29] v4 on Departments/Location/Risk/Nature/Internal - ownership is no
+                // longer a finding (RegTrack parity: every obligation has an active performer, so the
+                // ownership fields are always 0). v3 files stay untouched.
+                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v5.md"),
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v8.md"),
+                // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
+                ["Location"] = Build("Location", "02_composition_freehand_location_v5.md"),
+                // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
+                // pattern as the five above, not a new mechanism.
+                // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same window data_quality fix.
+                ["Risk"] = Build("Risk", "02_composition_freehand_risk_v4.md"),
+                ["Nature"] = Build("Nature", "02_composition_freehand_nature_v4.md"),
+                ["Internal"] = Build("Internal", "02_composition_freehand_internal_v4.md"),
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
+                ["Event"] = Build("Event", "02_composition_freehand_event_v3.md"),
+                // [ADDED 2026-09-23] Retires Sambram's fixed single-section Users template - see
+                // FreehandDimensions.cs's own doc comment for the real lab-tested evidence behind
+                // this decision.
+                // [ADDED 2026-09-25] v2 - same window data_quality fix as the others above.
+                // [ADDED 2026-09-27] v3 - same "How to read" / interactive-chart change as Act.
+                // Lab-verified on real Minda data.
+                ["Users"] = Build("Users", "02_composition_freehand_users_v4.md"),
             };
         });
 
+        // [ADDED 2026-09-28] Summarises older tenant-memory entries instead of cutting them - see
+        // ITenantMemorySummarizer. Runs only when a section outgrows its limit.
+        // [CHANGED 2026-09-28] Standard model -> gpt-4o-mini (user decision), same endpoint/key.
+        // Non-reasoning model, so CreateSimpleTextAgent (ReasoningOptions 400s on gpt-4o-mini).
+        // The summary is still checked in code before it is stored (TenantMemoryCompactor.IsValidSummary).
+        services.AddSingleton<ITenantMemorySummarizer>(sp => new MafTenantMemorySummarizer(MafAgentFactory.CreateSimpleTextAgent(
+            endpoint, SmallModel, apiKey, "TenantMemorySummarizer", "Summarises older tenant-memory entries without losing comparison facts.",
+            LoadPromptSync(sp, "09_tenant_memory_summarizer.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+
         services.AddSingleton<INarrativeAgent>(sp => new MafNarrativeAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeAgent", "Writes prose from typed assertions only.",
-            LoadPromptSync(sp, "03_narrative.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            // [CHANGED 2026-09-29] 03_narrative.md -> 03_narrative_v2.md (no ownership findings, RegTrack parity).
+            LoadPromptSync(sp, "03_narrative_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp)),
+            sp.GetService<IReportEncryptor>(), sp.GetService<IReportDecryptor>(), memoryBlobConnectionString, memoryContainerName,
+            sp.GetService<ITenantMemorySummarizer>()));
 
         services.AddSingleton<INarrativeReflectionAgent>(sp => new MafNarrativeReflectionAgent(MafAgentFactory.CreateJsonAgent(
             endpoint, model, apiKey, "NarrativeReflectionAgent", "Critiques the narrative.",
-            LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "04_narrative_reflection.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+
+        // [ADDED 2026-09-20] v2 of Narrate+Reflect for the 5 freehand dimensions, behind
+        // InsightsReportOrchestrationInput.UseAnalystNarrative - see AnalyzeAndNarrateActivity's own
+        // doc comment and docs/superpowers/specs/2026-09-20-narrative-analyst-agent-design.md.
+        // Deliberately on the SAME sol deployment/reasoning-effort variables as the freehand
+        // composition agents above (freehandEndpoint/freehandModel/freehandApiKey/
+        // freehandReasoningEffort) - not the shared `model` every other agent in this file uses -
+        // per the user's explicit "use sol with high reasoning" instruction, and because root-cause
+        // tracing across multiple raw rows is the same class of harder reasoning task freehand
+        // composition already runs on that deployment.
+        services.AddSingleton<IAnalystNarrativeAgent>(sp => new MafAnalystNarrativeAgent(MafAgentFactory.CreateJsonAgent(
+            freehandEndpoint, freehandModel, freehandApiKey, "AnalystNarrativeAgent", "Traces root cause from typed assertions and raw dimension rows.",
+            // [CHANGED 2026-09-29] v3/ -> v4/ (no ownership findings, RegTrack parity) -> v5/ (Expired licences stated plainly, no "may no longer be valid", source system never named) -> v6/ (plain language for a compliance manager).
+            LoadPromptSync(sp, "v6/03_narrative_analyst.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), freehandReasoningEffort, LlmLogger(sp)),
+            readOnlySqlConnectionString,
+            // [WAS null, FIXED 2026-09-23] This was the real gap: the hook existed but nothing
+            // durable ever recorded a call. Now every real fetch_scoped_sql_data/write_tenant_memory
+            // call - or the fact that a run made NONE - lands in dbo.InsightsToolInvocationLog.
+            onSqlToolInvoked: (runId, sql, result, success) =>
+                toolInvocationRecorder.RecordAsync(runId, "analyze_and_narrate", "fetch_scoped_sql_data", sql, success, result.Length),
+            memoryEncryptor: sp.GetService<IReportEncryptor>(), memoryDecryptor: sp.GetService<IReportDecryptor>(),
+            memoryBlobConnectionString: memoryBlobConnectionString, memoryContainerName: memoryContainerName,
+            onMemoryWriteInvoked: (runId, dimensionName, success) =>
+                toolInvocationRecorder.RecordAsync(runId, "analyze_and_narrate", "write_tenant_memory", dimensionName, success, resultLength: null),
+            memorySummarizer: sp.GetService<ITenantMemorySummarizer>()));
 
         // [ADDED 2026-09-14] Real vision-model gate inside the render-retry loop - see
         // VisionQaActivity's own doc comment for why this is a real gate, not advisory like
@@ -140,7 +273,24 @@ public static class PaidReportAgentsRegistration
         // {has_visual_defect, issue}, same JSON-mode reasoning as every other structured agent.
         services.AddSingleton<IVisionQaAgent>(sp => new MafVisionQaAgent(MafAgentFactory.CreateJsonAgent(
             visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
-            LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>())));
+            LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+
+        // [ADDED 2026-09-26] Reasoning-trace explainer, same Llm:Maf endpoint/apikey as the other
+        // non-freehand agents in this file.
+        // [CHANGED 2026-09-27] gpt-4o-mini -> the standard Llm:Maf model (user decision). Side-by-side
+        // on the same real Users report, gpt-4o-mini wrote wrong formulas ("1,102 = count where
+        // Instances is 0") and invented report locations ("Section People"); the standard model got
+        // every formula and location right. It runs after persist and never delays the report.
+        // [CHANGED 2026-09-28] Briefly back on gpt-4o-mini (no SQL section any more). A real deployed
+        // Licence run (report 61d93799) showed it still invents explanations: it called the chart's
+        // "0%" axis label "FSSAI lapse rate = 0 / 9" (real: 1 / 9 = 11.1%) - a wrong claim the code
+        // completeness check cannot catch, because "0%" is on the page. Moved to gpt-5.6-luna (user
+        // decision): same endpoint/key, a reasoning model, so CreateTextAgent with medium effort.
+        services.AddSingleton<IReasoningExplainerAgent>(sp => new MafReasoningExplainerAgent(MafAgentFactory.CreateTextAgent(
+            endpoint, ExplainerModel, apiKey, "ReasoningExplainerAgent",
+            "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
+            LoadPromptSync(sp, "08_reasoning_explainer_v3.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
+            ResponseReasoningEffortLevel.Medium, LlmLogger(sp))));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
@@ -180,16 +330,21 @@ public static class PaidReportAgentsRegistration
                 new MafReportHtmlAgent(MafAgentFactory.CreateTextAgent(
                     modelOverride is null ? endpoint : freehandEndpoint, modelOverride ?? model, modelOverride is null ? apiKey : freehandApiKey, name, description,
                     LoadPromptSync(sp, promptFile), usage, maxTokensPerCall, enableSensitiveTelemetry, gate,
-                    modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort));
+                    modelOverride is null ? (ResponseReasoningEffortLevel?)null : freehandReasoningEffort, LlmLogger(sp)));
 
+            // [ADDED 2026-09-27] Every freehand render prompt is now v4 (v3 + section 10 "Atmosphere":
+            // hero wash, one corner shape, tinted plot areas). Composition prompts stay v3.
+            // [ADDED 2026-09-29] Location/Departments/Risk/Nature/Internal render prompts are v5, and
+            // fixed_holistic / generic dimension_selection are _v2: ownership is no longer a finding
+            // (RegTrack parity - every obligation has an active performer). Earlier files untouched.
             return new Dictionary<string, IReportHtmlAgent>
             {
                 ["fixed_holistic"] = Build(
                     "ReportHtmlAgent", "Renders the fixed 6-tab Holistic Insights report as self-contained HTML.",
-                    "05_report_html_fixed_holistic.md"),
+                    "05_report_html_fixed_holistic_v3.md"),
                 ["dimension_selection"] = Build(
                     "DimensionSelectionReportHtmlAgent", "Renders a caller-selected subset of dimensions as self-contained HTML, no fixed tabs.",
-                    "05_report_html_dimension_selection.md"),
+                    "05_report_html_dimension_selection_v2.md"),
                 // [ADDED 2026-09-09] Sambram's real, approved "dimension view" design system
                 // (AI-INSIGHTS-BRAND-HANDOFF.md Sec.6, single-section, no tabs, no donut) arrived
                 // AFTER the generic dimension_selection prompt above was built on Trent's design -
@@ -201,22 +356,31 @@ public static class PaidReportAgentsRegistration
                 // [REPLACED 2026-09-14] Location joined FreehandDimensions.Names the same day as
                 // v1's scope was confirmed - same reasoning as the Departments/BacklogAging/Act/
                 // Licence entries below: real LLM composition ahead of render, sol deployment.
+                // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix, same as Act's
+                // own render prompt - see that file's own header for what changed and why.
+                // [ADDED 2026-09-30] v7 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Location"] = Build(
                     "DimensionSelectionLocationReportHtmlAgent", "Renders a freehand-composed Location insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_location.md", freehandModel),
-                // [ADDED 2026-09-09, REPLACED same day] Dimension-specific override for a
-                // single-"Users" request - RenderHtmlActivity's own doc comment explains the
-                // "{ReportType}:{DimensionName}" key-preference rule this depends on. First built
-                // to reproduce the real Angular "By User & Role" tabbed sub-page verbatim; replaced
-                // the same day with Sambram's real, approved "dimension view" design system
-                // (AI-INSIGHTS-BRAND-HANDOFF.md Sec.6 - single section, no tabs, no donut) once that
-                // handoff arrived - the tabbed shape never matched the approved AI-generation
-                // contract. Several real fields still have no backing (imprisonment-overdue
-                // combined lens, per-user risk mix, dept-head fan-out, an "Approver" role) - see
-                // the prompt file's own "Real vs. NOT AVAILABLE" table.
+                    "05_report_html_dimension_selection_location_v7.md", freehandModel),
+                // [ADDED 2026-09-09, REPLACED 2026-09-09, REPLACED AGAIN 2026-09-23] Dimension-
+                // specific override for a single-"Users" request - RenderHtmlActivity's own doc
+                // comment explains the "{ReportType}:{DimensionName}" key-preference rule this
+                // depends on. First built to reproduce the real Angular "By User & Role" tabbed
+                // sub-page verbatim; replaced 2026-09-09 with Sambram's fixed "dimension view"
+                // design system; replaced AGAIN 2026-09-23 with the same freehand treatment every
+                // other dimension below already has (lab-tested first, real Minda output showed the
+                // composition agent choosing a genuinely different, tenant-specific hero the fixed
+                // template never surfaced - see FreehandDimensions.cs's own doc comment). Several
+                // real fields still have no backing (imprisonment-overdue combined lens, per-user
+                // risk mix, dept-head fan-out, an "Approver" role) - see the prompt file's own "Real
+                // vs. NOT AVAILABLE" table, unchanged by this move.
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
+                // [ADDED 2026-09-30] v6 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Users"] = Build(
-                    "DimensionSelectionUserReportHtmlAgent", "Renders a single-Users-dimension request as self-contained HTML, matching Sambram's approved dimension-view design system.",
-                    "05_report_html_dimension_selection_user.md"),
+                    "DimensionSelectionUserReportHtmlAgent", "Renders a freehand-composed Users insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_user_v6.md", freehandModel),
                 // [ADDED 2026-09-09, REPLACED same day] Same reasoning as the Users entry
                 // immediately above. The Concentration tab and closure-status strip the earlier
                 // Angular-mirroring version carried (both honest not-available blocks, no real
@@ -228,18 +392,50 @@ public static class PaidReportAgentsRegistration
                 // of render, so the render agent gets a genuinely agent-decided structure/hero to
                 // build from rather than a fixed document shape. Deliberately on the sol deployment
                 // (freehandModel), not the shared `model` every other agent in this file uses.
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
+                // [ADDED 2026-09-30] v7 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v7.md", freehandModel),
+                // [ADDED 2026-09-30] v6 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:BacklogAging"] = Build(
                     "DimensionSelectionBacklogAgingReportHtmlAgent", "Renders a freehand-composed BacklogAging insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_backlogaging.md", freehandModel),
+                    "05_report_html_dimension_selection_backlogaging_v6.md", freehandModel),
+                // [ADDED 2026-09-25] v2 - real "window" data_quality phrasing fix (Act's own
+                // period-scoping change) - see that file's own header for what changed and why.
+                // [ADDED 2026-09-27] v3 - "i" / "How to read this chart" panel on every chart,
+                // interactive charts, chart craft rules. Users uses the same v3 sections.
+                // [ADDED 2026-09-30] v5 - percentage hover-link (section 7b), same proven
+                // mechanism as the Licence dimension's own version.
                 ["dimension_selection:Act"] = Build(
                     "DimensionSelectionActReportHtmlAgent", "Renders a freehand-composed Act insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_act.md", freehandModel),
+                    "05_report_html_dimension_selection_act_v5.md", freehandModel),
+                // [ADDED 2026-09-30] v10 - retires section 7a's per-number formula instruction
+                // (never once fired across 3 real trials); the "How your numbers are worked out"
+                // hover-link strip is now added deterministically instead, see
+                // InsightsReportOrchestrator's node 8i / NumberFormulaInjector / LicenceNumberFormulas.
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v10.md", freehandModel),
+                // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
+                // freehand pattern as the five above.
+                // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
+                // fix as Location above.
+                ["dimension_selection:Risk"] = Build(
+                    "DimensionSelectionRiskReportHtmlAgent", "Renders a freehand-composed Risk insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_risk_v5.md", freehandModel),
+                ["dimension_selection:Nature"] = Build(
+                    "DimensionSelectionNatureReportHtmlAgent", "Renders a freehand-composed Nature-of-compliance insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_nature_v5.md", freehandModel),
+                ["dimension_selection:Internal"] = Build(
+                    "DimensionSelectionInternalReportHtmlAgent", "Renders a freehand-composed Statutory-vs-Internal insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_internal_v5.md", freehandModel),
+                // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
+                ["dimension_selection:Event"] = Build(
+                    "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_event_v4.md", freehandModel),
             };
         });
 
@@ -253,6 +449,8 @@ public static class PaidReportAgentsRegistration
 
         services.AddSingleton<IDomPurifySanitizer>(sp => new DomPurifySanitizer(sp.GetRequiredService<IBrowser>()));
         services.AddSingleton<IReportQaRunner>(sp => new PlaywrightReportQa(sp.GetRequiredService<IBrowser>()));
+        // [ADDED 2026-09-28] Layout gate on the final page - see LayoutCollisionChecker.
+        services.AddSingleton<ILayoutChecker>(sp => new LayoutCollisionChecker(sp.GetRequiredService<IBrowser>()));
 
         return services;
     }

@@ -3,6 +3,7 @@
 using System.ClientModel;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using OpenAI;
 using OpenAI.Responses;
 
@@ -51,18 +52,46 @@ public static class MafAgentFactory
     /// chosen over an explicit verbosity - that comment never actually tried Detailed; it does
     /// work, no rejection.
     /// </remarks>
-    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High);
+    public static AIAgent CreateJsonAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null, ILogger? logger = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Json, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High, supportsReasoning: true, logger);
 
     /// <summary>
     /// For agents whose output is NOT JSON - report HTML (05_report_html_fixed_holistic.md) produces a raw HTML
     /// document, and forcing ResponseFormat=Json here would be actively wrong, not just unhelpful.
     /// See <see cref="CreateJsonAgent"/>'s own remarks for the real reasoning-summary root cause.
     /// </summary>
-    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null) =>
-        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High);
+    public static AIAgent CreateTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ResponseReasoningEffortLevel? reasoningEffort = null, ILogger? logger = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort ?? ResponseReasoningEffortLevel.High, supportsReasoning: true, logger);
 
-    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort)
+    /// <summary>
+    /// [ADDED 2026-09-26] For a genuinely non-reasoning model (gpt-4o-mini, the reasoning-trace
+    /// explainer's own deployment) - CreateJsonAgent/CreateTextAgent both hardcode a
+    /// RawRepresentationFactory that sets ReasoningOptions on EVERY call, defaulting effort to
+    /// High. Found live: gpt-4o-mini rejects that outright with a real HTTP 400
+    /// ("Unsupported parameter: 'reasoning.effort' is not supported with this model") - it has no
+    /// reasoning/effort concept at all, unlike the o-series/gpt-5 family every other agent in this
+    /// file targets. This method reuses the exact same client/pipeline wiring (OTel, metering,
+    /// concurrency gate, network timeout) but never attaches ReasoningOptions - the one real
+    /// difference a non-reasoning model needs.
+    /// </summary>
+    public static AIAgent CreateSimpleTextAgent(string endpoint, string model, string apiKey, string name, string description, string instructions, ILlmUsageRecorder? usage = null, int? maxTokensPerCall = null, bool enableSensitiveTelemetry = false, LlmConcurrencyGate? concurrencyGate = null, ILogger? logger = null) =>
+        Create(endpoint, model, apiKey, name, description, instructions, ChatResponseFormat.Text, usage, maxTokensPerCall, enableSensitiveTelemetry, concurrencyGate, reasoningEffort: null, supportsReasoning: false, logger);
+
+    /// <summary>
+    /// [DIAG - temporary, ADDED 2026-09-29] <paramref name="logger"/> threads into MeteredChatClient
+    /// so the exact moment a real LLM call starts, returns, or throws is visible in the worker's own
+    /// logs - added after REQ-1076/1077 and several fresh diagnostic runs all hung at the very first
+    /// LLM call (ComposeFreehandDimensionActivity) with ZERO signal anywhere: no exception, no
+    /// timeout, the scheduled Durable Task work item just silently re-dequeued (DequeueCount over
+    /// 100) forever. A direct curl/SDK call to the same endpoint from outside the cluster succeeded
+    /// in under 2s the whole time this was happening, so the gap was never the endpoint - it was
+    /// entirely invisible INSIDE this call, between "about to call" and "the SDK returns or throws".
+    /// This closes that gap: the next occurrence prints "LLM call starting" immediately with no
+    /// matching "returned"/"threw" line ever following it, which pinpoints the exact call and its
+    /// exact start time instead of only the Durable Task history's coarser scheduled/never-completed
+    /// signal. Optional and null-safe everywhere - no behaviour change when no logger is passed.
+    /// </summary>
+    private static AIAgent Create(string endpoint, string model, string apiKey, string name, string description, string instructions, ChatResponseFormat responseFormat, ILlmUsageRecorder? usage, int? maxTokensPerCall, bool enableSensitiveTelemetry, LlmConcurrencyGate? concurrencyGate, ResponseReasoningEffortLevel? reasoningEffort, bool supportsReasoning, ILogger? logger = null)
     {
         /*  [BUG FOUND LIVE, 2026-09-01] The SDK's own default NetworkTimeout is 100 seconds
             (ClientPipelineOptions.NetworkTimeout - confirmed via the SDK's own
@@ -99,7 +128,7 @@ public static class MafAgentFactory
         /*  Metering wraps the CHAT CLIENT, so every agent this factory builds is instrumented at
             one point - including any added later, without anyone remembering to do it. The stage
             tag is the agent name, which is already a closed set of five values.                 */
-        chatClient = new MeteredChatClient(chatClient, name, model, usage ?? ILlmUsageRecorder.Null, maxTokensPerCall);
+        chatClient = new MeteredChatClient(chatClient, name, model, usage ?? ILlmUsageRecorder.Null, maxTokensPerCall, logger);
 
         /*  OUTERMOST, deliberately - see ConcurrencyGatedChatClient's doc comment: queue-wait time
             must never be counted as part of the OTel span's latency or MeteredChatClient's timing,
@@ -141,19 +170,27 @@ public static class MafAgentFactory
                 // happened with the summary both on and off, no real correlation). See
                 // NormalizeActivity's own doc comment on the ongoing investigation into the real
                 // trigger (the per-user leaderboard section, real employee names).
-                RawRepresentationFactory = _ => new CreateResponseOptions
-                {
-                    ReasoningOptions = reasoningEffort is null
-                        ? new ResponseReasoningOptions
-                        {
-                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
-                        }
-                        : new ResponseReasoningOptions
-                        {
-                            ReasoningEffortLevel = reasoningEffort.Value,
-                            ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
-                        },
-                },
+                // [ADDED 2026-09-26] supportsReasoning gates this whole block - a genuinely
+                // non-reasoning model (gpt-4o-mini, CreateSimpleTextAgent) rejects ReasoningOptions
+                // outright (real HTTP 400, "reasoning.effort" not supported), so it must never be
+                // attached at all, not even with a null effort level. Every existing caller
+                // (CreateJsonAgent/CreateTextAgent) always passes supportsReasoning: true, so this
+                // is purely additive - no behaviour change for the o-series/gpt-5 agents.
+                RawRepresentationFactory = supportsReasoning
+                    ? _ => new CreateResponseOptions
+                    {
+                        ReasoningOptions = reasoningEffort is null
+                            ? new ResponseReasoningOptions
+                            {
+                                ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
+                            }
+                            : new ResponseReasoningOptions
+                            {
+                                ReasoningEffortLevel = reasoningEffort.Value,
+                                ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Detailed,
+                            },
+                    }
+                    : null,
             },
         };
 

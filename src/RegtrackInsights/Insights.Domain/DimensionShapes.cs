@@ -56,6 +56,13 @@ public sealed record LocationRow
     public int Instances { get; init; }
     public int Overdue { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public int ImprisonmentInstances { get; init; }
     public int ImprisonmentOverdue { get; init; }
     public int CriticalInstances { get; init; }
@@ -65,6 +72,8 @@ public sealed record LocationRow
     public int ActiveChildren { get; init; }
     public decimal? OverduePct { get; init; }
     public decimal? OwnerlessPct { get; init; }
+    /// <summary>[FIX 2026-09-27] Same as NoInstanceOwner above - the procedure's column name for <see cref="OwnerlessPct"/>.</summary>
+    public decimal? NoInstanceOwnerPct { init => OwnerlessPct = value; }
     public decimal? ClosureRatio { get; init; }
     public int? OverdueRank { get; init; }
     // [FIX] StateID/StateName/PeerStateOverduePct/VsPeerStateNormPP: sql/05_dimension_location.sql
@@ -141,6 +150,13 @@ public sealed record RiskRow
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public int ImprisonmentInstances { get; init; }
     public int ImprisonmentOverdue { get; init; }
     public int BranchesCovered { get; init; }
@@ -158,7 +174,18 @@ public sealed record RiskRow
 public sealed record NatureControlTotals
 {
     public int ScopedInstances { get; init; }
-    public int SumOfRows { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-25, found live] Was SumOfRows - sql/09's own column is CategorisedInstances,
+    /// renamed there specifically because rows cover only instances WITH a nature, so a field
+    /// called SumOfRows compared against ScopedInstances reads as a gap when it is a declared
+    /// residual (CLAUDE.md 4a's own documented naming rule for this exact dimension). This C#
+    /// property was never renamed to match, so it silently defaulted to 0 via Dapper's exact-name
+    /// mapping - found live via a rigorous real-data review (control_totals showed "SumOfRows":0
+    /// on a real 24-row Nature fetch) - and this exact field name is referenced directly in both
+    /// the Nature composition and render prompts as a real field, so the render/compose agent was
+    /// being told about a field that could never carry its real value.
+    /// </summary>
+    public int CategorisedInstances { get; init; }
     public bool Reconciled { get; init; }
     public int OverdueInstances { get; init; }
     public decimal TenantOverduePct { get; init; }
@@ -181,6 +208,13 @@ public sealed record NatureRow
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public int ImprisonmentInstances { get; init; }
     public int ImprisonmentOverdue { get; init; }
     public int CriticalInstances { get; init; }
@@ -223,7 +257,17 @@ public sealed record DepartmentsControlTotals
     public int DepartmentsWithObligations { get; init; }
     public int UnassignedInstances { get; init; }
     public decimal UnassignedPct { get; init; }
-    public decimal TenantOwnerlessPct { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-25, found live] Was TenantOwnerlessPct - sql/10's own column is
+    /// TenantNoInstanceOwnerPct (renamed at the SQL layer at some point in the past for the same
+    /// ownership_has_two_mechanisms precision reasons documented on that data_quality note), but
+    /// this C# property was never renamed to match. Dapper's default mapping requires an exact
+    /// name match, so this silently defaulted to 0 regardless of the real computed value - a
+    /// systematic real-data review found this dead/always-wrong field (confirmed unused by any
+    /// prompt or other C# code, so no report ever visibly showed a wrong number from it, but it
+    /// would have been a landmine the moment anything started reading it).
+    /// </summary>
+    public decimal TenantNoInstanceOwnerPct { get; init; }
 }
 
 public sealed record DepartmentsRow
@@ -234,7 +278,16 @@ public sealed record DepartmentsRow
     public int Overdue { get; init; }
     public decimal? OverduePct { get; init; }
     public int Ownerless { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-27, found live] The procedure's column is NoInstanceOwner (renamed at the SQL
+    /// layer for the ownership_has_two_mechanisms reason), never "Ownerless" - Dapper maps by exact
+    /// name, so <see cref="Ownerless"/> silently stayed 0 on every report. This write-only alias is
+    /// what Dapper fills; the JSON the prompts read keeps the field name "Ownerless".
+    /// </summary>
+    public int NoInstanceOwner { init => Ownerless = value; }
     public decimal? OwnerlessPct { get; init; }
+    /// <summary>[FIX 2026-09-27] Same as NoInstanceOwner above - the procedure's column name for <see cref="OwnerlessPct"/>.</summary>
+    public decimal? NoInstanceOwnerPct { init => OwnerlessPct = value; }
     public int ImprisonmentInstances { get; init; }
     public int CriticalInstances { get; init; }
     public int DistinctUsers { get; init; }
@@ -409,8 +462,20 @@ public sealed record InternalControlTotals
     public int SumOfInternalRows { get; init; }
     public int StatutoryOverdueInstances { get; init; }
     public int InternalOverdueInstances { get; init; }
-    public decimal? StatutoryOwnerlessPct { get; init; }
-    public decimal? InternalOwnerlessPct { get; init; }
+    /// <summary>
+    /// [FIX 2026-09-25, found live] Was StatutoryOwnerlessPct/InternalOwnerlessPct on both this
+    /// record and InternalRow below - sql/13's real columns are StatutoryNoInstanceOwnerPct/
+    /// InternalNoInstanceOwnerPct (control_totals) and StatutoryNoInstanceOwner(Pct)/
+    /// InternalNoInstanceOwner(Pct) (rows), never "Ownerless". None of these 6 C# properties ever
+    /// matched their real SQL column, so all 6 silently carried Dapper's CLR default (0 or null)
+    /// on every single fetch regardless of real data - found live via a rigorous real-data review
+    /// (a real Minda-scale tenant's control_totals showed both these fields as null). The Internal
+    /// render prompt references the row-level names directly as real fields, so the render/compose
+    /// agent has been reading dead branch-level ownership data on every row, every run, since this
+    /// dimension shipped.
+    /// </summary>
+    public decimal? StatutoryNoInstanceOwnerPct { get; init; }
+    public decimal? InternalNoInstanceOwnerPct { get; init; }
     public int BranchesWithStatutory { get; init; }
     public int BranchesWithInternal { get; init; }
     public bool InternalAbsentEntirely { get; init; }
@@ -424,12 +489,12 @@ public sealed record InternalRow
     public string? ApexName { get; init; }
     public int StatutoryInstances { get; init; }
     public int StatutoryOverdue { get; init; }
-    public int StatutoryOwnerless { get; init; }
+    public int StatutoryNoInstanceOwner { get; init; }
     public int InternalInstances { get; init; }
     public int InternalOverdue { get; init; }
-    public int InternalOwnerless { get; init; }
-    public decimal? StatutoryOwnerlessPct { get; init; }
-    public decimal? InternalOwnerlessPct { get; init; }
+    public int InternalNoInstanceOwner { get; init; }
+    public decimal? StatutoryNoInstanceOwnerPct { get; init; }
+    public decimal? InternalNoInstanceOwnerPct { get; init; }
     public string? Flags { get; init; }
 }
 
@@ -482,11 +547,33 @@ public sealed record LicenceControlTotals
     public int ScopedLicences { get; init; }
     public int TypedLicences { get; init; }
     public bool Reconciled { get; init; }
-    public decimal TenantLapsedPct { get; init; }
+    public int TenantActiveLicences { get; init; }
+    public int TenantExpiredLicences { get; init; }
+    public decimal TenantExpiredPct { get; init; }
+    // [ADDED sql/v2/26, 2026-09-30] Pre-summed tenant-wide totals for every OTHER status column -
+    // found live (REQ-1085, tenant 1285): without these, the render/narrate agent had to sum
+    // PendingForReview (or any other status) across every LicenseTypeID row itself for a tenant-
+    // wide headline number, and dropped one row out of 108 (mostly zero) doing it in its head -
+    // reported 8 when the real reconciled total was 9. Same fix class as TenantActiveLicences/
+    // TenantExpiredLicences above: compute it once in SQL, never ask the model to sum rows.
+    public int TenantExpiring { get; init; }
+    public int TenantApplied { get; init; }
+    public int TenantPendingForReview { get; init; }
+    public int TenantRejected { get; init; }
+    public int TenantApplicationRejected { get; init; }
+    public int TenantTerminated { get; init; }
+    public int TenantNotApplicable { get; init; }
+    public int TenantOtherStatus { get; init; }
     public int LicenceTypesReported { get; init; }
     public int LicenceTypesWithLicences { get; init; }
     public int UntypedLicences { get; init; }
-    public int ExcludedTerminalStateLicences { get; init; }
+    // [2026-09-29] The report period (sql/v2/24): everything above counts only licences whose end date
+    // falls in it. The All* figures are context across EVERY licence in the user's licence scope.
+    public DateTime? WindowStart { get; init; }
+    public DateTime? WindowEnd { get; init; }
+    public int AllLicences { get; init; }
+    public int AllActiveLicences { get; init; }
+    public int AllExpiredLicences { get; init; }
 }
 
 public sealed record LicenceRow
@@ -495,12 +582,21 @@ public sealed record LicenceRow
     public string? LicenseTypeName { get; init; }
     public bool IsRetired { get; init; }
     public int TotalLicences { get; init; }
+    // One column per label in the Status column of RegTrack's own licence report (sql/v2/23) -
+    // they sum to TotalLicences. Not worked out from EndDate.
     public int ActiveLicences { get; init; }
-    public int Lapsed { get; init; }
-    public int ExcludedTerminalState { get; init; }
-    public int LapsingNext30 { get; init; }
+    public int Expiring { get; init; }
+    public int Expired { get; init; }
+    public int Applied { get; init; }
+    public int PendingForReview { get; init; }
+    public int Rejected { get; init; }
+    public int ApplicationRejected { get; init; }
+    public int Terminated { get; init; }
+    public int NotApplicable { get; init; }
+    public int OtherStatus { get; init; }
+    public int EndingNext30 { get; init; }
     public int BranchesCovered { get; init; }
-    public decimal? LapsedPct { get; init; }
+    public decimal? ExpiredPct { get; init; }
     public int? OverdueRank { get; init; }
     public string? Flags { get; init; }
 }

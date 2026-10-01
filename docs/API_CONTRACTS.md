@@ -141,6 +141,13 @@ Terminal: `complete` | `failed`. On `failed`, include a **user-safe** message
 only — never leak gate diagnostics such as "reconciliation variance of 3 on
 branch X". Internal detail goes to LangFuse/Grafana and alerts the team. (§11.3)
 
+**[ADDED 2026-09-16]** The terminal `complete` frame also carries `reportId`:
+```jsonc
+{ "runId": "…", "status": "complete", "reportId": "…" }
+```
+This is the id §5 below needs. Never present on `failed` (nothing to open) or
+any non-terminal status.
+
 ---
 
 ## 5. Open a report

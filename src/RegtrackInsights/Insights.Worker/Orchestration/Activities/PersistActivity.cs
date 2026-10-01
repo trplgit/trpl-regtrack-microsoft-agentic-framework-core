@@ -1,18 +1,34 @@
 using DurableTask.Core;
 using Insights.Data;
 using Insights.Domain;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
+/// <param name="RequestedDimensions">
+/// [ADDED 2026-09-25] Real dimension(s) this run covered, for GeneratedReport.RequestedDimensions
+/// (sql/33) - null for every report type other than dimension_selection. Trailing optional so
+/// every existing caller/test keeps compiling unchanged.
+/// </param>
 public sealed record PersistInput(
-    string Html, int TenantId, string ReportType, string Period, string ScopeDescriptor, int UserId);
+    string Html, int TenantId, string ReportType, string Period, string ScopeDescriptor, int UserId,
+    IReadOnlyList<string>? RequestedDimensions = null);
 
 /// <param name="LocalFilePath">
 /// [ADDED 2026-09-12] Set only when Reports:LocalFallbackDirectory is configured - see
 /// PersistActivity's own doc comment. Null on every normal (encrypt/blob/SQL) persist.
 /// </param>
-public sealed record PersistOutput(string ReportId, string? LocalFilePath = null);
+/// <param name="GeneratedAtUtc">
+/// [ADDED 2026-09-26] The REAL timestamp this report's row/blob path were built with - never a
+/// freshly re-derived DateTime.UtcNow from a later step. On the redelivery/lost-the-race short-
+/// circuit paths (an existing row already won), this is that row's OWN GeneratedAtUtc, not this
+/// invocation's. Needed by BuildReasoningTraceActivity to derive the SAME AzureReasoningTraceStore
+/// blob path ReportContentService will later re-derive from GeneratedReport.GeneratedAtUtc - any
+/// mismatch here would make the trace unfindable at read time.
+/// </param>
+public sealed record PersistOutput(string ReportId, string? LocalFilePath = null, DateTime GeneratedAtUtc = default);
 
 /// <summary>
 /// Node 12: build order item 14's write path. Encrypt -> blob -> SQL index row, replacing
@@ -48,18 +64,24 @@ public sealed record PersistOutput(string ReportId, string? LocalFilePath = null
 /// </summary>
 public sealed class PersistActivity(
     IReportEncryptor encryptor, IReportBlobWriter blobWriter, IServiceScopeFactory serviceScopeFactory,
-    string? localFallbackDirectory = null)
+    ILogger<PersistActivity> logger, ITenantReportLock tenantReportLock, string? localFallbackDirectory = null)
     : AsyncTaskActivity<PersistInput, PersistOutput>
 {
-    protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) => RunAsync(input);
+    protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) =>
+        RunAsync(input, context.OrchestrationInstance.ExecutionId);
 
-    internal async Task<PersistOutput> RunAsync(PersistInput input)
+    internal async Task<PersistOutput> RunAsync(PersistInput input, string? executionId = null)
     {
-        // The report id and its generation time are fixed HERE, before the blob write, because the
-        // blob PATH is built from them (<tenantId>/<reportType>/<yyyy>/<mm>/<reportId>.html.enc).
-        // EF's NEWID() / SYSUTCDATETIME() column defaults yield to a client-set value, so the SQL
-        // row carries the exact same id and timestamp the blob path encodes.
-        var reportId = Guid.NewGuid();
+        // [CHANGED 2026-09-18] Was Guid.NewGuid() - fine exactly once, a real duplicate-row/
+        // duplicate-blob generator on DTFx's at-least-once activity redelivery (a pod dying
+        // mid-PersistActivity after its lock expires gets this SAME activity re-run on a different
+        // pod - a real, live risk with 4 replicas that never had a chance to fire at 1). Deriving
+        // from the same (tenant, scope, reportType, period) key InsightsRunId.For already hashes
+        // for the orchestration instance id itself means a redelivered attempt targets the SAME
+        // row/blob path, not a new one - see InsightsRunId.ReportId's own doc comment.
+        // [CHANGED 2026-09-27] + executionId - see InsightsRunId.ReportId's own note: a new run for
+        // the same key must get a new report, a redelivered attempt of THIS run must not.
+        var reportId = InsightsRunId.ReportId(input.TenantId, input.ScopeDescriptor, input.ReportType, input.Period, executionId);
         var generatedAtUtc = DateTime.UtcNow;
 
         if (!string.IsNullOrWhiteSpace(localFallbackDirectory))
@@ -68,35 +90,88 @@ public sealed class PersistActivity(
             var safePeriod = string.Join("_", input.Period.Split(Path.GetInvalidFileNameChars()));
             var localPath = Path.Combine(localFallbackDirectory, $"{input.TenantId}-{input.ReportType}-{safePeriod}-{reportId}.html");
             await File.WriteAllTextAsync(localPath, input.Html);
-            return new PersistOutput(reportId.ToString(), LocalFilePath: localPath);
+            return new PersistOutput(reportId.ToString(), LocalFilePath: localPath, GeneratedAtUtc: generatedAtUtc);
         }
 
-        var envelope = await encryptor.EncryptAsync(input.Html);
-        var location = await blobWriter.WriteAsync(
-            envelope, new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(generatedAtUtc), reportId));
-
-        var report = new GeneratedReport
+        try
         {
-            Id = reportId,
-            CustomerId = input.TenantId,
-            ScopeDescriptor = input.ScopeDescriptor,
-            ReportType = input.ReportType,
-            Period = input.Period,
-            GeneratedAtUtc = generatedAtUtc,
-            GeneratedByUserId = input.UserId,
-            BlobContainer = location.Container,
-            BlobPath = location.Path,
-            Status = "complete",
-            EncryptedAesKey = envelope.EncryptedAesKey,
-            KeyVaultObjectName = envelope.KeyVaultObjectName,
-            KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
-        };
+            using var scope = serviceScopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
 
-        using var scope = serviceScopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<InsightsReportsDbContext>();
-        db.GeneratedReports.Add(report);
-        await db.SaveChangesAsync();
+            // [ADDED 2026-09-18] Fast, cheap check before doing any real work: a prior attempt
+            // (this pod or another) already finished this exact report. Skips encrypt/blob/lock
+            // entirely on the common redelivery case. The AUTHORITATIVE check - the one the race
+            // actually depends on - is the one repeated just before the insert, below, once the
+            // distributed lock is held.
+            var existing = await db.GeneratedReports.FindAsync(reportId);
+            if (existing is not null)
+            {
+                logger.LogInformation(
+                    "PersistActivity: report {ReportId} already persisted - redelivered activity, returning the existing row untouched.", reportId);
+                return new PersistOutput(existing.Id.ToString(), GeneratedAtUtc: existing.GeneratedAtUtc);
+            }
 
-        return new PersistOutput(report.Id.ToString());
+            var envelope = await encryptor.EncryptAsync(input.Html);
+            var location = await blobWriter.WriteAsync(
+                envelope, new BlobPathContext(input.TenantId, input.ReportType, DateOnly.FromDateTime(generatedAtUtc), reportId));
+
+            var report = new GeneratedReport
+            {
+                Id = reportId,
+                CustomerId = input.TenantId,
+                ScopeDescriptor = input.ScopeDescriptor,
+                ReportType = input.ReportType,
+                Period = input.Period,
+                GeneratedAtUtc = generatedAtUtc,
+                GeneratedByUserId = input.UserId,
+                BlobContainer = location.Container,
+                BlobPath = location.Path,
+                Status = "complete",
+                RequestedDimensions = ReportDimensionKey.Normalize(input.RequestedDimensions),
+                EncryptedAesKey = envelope.EncryptedAesKey,
+                KeyVaultObjectName = envelope.KeyVaultObjectName,
+                KeyVaultObjectVersion = envelope.KeyVaultObjectVersion,
+            };
+
+            // [ADDED 2026-09-24] FOUND LIVE AGAIN - the exact same failure class this class's own
+            // 2026-09-18 fix only made loggable, not prevented: "An error occurred while saving the
+            // entity changes" when multiple PersistActivity calls for the SAME TENANT hit
+            // SaveChangesAsync at once (that incident was 4 replicas racing one report; this one was
+            // one reqId's sibling dimensions finishing together - same mechanism, different trigger).
+            // ITenantReportLock (SqlTenantReportLock in production) serializes writes per tenant
+            // across every replica - see that interface's own doc comment for why it can't be an
+            // in-process lock. The re-check inside the lock is what makes a retried/relocked attempt
+            // a no-op once another replica's transaction has already committed the same reportId.
+            return await tenantReportLock.ExecuteWithLockAsync(db, input.TenantId, async () =>
+            {
+                var winner = await db.GeneratedReports.FindAsync(reportId);
+                if (winner is not null)
+                {
+                    logger.LogWarning(
+                        "PersistActivity: lost the race for report {ReportId} to another replica while waiting for the tenant lock - returning theirs.", reportId);
+                    return new PersistOutput(reportId.ToString(), GeneratedAtUtc: winner.GeneratedAtUtc);
+                }
+
+                db.GeneratedReports.Add(report);
+                await db.SaveChangesAsync();
+
+                return new PersistOutput(report.Id.ToString(), GeneratedAtUtc: generatedAtUtc);
+            });
+        }
+        catch (Exception ex)
+        {
+            // [ADDED 2026-09-18] Found live: DTFx's TaskFailed history event only ever persists
+            // ex.Message, never ex.InnerException - "An error occurred while saving the entity
+            // changes. See the inner exception for details." is EF's own DbUpdateException.Message,
+            // and the actual inner exception (the real SQL error - deadlock, timeout, whatever it
+            // turns out to be) was completely unrecoverable after the fact. Logging the FULL
+            // exception (ILogger's Exception overload captures ex.ToString(), inner exceptions
+            // included) here, before this still propagates and fails the activity exactly as
+            // before, is the only way this is diagnosable without bypassing the app next time.
+            logger.LogError(ex,
+                "PersistActivity failed for tenant {CustomerId}, reportType {ReportType}, period {Period}, reportId {ReportId}.",
+                input.TenantId, input.ReportType, input.Period, reportId);
+            throw;
+        }
     }
 }

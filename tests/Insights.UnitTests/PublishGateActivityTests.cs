@@ -3,6 +3,7 @@ using Insights.Data;
 using Insights.Domain;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -18,7 +19,7 @@ public class PublishGateActivityTests
             .ReturnsAsync(new ScopeAuditResult(0, 0, 0));
 
         var gate = new PublishGate(scopeRepository.Object);
-        var activity = new PublishGateActivity(gate);
+        var activity = new PublishGateActivity(gate, NullLogger<PublishGateActivity>.Instance);
 
         var narrative = new NarrativeResult([]);
         var result = await activity.RunAsync(new PublishGateInput(38, 29, narrative, []));
@@ -31,7 +32,7 @@ public class PublishGateActivityTests
     {
         var scopeRepository = new Mock<IScopeRepository>();
         var gate = new PublishGate(scopeRepository.Object);
-        var activity = new PublishGateActivity(gate);
+        var activity = new PublishGateActivity(gate, NullLogger<PublishGateActivity>.Instance);
 
         var narrative = new NarrativeResult([new NarrativeBlockResult("hero", "prose", ["not-a-real-id"])]);
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() =>

@@ -31,6 +31,19 @@
   authorised pair set. That is a genuine widening relative to the statutory cut
   and is declared in data_quality - a user scoped to one category sees internal
   work for all categories at their authorised branches.
+
+  -- [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default --
+  @WindowStart/@WindowEnd are now REQUIRED. Neither population carries a per-row
+  date on the instance itself - real due dates live one level down, one row per
+  recurring occurrence. TWO SEPARATE schedule tables exist because these are two
+  genuinely different schema families (see "THE TWO POPULATIONS" above): the
+  statutory side is narrowed via ComplianceScheduleOn (same as every other
+  dimension, matching sql/23 TimelinessFY's and sql/11 Act's proven pattern), the
+  internal side via InternalComplianceScheduledOn.ScheduledOn (the column already
+  read by #intOvd above). Both narrowing steps use the SAME caller-supplied
+  window - see the two window-gate blocks below, one right after #stat and one
+  right after #int. This is a period picker window (30/60/90 days or a quarter),
+  never a fiscal year - FY-only scoping stays specific to TimelinessFY.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -42,6 +55,8 @@ GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_Internal
     @UserID      INT,
     @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
     @AsOf        DATETIME = NULL
 AS
 BEGIN
@@ -64,6 +79,37 @@ BEGIN
     SELECT s.ComplianceInstanceID, s.BranchID
     INTO #stat
     FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s;
+
+    CREATE CLUSTERED INDEX IX_stat ON #stat (ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE, STATUTORY SIDE - caller-supplied period,
+        no FY default. #stat carries no per-row date - real due dates live on
+        ComplianceScheduleOn, one row per recurring occurrence. Same proven pattern
+        as sql/23 TimelinessFY and sql/11 Act: #stat is materialised and indexed
+        above, so find which of those instances had >=1 scheduled occurrence in the
+        window, then narrow #stat itself down to just those. Every downstream step
+        (statutory overdue, ownership, per-branch rollup, reconciliation) already
+        reads from #stat, so it inherits the window for free.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are validated once here and reused for the internal
+        side's own gate below - they govern the whole dimension, not just #stat.      */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51112, N'INTERNAL DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51112, N'INTERNAL DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#statActive') IS NOT NULL DROP TABLE #statActive;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #statActive
+    FROM #stat s
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = s.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd;
+    CREATE CLUSTERED INDEX IX_statActive ON #statActive (ComplianceInstanceID);
+
+    DELETE s FROM #stat s
+    WHERE NOT EXISTS (SELECT 1 FROM #statActive a WHERE a.ComplianceInstanceID = s.ComplianceInstanceID);
 
     IF OBJECT_ID('tempdb..#statOvd') IS NOT NULL DROP TABLE #statOvd;
     SELECT DISTINCT o.ComplianceInstanceID
@@ -97,6 +143,30 @@ BEGIN
     JOIN CustomerBranch cb ON cb.ID = ii.CustomerBranchID
     JOIN #branch b ON b.BranchID = ii.CustomerBranchID
     WHERE ii.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.Status = 1 AND cb.CustomerID = @CustomerID;
+
+    CREATE CLUSTERED INDEX IX_int ON #int (InternalInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE, INTERNAL SIDE - caller-supplied period,
+        no FY default. #int carries no per-row date either - real due dates live on
+        InternalComplianceScheduledOn (a SEPARATE schema family from the statutory
+        side's ComplianceScheduleOn, see the header note), one row per recurring
+        occurrence. #int is materialised and indexed above, so find which of those
+        instances had >=1 scheduled occurrence in the window, then narrow #int
+        itself down to just those. Every downstream step (internal overdue,
+        ownership, per-branch rollup, reconciliation) already reads from #int, so
+        it inherits the window for free. @WindowStart/@WindowEnd were already
+        validated NOT NULL / not inverted on the statutory side above - not
+        re-checked here, same params govern both populations.                      */
+    IF OBJECT_ID('tempdb..#intActive') IS NOT NULL DROP TABLE #intActive;
+    SELECT DISTINCT iso.InternalComplianceInstanceID AS InternalInstanceID
+    INTO #intActive
+    FROM #int i
+    JOIN InternalComplianceScheduledOn iso ON iso.InternalComplianceInstanceID = i.InternalInstanceID
+    WHERE iso.ScheduledOn >= @WindowStart AND iso.ScheduledOn < @WindowEnd;
+    CREATE CLUSTERED INDEX IX_intActive ON #intActive (InternalInstanceID);
+
+    DELETE i FROM #int i
+    WHERE NOT EXISTS (SELECT 1 FROM #intActive a WHERE a.InternalInstanceID = i.InternalInstanceID);
 
     /*  Internal overdue, using the SAME dictionary - verified, see header.
         The INNER JOIN is deliberate: a status the dictionary does not know
@@ -358,6 +428,7 @@ BEGIN
         exist ONLY here - attached to no assertion and no finding. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
                    WHEN 'ownership_has_two_mechanisms'   THEN 'StatutoryNoInstanceOwnerPct'
                    WHEN 'flow_metric_drift'                    THEN 'OverduePct'
                    WHEN 'internal_scope_is_branch_only'        THEN 'InternalInstances'
@@ -365,6 +436,14 @@ BEGIN
                    WHEN 'internal_absent'                      THEN 'InternalAbsentEntirely'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. Applies to BOTH populations - statutory instances are matched against '
+                    + N'ComplianceScheduleOn, internal instances against InternalComplianceScheduledOn. An '
+                    + N'instance with no occurrence in this window is excluded entirely, not just its overdue '
+                    + N'figures - it will not appear in any row here even if it exists cumulatively.') AS Detail
+        UNION ALL
         SELECT 'ownership_has_two_mechanisms' AS Issue,
                N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
              + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
@@ -395,8 +474,8 @@ BEGIN
         WHERE @intTotal = 0
     ) q;
 
-    DROP TABLE #branch; DROP TABLE #stat; DROP TABLE #statOvd; DROP TABLE #statOwn;
-    DROP TABLE #int; DROP TABLE #intOvd; DROP TABLE #intOwn;
+    DROP TABLE #branch; DROP TABLE #stat; DROP TABLE #statActive; DROP TABLE #statOvd; DROP TABLE #statOwn;
+    DROP TABLE #int; DROP TABLE #intActive; DROP TABLE #intOvd; DROP TABLE #intOwn;
     DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

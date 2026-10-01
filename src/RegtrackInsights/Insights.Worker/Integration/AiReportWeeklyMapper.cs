@@ -1,6 +1,5 @@
 using Insights.Domain;
 using Insights.Worker.Orchestration.Activities;
-using System.Globalization;
 
 namespace Insights.Worker.Integration;
 
@@ -8,17 +7,17 @@ namespace Insights.Worker.Integration;
 /// ADR-0003 (2026-09-14): the ONLY place PostInsightJsonInput (our shape) becomes
 /// AiReportWeeklyUpsertRequest (the external API's shape). Pure, no I/O, no clock - so the
 /// translation is unit-testable without an HttpClient, and this file is the entire blast radius of
-/// "the external contract changed" - PostInsightJsonActivity, ComposeInsightJsonActivity and every
-/// domain type upstream stay untouched.
+/// "the external contract changed".
+///
+/// <para>ADR-0004 (revised 2026-09-23): the input is an <see cref="InsightCard"/> and the card IS
+/// the <c>report</c> object - the receiver stores it free-form and the /insights hub renders it.
+/// The per-recipient <c>insight_id</c> is stamped here, because one card is composed per scope
+/// group and fanned out to every recipient in it.</para>
 /// </summary>
 public static class AiReportWeeklyMapper
 {
-    /// <summary>
-    /// A stable generator-version tag, bumped only when the shape/meaning of
-    /// <see cref="AiReportWeeklyReport"/> changes - NOT per-run provenance (that is
-    /// <see cref="InsightNarrative.Source"/>, carried inside the report itself).
-    /// </summary>
-    public const string ModelVersion = "reginsights-freedigest-1";
+    /// <summary>The generator-version tag for the card-shaped report (ADR-0004). "-1" was the headline/focus shape.</summary>
+    public const string ModelVersion = "reginsights-freedigest-2";
 
     /// <summary>
     /// ADR-0003 D2 (confirmed with the product owner, 2026-09-14): the Monday report sent each
@@ -30,53 +29,22 @@ public static class AiReportWeeklyMapper
 
     public static AiReportWeeklyUpsertRequest Map(PostInsightJsonInput input, DateOnly periodStartDate)
     {
-        // Recomputed, not re-plumbed from ComposeInsightJsonActivity: InsightFocus.SelectFor is a
-        // pure, deterministic function of the aggregates already on the input (CLAUDE.md
-        // non-negotiable 5) - recomputing it here keeps this mapper self-contained without adding
-        // a field to PostInsightJsonInput or touching the orchestrator/compose activity.
-        var focus = InsightFocus.SelectFor(input.Aggregates);
-
-        var focusPresentation = FocusPresentationFor(focus);
-        var report = new AiReportWeeklyReport(
-            input.Narrative.Headline,
-            input.Narrative.Explanation,
-            input.Narrative.SeverityBand,
-            input.Narrative.Source,
-            new AiReportWeeklyFocus(
-                focus.Metric,
-                focus.Value,
-                focus.Denominator,
-                focusPresentation.Label,
-                focusPresentation.DisplayText));
+        var card = input.Card with { InsightId = InsightCardRules.InsightId(input.CustomerId, input.UserId, periodStartDate) };
 
         return new AiReportWeeklyUpsertRequest(
             input.CustomerId,
             input.UserId,
             periodStartDate,
-            report,
+            ToWire(card),
             ModelVersion,
             $"freedigest-insight-{input.CustomerId}-{input.WeekEnding}");
     }
 
-    internal static (string Label, string DisplayText) FocusPresentationFor(InsightFocus focus)
-    {
-        var label = focus.Metric switch
-        {
-            nameof(FreeDigestAggregates.ImprisonmentDueNext7) => "Imprisonment-related items due in the next 7 days",
-            nameof(FreeDigestAggregates.CriticalDueNext7) => "Critical items due in the next 7 days",
-            nameof(FreeDigestAggregates.ImprisonmentDueNext30) => "Imprisonment-related items due in the next 30 days",
-            nameof(FreeDigestAggregates.LicencesLapsingNext30) => "Licences lapsing in the next 30 days",
-            nameof(FreeDigestAggregates.DueNext7) => "Items due in the next 7 days",
-            nameof(FreeDigestAggregates.DueNext30) => "Items due in the next 30 days",
-            nameof(FreeDigestAggregates.CompletedLast7) => "Items completed in the last 7 days",
-            _ => throw new InvalidOperationException($"Unknown free digest focus metric '{focus.Metric}'. Refusing to build the API payload."),
-        };
+    internal static AiReportWeeklyInsight ToWire(InsightCard c) => new(
+        c.InsightId, c.Tier, c.Type, c.Severity, c.WeekOf, c.Title, c.Headline, c.Narrative,
+        new AiReportWeeklyPrimaryMetric(
+            c.PrimaryMetric.Label, c.PrimaryMetric.Current, c.PrimaryMetric.Target,
+            c.PrimaryMetric.Unit, c.PrimaryMetric.Direction),
+        c.SupportingMetrics.Select(s => new AiReportWeeklySupportingMetric(s.Label, s.Value, s.Unit)).ToList());
 
-        var value = focus.Value.ToString("N0", CultureInfo.InvariantCulture);
-        var displayText = focus.Denominator is { } denominator
-            ? $"{value} of {denominator.ToString("N0", CultureInfo.InvariantCulture)}"
-            : value;
-
-        return (label, displayText);
-    }
 }

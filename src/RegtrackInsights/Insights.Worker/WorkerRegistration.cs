@@ -5,6 +5,7 @@ using Insights.Data;
 using Insights.Persistence;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Insights.Worker.Orchestration.Archived;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,32 @@ namespace Insights.Worker;
 /// </summary>
 public static class WorkerRegistration
 {
+    /// <summary>
+    /// Every orchestrator this worker knows how to run, as data instead of a sequence of
+    /// AddTaskOrchestrations calls - lets a unit test assert no two entries collide on
+    /// (Name, Version) without touching a real task hub. Read ONLY by the worker factory below;
+    /// nothing else may call AddTaskOrchestrations directly, so this list is never stale.
+    ///
+    /// [ADDED 2026-09-30] Multi-version dispatch (docs/superpowers/specs/2026-09-30-orchestrator-
+    /// multi-version-dispatch-design.md). From the NEXT InsightsReportOrchestrator.Version bump
+    /// onward: before bumping the live Version, copy the current InsightsReportOrchestrator.cs
+    /// into Orchestration/Archived/InsightsReportOrchestratorV{old}.cs, rename the class, strip its
+    /// changelog to one frozen-header line, and add an entry for it here under its OLD version
+    /// string. Retire a frozen entry (delete the class + this line) only once tools/DrainCheck
+    /// reports zero in-flight instances under that exact version - see the spec's section 3.3.
+    /// </summary>
+    internal static readonly IReadOnlyList<(string Name, string Version, Type Type)> OrchestrationRegistrations =
+    [
+        (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+        // [FROZEN 2026-10-01] Superseded by 4.5 (Entity/fixed_holistic reasoning-trace explainer -
+        // see InsightsReportOrchestrator's own changelog). Retire via tools/DrainCheck once it
+        // reports zero in-flight "4.4" instances.
+        (InsightsReportOrchestrator.Name, "4.4", typeof(InsightsReportOrchestratorV4_4)),
+        (FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)),
+        (FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)),
+        (FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)),
+    ];
+
     public static IServiceCollection AddInsightsWorker(this IServiceCollection services)
     {
         /*  The publish gate (build order step 8) - the deterministic arbiter that runs after
@@ -83,7 +110,18 @@ public static class WorkerRegistration
         services.AddSingleton<Insights.Data.IRunStatusReader, DurableTaskRunStatusReader>();
 
         // Enqueues a run for API_CONTRACTS.md 3, same reasoning as IRunStatusReader above.
-        services.AddSingleton<Insights.Data.IInsightsRunEnqueuer, DurableTaskRunEnqueuer>();
+        // Presentation:RunVisionQa [ADDED 2026-09-15] - optional, defaults true (real production
+        // behavior unchanged when unset). Captured once here, at registration time, not read live
+        // inside the orchestrator - see InsightsReportOrchestrationInput's own doc comment on why
+        // (the orchestrator body must stay deterministic across DTFx replay).
+        var runVisionQa = configuration.GetValue("Presentation:RunVisionQa", true);
+        services.AddSingleton<Insights.Data.IInsightsRunEnqueuer>(sp =>
+            new DurableTaskRunEnqueuer(sp.GetRequiredService<TaskHubClient>(), runVisionQa));
+
+        // [ADDED 2026-09-23] Hard-terminate for RunEndpoints' new POST .../cancel - same
+        // reasoning as IRunStatusReader/IInsightsRunEnqueuer above, needs TaskHubClient only.
+        services.AddSingleton<Insights.Data.IInsightsRunCanceller>(sp =>
+            new DurableTaskRunCanceller(sp.GetRequiredService<TaskHubClient>()));
 
         return services;
     }
@@ -112,6 +150,7 @@ public static class WorkerRegistration
         services.AddTransient<ComposeFreehandDimensionActivity>();
         services.AddTransient<NarrateActivity>();
         services.AddTransient<ReflectOnNarrativeActivity>();
+        services.AddTransient<AnalyzeAndNarrateActivity>();
         services.AddTransient<PublishGateActivity>();
         services.AddTransient<RenderHtmlActivity>();
         services.AddTransient<InjectFontActivity>();
@@ -122,23 +161,42 @@ public static class WorkerRegistration
         services.AddTransient<InjectBacklogAgeBarCssActivity>();
         services.AddTransient<InjectForwardLookActivity>();
         services.AddTransient<InjectForwardLookCssActivity>();
+        services.AddTransient<InjectNumberFormulaActivity>();
         // [ADDED 2026-09-15, THROWAWAY DIAGNOSTIC] Same Reports:LocalFallbackDirectory as
         // PersistActivity below, reused only to decide where NormalizeActivity dumps a rejected
         // document - see that class's own doc comment. Revert alongside it.
-        services.AddTransient(_ => new NormalizeActivity(configuration["Reports:LocalFallbackDirectory"]));
+        services.AddTransient(sp => new NormalizeActivity(
+            configuration["Reports:LocalFallbackDirectory"], sp.GetRequiredService<ILogger<NormalizeActivity>>()));
         services.AddTransient<SanitizeActivity>();
-        services.AddTransient<ValidateFixedHolisticStructureActivity>();
-        services.AddTransient<ValidateUserDimensionStructureActivity>();
+        services.AddTransient(sp => new ValidateFixedHolisticStructureActivity(
+            sp.GetRequiredService<ILogger<ValidateFixedHolisticStructureActivity>>(),
+            sp.GetService<Insights.Presentation.ILayoutChecker>()));
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
         // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
         // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
+        services.AddSingleton<ITenantReportLock, SqlTenantReportLock>();
         services.AddTransient(sp => new PersistActivity(
             sp.GetRequiredService<IReportEncryptor>(),
             sp.GetRequiredService<IReportBlobWriter>(),
             sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<ILogger<PersistActivity>>(),
+            sp.GetRequiredService<ITenantReportLock>(),
             configuration["Reports:LocalFallbackDirectory"]));
+
+        // [ADDED 2026-09-26] Node 12b - see BuildReasoningTraceActivity's own doc comment. All
+        // four collaborators resolved with GetService (never GetRequiredService) so a host that
+        // has not called AddInsightsAgentReasoning/AddInsightsPaidReportAgents's reasoning-explainer
+        // registration/RegisterReportCodec still starts - the activity's own RunAsync treats a
+        // null explainerAgent/traceStore as "feature not configured here" and returns Written:false,
+        // never throws.
+        services.AddTransient(sp => new BuildReasoningTraceActivity(
+            sp.GetRequiredService<ILogger<BuildReasoningTraceActivity>>(),
+            sp.GetService<IReasoningExplainerAgent>(),
+            sp.GetService<IAgentReasoningRecorder>(),
+            sp.GetService<IToolInvocationRecorder>(),
+            sp.GetService<IReasoningTraceStore>()));
 
         // Build order item 14's write path: encrypt -> blob -> SQL index row.
         RegisterReportCodec(services, configuration);
@@ -158,6 +216,7 @@ public static class WorkerRegistration
         services.AddTransient<FetchDigestArtifactActivity>();
         services.AddTransient<SendDigestFromArtifactActivity>();
         services.AddTransient<MarkDigestArtifactDispatchedActivity>();
+        services.AddTransient<RecordDigestSendFailedActivity>();
 
         // ADR-0002 (2026-09-11) - the per-user insight JSON lane, Sunday-only, sibling to the
         // GENERATE phase above. ComposeInsightJsonActivity has no special construction needs, so
@@ -178,37 +237,35 @@ public static class WorkerRegistration
             // CreateOrchestrationInstanceAsync call use - not relying on whatever Type-based
             // AddTaskOrchestrations(typeof(...)) would have derived internally, which is
             // unconfirmed and was exactly the kind of guess that broke ActivityCreator below.
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)));
-
-            // ADR-0001 (2026-09-10) - the two-phase digest's orchestrations. Same explicit
-            // Name/Version treatment as every other orchestration registered above.
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestGenerateOrchestrator.Name, FreeDigestGenerateOrchestrator.Version, typeof(FreeDigestGenerateOrchestrator)));
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestSendOrchestrator.Name, FreeDigestSendOrchestrator.Version, typeof(FreeDigestSendOrchestrator)));
-            worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(
-                FreeDigestInsightJsonOrchestrator.Name, FreeDigestInsightJsonOrchestrator.Version, typeof(FreeDigestInsightJsonOrchestrator)));
+            //
+            // [CHANGED 2026-09-30] Reads OrchestrationRegistrations (declared at the top of this
+            // class) instead of four separate calls - same registrations, same order, now data a
+            // unit test can inspect without building a TaskHubWorker. See that field's own doc
+            // comment for the multi-version dispatch convention this exists for.
+            foreach (var (name, version, type) in OrchestrationRegistrations)
+                worker.AddTaskOrchestrations(new NameValueObjectCreator<TaskOrchestration>(name, version, type));
 
             worker.AddTaskActivities(
                 ActivityCreator<CheckTenantTokenBudgetActivity>(sp), ActivityCreator<RecordTenantTokenUsageActivity>(sp),
                 ActivityCreator<GatherScopeActivity>(sp), ActivityCreator<FetchDimensionsActivity>(sp),
                 ActivityCreator<ComputeScoreActivity>(sp), ActivityCreator<ComposeFreehandDimensionActivity>(sp),
                 ActivityCreator<NarrateActivity>(sp), ActivityCreator<ReflectOnNarrativeActivity>(sp),
+                ActivityCreator<AnalyzeAndNarrateActivity>(sp),
                 ActivityCreator<PublishGateActivity>(sp), ActivityCreator<RenderHtmlActivity>(sp),
                 ActivityCreator<InjectFontActivity>(sp), ActivityCreator<InjectCoverageGridActivity>(sp),
                 ActivityCreator<InjectCoverageCssActivity>(sp), ActivityCreator<InjectCoverageScriptActivity>(sp),
                 ActivityCreator<InjectBacklogAgeBarActivity>(sp), ActivityCreator<InjectBacklogAgeBarCssActivity>(sp),
                 ActivityCreator<InjectForwardLookActivity>(sp), ActivityCreator<InjectForwardLookCssActivity>(sp),
+                ActivityCreator<InjectNumberFormulaActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
-                ActivityCreator<ValidateUserDimensionStructureActivity>(sp),
                 ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
+                ActivityCreator<BuildReasoningTraceActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),
                 ActivityCreator<ReleaseDigestArtifactActivity>(sp), ActivityCreator<ResolveDigestDispatchActivity>(sp),
                 ActivityCreator<FetchDigestArtifactActivity>(sp), ActivityCreator<SendDigestFromArtifactActivity>(sp),
-                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp),
+                ActivityCreator<MarkDigestArtifactDispatchedActivity>(sp), ActivityCreator<RecordDigestSendFailedActivity>(sp),
                 ActivityCreator<ComposeInsightJsonActivity>(sp), ActivityCreator<PostInsightJsonActivity>(sp));
 
             return worker;
@@ -297,7 +354,8 @@ public static class WorkerRegistration
             sp.GetRequiredService<IReportBlobReader>(),
             sp.GetRequiredService<IReportViewPublisher>(),
             sasLifetime,
-            sp.GetRequiredService<ILogger<ReportContentService>>()));
+            sp.GetRequiredService<ILogger<ReportContentService>>(),
+            sp.GetService<IReasoningTraceStore>()));
 
         // API_CONTRACTS.md Sec.3 step 3 (design doc Sec.2.4's 30-day cooldown) - RunEndpoints
         // needs this on the SAME host that generates reports, and it depends on
@@ -309,10 +367,16 @@ public static class WorkerRegistration
         var cooldownDays = configuration.GetValue<int?>("Reports:CooldownDays")
             ?? throw new InvalidOperationException("Reports:CooldownDays is not configured.");
 
+        // [ADDED 2026-09-25] Reports:CooldownEnabled - the testing/demo toggle. Defaults true
+        // (real prod behaviour) if unset, unlike CooldownDays above - this is a new optional knob,
+        // not a locked spec value with no safe default. Flip to false in a local/UAT appsettings
+        // file to regenerate the same dimension repeatedly while testing; true for a demo or prod.
+        var cooldownEnabled = configuration.GetValue("Reports:CooldownEnabled", true);
+
         // SCOPED - same captive-dependency reasoning as IReportContentService: it holds a scoped
         // InsightsReportsDbContext, so it cannot be a singleton.
         services.AddScoped<ICooldownRepository>(sp =>
-            new EfCooldownRepository(sp.GetRequiredService<InsightsReportsDbContext>(), cooldownDays));
+            new EfCooldownRepository(sp.GetRequiredService<InsightsReportsDbContext>(), cooldownDays, cooldownEnabled));
 
         // Fan-out reqId grouping (sql/30_report_request.sql) - same captive-dependency reasoning
         // as ICooldownRepository directly above: holds a scoped InsightsReportsDbContext.
@@ -344,6 +408,13 @@ public static class WorkerRegistration
         services.TryAddSingleton(_ => new AzureReportBlobWriter(blobConnectionString, blobContainer));
         services.TryAddSingleton<IReportBlobWriter>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
         services.TryAddSingleton<IReportBlobReader>(sp => sp.GetRequiredService<AzureReportBlobWriter>());
+
+        // [ADDED 2026-09-26] Reasoning-trace Markdown - SAME blobConnectionString/blobContainer as
+        // the report's own encrypted blob above, deliberately NOT a new container (user's explicit
+        // instruction). TryAdd, same reasoning as the other three registrations in this method:
+        // both the worker (write, BuildReasoningTraceActivity) and the API host (read,
+        // ReportContentService) call this same method.
+        services.TryAddSingleton<IReasoningTraceStore>(_ => new AzureReasoningTraceStore(blobConnectionString, blobContainer));
     }
 
     /// <summary>
@@ -362,7 +433,19 @@ public static class WorkerRegistration
     {
         var writeConnectionString = configuration["ConnectionStrings:RegTrackReportsWrite"]
             ?? Require(configuration, "ConnectionStrings:RegTrack");
-        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(writeConnectionString));
+        services.AddDbContext<InsightsReportsDbContext>(options => options.UseSqlServer(
+            writeConnectionString,
+            // [ADDED 2026-09-18] Found live: with 4 worker replicas genuinely parallel (previously
+            // impossible at 1 replica), 3 of 4 concurrent PersistActivity SaveChangesAsync calls
+            // failed with a generic "An error occurred while saving the entity changes" after every
+            // real pipeline stage (compose/narrate/render/QA - full token spend) had already
+            // succeeded - consistent with SQL Server deadlock/lock-wait contention on concurrent
+            // INSERTs into GeneratedReport, not a real data conflict (no unique constraint beyond
+            // the PK, a fresh GUID every call - sql/18_generated_report.sql). EF's own retrying
+            // execution strategy is the correct fix for exactly this transient-fault class - no
+            // manual transaction is opened anywhere in this DbContext's callers, so it needs no
+            // ExecutionStrategy.ExecuteAsync wrapping to be safe.
+            sql => sql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)));
     }
 
     /// <summary>

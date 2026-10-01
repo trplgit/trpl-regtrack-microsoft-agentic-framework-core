@@ -4,7 +4,7 @@ public sealed record EmailMessage(string ToAddress, string? ToName, string Subje
 
 public sealed record EmailSendResult(string ProviderUsed);
 
-/// <summary>Provider-agnostic send. Email:Provider config decides which implementation composes.</summary>
+/// <summary>Provider-agnostic send. Which provider a tenant uses is decided per tenant - see IEmailGatewayResolver and IEmailSenderRegistry.</summary>
 public interface IEmailSender
 {
     Task<EmailSendResult> SendAsync(EmailMessage message, CancellationToken cancellationToken = default);

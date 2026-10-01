@@ -25,17 +25,17 @@ public sealed class DigestSubjectTests
     }
 
     [Fact]
-    public void Subject_CarriesTheWeekEnding()
+    public void Subject_CarriesTheTopicAndMonth()
     {
         var subject = SendDigestFromArtifactActivity.BuildSubject("Acme Holdings", Week);
 
-        Assert.Contains("24 Aug 2025", subject);
+        Assert.Contains("Acts, August 2025", subject); // 24 Aug 2025 is the 4th Sunday -> the Act email
         Assert.StartsWith("RegTrack Insights: Acme Holdings", subject);
     }
 
     /// <summary>
     /// A missing tenant name is a data gap, not a licence to emit "RegTrack Insights:  - week
-    /// ending ...". Falls back to the plain form.
+    /// ...". Falls back to the plain form.
     /// </summary>
     [Theory]
     [InlineData(null)]
@@ -45,7 +45,7 @@ public sealed class DigestSubjectTests
     {
         var subject = SendDigestFromArtifactActivity.BuildSubject(tenantName, Week);
 
-        Assert.Equal("RegTrack Insights - week ending 24 Aug 2025", subject);
+        Assert.Equal("RegTrack Insights - Acts, August 2025", subject);
         Assert.DoesNotContain(":", subject);
     }
 
@@ -54,6 +54,6 @@ public sealed class DigestSubjectTests
     {
         var subject = SendDigestFromArtifactActivity.BuildSubject("  Acme Holdings  ", Week);
 
-        Assert.Equal("RegTrack Insights: Acme Holdings - week ending 24 Aug 2025", subject);
+        Assert.Equal("RegTrack Insights: Acme Holdings - Acts, August 2025", subject);
     }
 }

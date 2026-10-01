@@ -6,12 +6,19 @@ using Insights.Domain;
 namespace Insights.Worker.Orchestration;
 
 /// <inheritdoc cref="IInsightsRunEnqueuer"/>
-public sealed class DurableTaskRunEnqueuer(TaskHubClient client) : IInsightsRunEnqueuer
+/// <param name="runVisionQa">
+/// Presentation:RunVisionQa [ADDED 2026-09-15], captured once at DI registration
+/// (WorkerRegistration.cs) - see InsightsReportOrchestrationInput's own doc comment on the real
+/// consequence of setting this false (PlaywrightQaActivity is already advisory-only, so with this
+/// off nothing checks the rendered HTML for a real visual defect before it ships).
+/// </param>
+public sealed class DurableTaskRunEnqueuer(TaskHubClient client, bool runVisionQa = true) : IInsightsRunEnqueuer
 {
     public async Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null)
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null,
+        DateTime? windowStart = null, DateTime? windowEnd = null)
     {
         /*  The instance id is DERIVED, not left to DTFx - same reasoning as
             InsightsRunOnceWorker: it IS the one-active-run-per-key lock, and it carries the
@@ -29,7 +36,9 @@ public sealed class DurableTaskRunEnqueuer(TaskHubClient client) : IInsightsRunE
             not silently worked around. Safe today only because every manual test so far used a
             distinct Period per dimension subset.                                               */
         var runId = InsightsRunId.For(tenantId, scope.ToDescriptor(), reportType, period);
-        var input = new InsightsReportOrchestrationInput(tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId);
+        var input = new InsightsReportOrchestrationInput(
+            tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId, runVisionQa,
+            windowStart, windowEnd);
 
         /*  [BUG FOUND LIVE, 2026-09-11] The "one-active-run-per-key lock" this class and
             InsightsRunId's own doc comment both describe ("a second enqueue for the same key

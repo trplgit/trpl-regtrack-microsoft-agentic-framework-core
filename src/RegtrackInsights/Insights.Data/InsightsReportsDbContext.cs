@@ -26,6 +26,8 @@ public sealed class InsightsReportsDbContext(DbContextOptions<InsightsReportsDbC
             entity.Property(r => r.Id).HasDefaultValueSql("NEWID()");
             entity.Property(r => r.GeneratedAtUtc).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.Property(r => r.KeyVaultObjectSalt).HasDefaultValue("0");
+            // Matches sql/33_generated_report_dimension_key.sql's NVARCHAR(200) column exactly.
+            entity.Property(r => r.RequestedDimensions).HasMaxLength(200);
         });
 
         modelBuilder.Entity<ReportRequestUnit>(entity =>

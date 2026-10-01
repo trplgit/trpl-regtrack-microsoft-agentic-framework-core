@@ -15,7 +15,7 @@ public class NarrateActivityTests
         var agent = new Mock<INarrativeAgent>();
         var plan = new CompositionPlan(new CompositionHero("coverage_map", "why"), [], [], []);
         var expected = new NarrativeResult([]);
-        agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<IReadOnlyList<string>?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<NarrativeResult>(expected, 2200));
 
         var activity = new NarrateActivity(agent.Object);
@@ -31,7 +31,7 @@ public class NarrateActivityTests
         var agent = new Mock<INarrativeAgent>();
         var plan = new CompositionPlan(new CompositionHero("coverage_map", "why"), [], [], []);
         var expected = new NarrativeResult([]);
-        agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<IReadOnlyList<string>?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<NarrativeResult>(expected, 2200, "led with the overdue-rate finding because..."));
 
         var recorder = new Mock<IAgentReasoningRecorder>();
@@ -47,7 +47,7 @@ public class NarrateActivityTests
         var agent = new Mock<INarrativeAgent>();
         var plan = new CompositionPlan(new CompositionHero("coverage_map", "why"), [], [], []);
         var expected = new NarrativeResult([]);
-        agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<CancellationToken>()))
+        agent.Setup(a => a.NarrateAsync(plan, It.IsAny<IReadOnlyList<Assertion>>(), It.IsAny<IReadOnlyList<Finding>>(), null, It.IsAny<IReadOnlyList<string>?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<NarrativeResult>(expected, 2200, "some reasoning"));
 
         var recorder = new Mock<IAgentReasoningRecorder>();

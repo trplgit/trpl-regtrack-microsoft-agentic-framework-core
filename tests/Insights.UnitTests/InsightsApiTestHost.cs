@@ -28,7 +28,8 @@ internal static class InsightsApiTestHost
         IInsightsRunEnqueuer? enqueuer = null,
         IReportContentService? content = null,
         ICooldownRepository? cooldown = null,
-        IReportRequestRepository? requests = null)
+        IReportRequestRepository? requests = null,
+        IInsightsRunCanceller? canceller = null)
     {
         var builder = new HostBuilder().ConfigureWebHost(web =>
         {
@@ -48,6 +49,8 @@ internal static class InsightsApiTestHost
                     services.AddSingleton(content);
                 if (cooldown is not null)
                     services.AddSingleton(cooldown);
+                if (canceller is not null)
+                    services.AddSingleton(canceller);
                 services.AddSingleton(requests ?? new FakeReportRequestRepository());
             });
             web.Configure(app =>
@@ -134,6 +137,9 @@ internal sealed class FakeScopeRepository(int scopePairCount) : IScopeRepository
         return Task.FromResult(pairs);
     }
 
+    public Task<IReadOnlyList<LicenceScopePair>> GetLicenceScopePairsAsync(int userId, int customerId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Not needed by the endpoints under test.");
+
     public Task<ScopeClassification> ClassifyScopeAsync(int userId, int customerId, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Not needed by the endpoints under test.");
 
@@ -173,17 +179,21 @@ internal sealed class FakeReportContentService(ReportContentResult? result) : IR
 /// </summary>
 internal sealed class FakeCooldownRepository : ICooldownRepository
 {
-    private readonly Func<string, CooldownResult> _resultForPeriod;
+    // [RENAMED 2026-09-25] Was keyed on the effective period string - the real key is now the raw
+    // dimension name (or null for a non-dimension_selection report type), per ICooldownRepository's
+    // redesign. `resultForDimension` receives exactly what CheckAsync's own dimension parameter
+    // receives, including null.
+    private readonly Func<string?, CooldownResult> _resultForDimension;
     private int _inFlight;
 
     public FakeCooldownRepository(CooldownResult result) : this(_ => result) { }
 
-    public FakeCooldownRepository(Func<string, CooldownResult> resultForPeriod) => _resultForPeriod = resultForPeriod;
+    public FakeCooldownRepository(Func<string?, CooldownResult> resultForDimension) => _resultForDimension = resultForDimension;
 
-    public List<(int CustomerId, string ReportType, string ScopeDescriptor, string Period)> Calls { get; } = [];
+    public List<(int CustomerId, string ReportType, string ScopeDescriptor, string? Dimension)> Calls { get; } = [];
 
     public async Task<CooldownResult> CheckAsync(
-        int customerId, string reportType, string scopeDescriptor, string period,
+        int customerId, string reportType, string scopeDescriptor, string? dimension,
         CancellationToken cancellationToken = default)
     {
         if (Interlocked.CompareExchange(ref _inFlight, 1, 0) != 0)
@@ -195,12 +205,12 @@ internal sealed class FakeCooldownRepository : ICooldownRepository
 
         try
         {
-            Calls.Add((customerId, reportType, scopeDescriptor, period));
+            Calls.Add((customerId, reportType, scopeDescriptor, dimension));
             // Real room for a concurrency bug to manifest - a synchronous fake (no await point)
             // would never actually overlap two "concurrent" calls even if the caller used
             // Task.WhenAll, since nothing yields control between them.
             await Task.Delay(5, cancellationToken);
-            return _resultForPeriod(period);
+            return _resultForDimension(dimension);
         }
         finally
         {
@@ -242,17 +252,30 @@ internal sealed class FakeReportRequestRepository : IReportRequestRepository
         Task.FromResult<IReadOnlyList<string>>(_byReqId.TryGetValue(reqId, out var runIds) ? runIds : []);
 }
 
+/// <summary>Records every cancel request and hands back a fixed result, never touching a real task hub.</summary>
+internal sealed class FakeRunCanceller(bool cancelledResult = true) : IInsightsRunCanceller
+{
+    public List<(string RunId, string Reason)> Calls { get; } = [];
+
+    public Task<bool> CancelAsync(string runId, string reason, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((runId, reason));
+        return Task.FromResult(cancelledResult);
+    }
+}
+
 /// <summary>Records what it was asked to enqueue and hands back a fixed run id, never touching a real task hub.</summary>
 internal sealed class FakeRunEnqueuer(string runIdToReturn) : IInsightsRunEnqueuer
 {
-    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions, string? ReqId)> Calls { get; } = [];
+    public List<(int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId, LlmCallPriority Priority, IReadOnlyList<string>? RequestedDimensions, string? ReqId, DateTime? WindowStart, DateTime? WindowEnd)> Calls { get; } = [];
 
     public Task<string> EnqueueAsync(
         int tenantId, string reportType, InsightsScopeRequest scope, string period, int userId,
         CancellationToken cancellationToken = default, LlmCallPriority priority = LlmCallPriority.Interactive,
-        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null)
+        IReadOnlyList<string>? requestedDimensions = null, string? reqId = null,
+        DateTime? windowStart = null, DateTime? windowEnd = null)
     {
-        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId));
+        Calls.Add((tenantId, reportType, scope, period, userId, priority, requestedDimensions, reqId, windowStart, windowEnd));
         return Task.FromResult(runIdToReturn);
     }
 }

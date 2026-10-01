@@ -55,16 +55,11 @@ public static partial class CoverageGridInjector
         if (leafRows.Count == 0)
             return html; // Location degraded, or no leaf branches - never inject an empty/fabricated grid.
 
-        // [FIX - found live 2026-09-09] The real KPI card's "Ownerless obligations" pair splits
-        // leaf vs corporate-rollup - the rollup rows are real LocationRow data, just excluded from
-        // the tile grid because they are not leaf stores. Sum it here, from the FULL row set,
-        // before the leaf-only filter above discards everything else.
-        var rollupOwnerless = locationRows!
-            .Where(r => r.NodeType != EntityNodeType.Leaf)
-            .Sum(r => r.Ownerless);
-
+        // [REMOVED 2026-09-29, RegTrack parity] The "Ownerless obligations" pair (leaf vs corporate-
+        // rollup) is gone: Insights now counts only obligations with an active performer, so the
+        // figure is always 0 and ownership is not a Coverage finding.
         var counts = LocationCoverageClassifier.ComputeCounts(leafRows);
-        var paneBody = BuildPaneBody(counts, leafRows, rollupOwnerless);
+        var paneBody = BuildPaneBody(counts, leafRows);
 
         var match = PaneContentToken().Match(html);
         if (!match.Success)
@@ -80,20 +75,13 @@ public static partial class CoverageGridInjector
         return string.Concat(html.AsSpan(0, inner.Index), paneBody, html.AsSpan(inner.Index + inner.Length));
     }
 
-    private static string BuildPaneBody(CoverageStatusCounts counts, List<LocationRow> leafRows, int rollupOwnerless)
+    private static string BuildPaneBody(CoverageStatusCounts counts, List<LocationRow> leafRows)
     {
         // [FIX - found live 2026-09-09, matched against the real product's own Coverage KPI card]
-        // "Mapped"/"Has ownerless" here used to show STORE counts (counts.Healthy / counts.HasOwnerless
-        // - the strict, mutually-exclusive classification bands the tile grid colours by). The real
-        // card's own two headline pairs mean something different: "Stores mapped" is (leaf total -
-        // unmapped) - i.e. every store carrying ANY real compliance mapping, not just the "zero
-        // flags" subset - and "Ownerless obligations" is a real OBLIGATION count (sum of each row's
-        // own Ownerless field), split leaf vs corporate-rollup. Both are real, already-available
-        // numbers; only the card was asking for the wrong ones under right-sounding labels.
+        // "Stores mapped" is (leaf total - unmapped) - every store carrying ANY real compliance
+        // mapping, not just the "zero flags" subset.
         var mappedStores = counts.Total - counts.Unmapped;
         var mappedPct = counts.Total == 0 ? 0m : Math.Round(100m * mappedStores / counts.Total, 1);
-        var leafOwnerless = leafRows.Sum(r => r.Ownerless);
-        var totalOwnerless = leafOwnerless + rollupOwnerless;
         var tone = mappedPct >= 95 ? "ok" : mappedPct >= 80 ? "warn" : "bad";
         var toneLabel = tone switch { "ok" => "Broadly good", "warn" => "Needs attention", _ => "Coverage gap" };
 
@@ -104,23 +92,30 @@ public static partial class CoverageGridInjector
           .Append($"""<h3 class="di-kpi__title">{mappedStores} / {counts.Total} locations mapped &middot; one box per location</h3></div>""")
           .Append($"""<span class="di-kpi__tag di-kpi__tag--{tone}"><span class="di-kpi__dot"></span>{toneLabel}</span></div>""")
           .Append("""<div class="di-kpi__pairs">""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Locations mapped</div><div class="di-kpi__pair-val tnum">{mappedStores}</div><div class="di-kpi__pair-sub">{mappedPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}% of {counts.Total} leaf locations</div></div>""")
-          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Ownerless obligations</div><div class="di-kpi__pair-val tnum">{totalOwnerless}</div><div class="di-kpi__pair-sub">{leafOwnerless} on leaf locations{(rollupOwnerless > 0 ? $" &middot; {rollupOwnerless} on corporate rollup" : "")}</div></div>""");
+          .Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Locations mapped</div><div class="di-kpi__pair-val tnum">{mappedStores}</div><div class="di-kpi__pair-sub">{mappedPct.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}% of {counts.Total} leaf locations</div></div>""");
         // Peer-coverage gaps pair - OMITTED, not shown as a fake 0. UnderConfigured is always 0
         // today: no procedure computes a real obligation-COUNT peer norm yet (see
         // LocationCoverageClassifier's own doc comment). Render it the moment that ever changes.
+        //
+        // [BUG FOUND LIVE, 2026-09-23] .di-kpi__pairs is a fixed 2-column CSS grid
+        // (05_report_html_fixed_holistic.md's own consolidated CSS declaration) - an odd number of
+        // pairs leaves a real blank cell, the exact "tile that doesn't have anything" the render
+        // prompt's honesty rule forbids. [2026-09-29] With the ownership pair gone, the normal case
+        // is 2 pairs (fills the grid); only when Peer-coverage gaps appears (3 pairs) does the last
+        // pair (Unmapped locations) span full-width to close the gap.
+        var pairCount = counts.UnderConfigured > 0 ? 3 : 2;
         if (counts.UnderConfigured > 0)
             sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Peer-coverage gaps</div><div class="di-kpi__pair-val tnum">{counts.UnderConfigured}</div></div>""");
-        sb.Append($"""<div class="di-kpi__pair"><div class="di-kpi__pair-lbl">Unmapped locations</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
+        var unmappedFullSpan = pairCount % 2 == 1 ? " di-kpi__pair--full" : "";
+        sb.Append($"""<div class="di-kpi__pair{unmappedFullSpan}"><div class="di-kpi__pair-lbl">Unmapped locations</div><div class="di-kpi__pair-val tnum">{counts.Unmapped}</div><div class="di-kpi__pair-sub">no compliance mapped at all</div></div>""")
           .Append("</div>")
-          .Append($"""<p class="di-kpi__narr">Each box is one leaf location, coloured by status. Click a box to open its detail panel. Use the status chips to focus the grid.{(rollupOwnerless > 0 ? $" The corporate-entity rollup node (which holds {rollupOwnerless} ownerless obligations) is not a leaf location and so is not shown as a tile." : "")}</p>""")
+          .Append("""<p class="di-kpi__narr">Each box is one leaf location, coloured by status. Click a box to open its detail panel. Use the status chips to focus the grid.</p>""")
           .Append("</article></div>");
 
         sb.Append("""<div class="di-covwrap"><div class="di-covmap"><div class="di-covfilter" role="toolbar" aria-label="Coverage status counts">""")
           .Append($"""<button type="button" class="di-covchip" data-filter="all">All <b class="tnum">{counts.Total}</b></button>""")
           .Append($"""<button type="button" class="di-covchip" data-filter="healthy"><i class="di-covchip__sw di-covchip__sw--healthy"></i>Mapped <b class="tnum">{counts.Healthy}</b></button>""")
           .Append($"""<button type="button" class="di-covchip" data-filter="under_configured"><i class="di-covchip__sw di-covchip__sw--under_configured"></i>Under-configured <b class="tnum">{counts.UnderConfigured}</b></button>""")
-          .Append($"""<button type="button" class="di-covchip" data-filter="has_ownerless"><i class="di-covchip__sw di-covchip__sw--has_ownerless"></i>Has ownerless <b class="tnum">{counts.HasOwnerless}</b></button>""")
           .Append($"""<button type="button" class="di-covchip" data-filter="unmapped"><i class="di-covchip__sw di-covchip__sw--unmapped"></i>Unmapped <b class="tnum">{counts.Unmapped}</b></button>""")
           .Append("</div>");
 
@@ -129,7 +124,6 @@ public static partial class CoverageGridInjector
         sb.Append("""<div class="di-covlegend">""")
           .Append($"""<span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--healthy"></i>Mapped <b class="tnum">{counts.Healthy}</b></span>""")
           .Append($"""<span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--under_configured"></i>Under-configured <b class="tnum">{counts.UnderConfigured}</b></span>""")
-          .Append($"""<span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--has_ownerless"></i>Has ownerless <b class="tnum">{counts.HasOwnerless}</b></span>""")
           .Append($"""<span class="di-covlegend__item"><i class="di-covchip__sw di-covchip__sw--unmapped"></i>Unmapped <b class="tnum">{counts.Unmapped}</b></span>""")
           .Append("</div></div>");
 
@@ -141,7 +135,6 @@ public static partial class CoverageGridInjector
           .Append("""<div class="di-covdetail__metrics">""")
           .Append("""<div class="di-covdetail__m"><div class="di-covdetail__ml">Mapped</div><div class="di-covdetail__mv tnum"></div></div>""")
           .Append("""<div class="di-covdetail__m"><div class="di-covdetail__ml">Coverage</div><div class="di-covdetail__mv tnum"></div></div>""")
-          .Append("""<div class="di-covdetail__m"><div class="di-covdetail__ml">Ownerless</div><div class="di-covdetail__mv tnum"></div></div>""")
           .Append("""<div class="di-covdetail__m"><div class="di-covdetail__ml">Overdue</div><div class="di-covdetail__mv tnum"></div></div>""")
           .Append("""<div class="di-covdetail__m"><div class="di-covdetail__ml">Performer</div><div class="di-covdetail__mv"></div></div>""")
           .Append("""<div class="di-covdetail__m"><div class="di-covdetail__ml">Peer gap</div><div class="di-covdetail__mv tnum"></div></div>""")
@@ -186,7 +179,6 @@ public static partial class CoverageGridInjector
           .Append("\" data-state=\"").Append(WebUtility.HtmlEncode(stateName))
           .Append("\" data-instances=\"").Append(row.Instances)
           .Append("\" data-overdue=\"").Append(row.Overdue)
-          .Append("\" data-ownerless=\"").Append(row.Ownerless)
           .Append("\" data-performer=\"").Append(performer)
           .Append("\" title=\"").Append(name)
           .Append("\"></button>");

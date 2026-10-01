@@ -5,13 +5,21 @@ using Insights.Domain;
 
 namespace Insights.Worker.Orchestration.Activities;
 
+/// <param name="DimensionNames">[ADDED 2026-09-22] Every dimension this call's Plan actually
+/// narrates - threaded to INarrativeAgent so tenant-memory read/write can be scoped to exactly
+/// these (a v1 call can cover several dimensions at once, unlike v2's always-single-dimension
+/// AnalyzeAndNarrateActivity). Trailing optional - every existing construction site keeps
+/// compiling unchanged.</param>
+/// <param name="TenantId">Pairs with <paramref name="DimensionNames"/> - same reasoning.</param>
 public sealed record NarrateInput(
     CompositionPlan Plan, IReadOnlyList<Assertion> Assertions, IReadOnlyList<Finding> Findings,
     NarrativeResult? PreviousNarrative, IReadOnlyList<NarrativeReflectionIssue>? Issues,
     LlmCallPriority Priority = LlmCallPriority.Interactive,
     // [ADDED 2026-09-14] InsightsReportOrchestrationInput.ReqId, forwarded through - LangFuse
     // session grouping key when present, falls back to the DTFx run id (see RunAsync) otherwise.
-    string? ReqId = null);
+    string? ReqId = null,
+    IReadOnlyList<string>? DimensionNames = null,
+    int? TenantId = null);
 
 public sealed record NarrateOutput(NarrativeResult Narrative, long TotalTokens);
 
@@ -29,7 +37,8 @@ public sealed class NarrateActivity(INarrativeAgent narrativeAgent, IAgentReason
 
         using var _priority = LlmCallPriorityContext.Push(input.Priority);
         using var _session = LangfuseSessionContext.Push(input.ReqId ?? runId);
-        var result = await narrativeAgent.NarrateAsync(input.Plan, input.Assertions, input.Findings, revision, CancellationToken.None);
+        var result = await narrativeAgent.NarrateAsync(
+            input.Plan, input.Assertions, input.Findings, revision, input.DimensionNames, input.TenantId, CancellationToken.None);
 
         // Best-effort, same stance as MeteredChatClient's own recorder call: this activity is
         // holding a response the tenant has already been billed for, so a logging failure must

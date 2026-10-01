@@ -1,4 +1,8 @@
-FROM mcr.microsoft.com/playwright/dotnet:v1.62.0-noble AS build
+# ============================================================
+# BUILD
+# ============================================================
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0.400-noble AS build
 
 WORKDIR /src
 
@@ -12,10 +16,67 @@ RUN dotnet publish src/RegtrackInsights/RegtrackInsights.csproj \
     --no-restore
 
 
-FROM mcr.microsoft.com/playwright/dotnet:v1.62.0-noble AS runtime
+# ============================================================
+# PLAYWRIGHT
+# ============================================================
+
+# Install Playwright CLI in SDK image
+RUN dotnet tool install --global Microsoft.Playwright.CLI
+
+ENV PATH="$PATH:/root/.dotnet/tools"
+
+# Install Chromium
+RUN playwright install chromium
+
+
+# ============================================================
+# RUNTIME
+# RegInsights targets .NET 8
+# ============================================================
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-noble AS runtime
 
 WORKDIR /app
 
 COPY --from=build /app/publish .
+
+# Copy environment-specific appsettings downloaded by GitHub Actions
+COPY appsettings.json /app/appsettings.json
+
+# ============================================================
+# Playwright / Chromium runtime dependencies
+# ============================================================
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libnss3 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libdbus-1-3 \
+        libxkbcommon0 \
+        libatspi2.0-0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libgbm1 \
+        libasound2t64 \
+        libpango-1.0-0 \
+        libcairo2 \
+        libgtk-3-0 \
+        libglib2.0-0 \
+        fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Playwright browsers from build image
+COPY --from=build /root/.cache/ms-playwright /root/.cache/ms-playwright
+
+
+# ============================================================
+# START APPLICATION
+# ============================================================
 
 ENTRYPOINT ["dotnet", "RegtrackInsights.dll"]

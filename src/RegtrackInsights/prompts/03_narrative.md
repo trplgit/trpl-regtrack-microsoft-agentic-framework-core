@@ -38,6 +38,61 @@ which is false — most of them have a named performer on every occurrence.
 **If a `data_quality` row constrains a value you are citing, its constraint
 travels with the value into the prose, in the same sentence or the next.**
 
+### `tenant_history` and `write_tenant_memory` [ADDED 2026-09-22]
+
+`tenant_history` is a JSON object in your input: `{dimension_name: notes}` —
+one entry per real dimension this call is narrating (a single call here can
+cover several dimensions at once, e.g. every tab of the fixed Holistic
+Insights report). Each value is that dimension's own notes from PAST runs,
+in your own past words, not a new data source. An empty string for a
+dimension means no prior note (a genuine first run for it) — never treat
+that as something to explain.
+
+Use it to notice real continuity or change across runs ("unchanged since
+[date]", "this gap is new since the prior run"). It may inform how you
+FRAME this run's numbers; it is never itself the source of a NUMBER you
+state — every number still traces only to THIS run's
+`assertions`/`findings`, exactly as the hard rules below already require.
+
+If `write_tenant_memory(dimension_name, new_section_markdown)` is present in
+your tool list, call it at most once PER DIMENSION you are narrating (never
+for a dimension outside this call's plan), near the end, only when there is
+something genuinely worth remembering for next time. `dimension_name` must
+be one of the real dimensions this call covers. Your text REPLACES that
+dimension's history, so fold forward what is still true rather than only
+appending, in the memory format below. Skipping the call is
+correct on most runs; a failed call degrades silently and never affects
+anything else about your output.
+
+**Memory format (ADDED 2026-09-28 - required, month-to-month comparisons depend on it).** Write the
+section as markdown sub-headings ONLY (`###`, never `#` or `##`):
+
+```
+### Keep
+- <facts that must survive every future compaction: this dimension's baseline per period WITH its
+  period and date (e.g. "Aug 2026, last 30 days: 28 of 33 overdue"), problems that keep recurring
+  and since when, first-seen dates of open issues>
+### 2026-09-28 (Last 30 days · 29 Aug 2026 – 27 Sep 2026)
+- <THE single most important finding of this run - first point, always>
+- <supporting points>
+### 2026-08-28 (Last 30 days · 30 Jul 2026 – 27 Aug 2026)
+- ...
+```
+
+- Build each run heading from `run_context` in your input: `run_date`, then `report_period` in
+  brackets (or "as of" when `report_period` is null). Never invent or estimate a date.
+- Newest run first. Carry older run entries forward unchanged unless you are condensing them.
+- YOU decide what is important: anything a later month must still be compared against goes in
+  `### Keep` (keep it under ~3000 characters - a longer Keep is refused, and you must cut it
+  yourself); each run's most important finding is its FIRST point.
+- Size is handled for you: over 6000 characters, every run older than the two newest is
+  summarised into one `### Summary of older runs (<dates>)` block that keeps each run's date,
+  period, first point and every number a later month compares against. `### Keep` and the two
+  newest runs are stored word for word. When a summary block is in `tenant_history`, carry it
+  forward unchanged below your newest entries. So: whatever must not be lost belongs in Keep or as
+  a run's first point.
+
+
 ## Output
 
 ```jsonc

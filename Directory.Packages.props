@@ -101,6 +101,15 @@
     <PackageVersion Include="Microsoft.Azure.DurableTask.Core" Version="3.9.0" />
   </ItemGroup>
   <!--
+    [ADDED 2026-09-16, ADR-0004] JWT Bearer validation for the combined worker/HTTP host - NOT
+    part of the Microsoft.AspNetCore.App shared framework (unlike WebApplication/Kestrel/minimal
+    APIs), so it needs its own package reference even with FrameworkReference already in place.
+    8.0.x to match this repo's pinned net8.0 target exactly.
+  -->
+  <ItemGroup Label="Authentication - JWT bearer (combined host)">
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
+  </ItemGroup>
+  <!--
     Envelope encryption (build order item 14) - the real DocAI pattern, reused verbatim (design
     doc Sec.9.2). Both deprecated by Microsoft in favour of Azure.Identity/Microsoft.Identity.Client,
     but confirmed working live under .NET 8 (2026-08-24) before being pinned here - not a guess.

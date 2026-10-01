@@ -15,6 +15,14 @@ public interface IScopeRepository
     /// </summary>
     Task<IReadOnlyList<ScopePair>> GetScopePairsAsync(int userId, int customerId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// [ADDED 2026-09-29] A user's LICENCE scope for one tenant: the (BranchID, LicenseTypeID)
+    /// pairs in LIC_EntitiesAssignment on the tenant's active branches - the scope the free
+    /// digest's licence loader (sql/35) reads. Empty is normal (no licence assignment) and grants
+    /// nothing; it is NOT a deny of the compliance scope.
+    /// </summary>
+    Task<IReadOnlyList<LicenceScopePair>> GetLicenceScopePairsAsync(int userId, int customerId, CancellationToken cancellationToken = default);
+
     /// <summary>Classifies a user's scope: DENY / tenant_wide / functional / entity_scoped.</summary>
     Task<ScopeClassification> ClassifyScopeAsync(int userId, int customerId, CancellationToken cancellationToken = default);
 

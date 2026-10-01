@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: trpl-regtrack-insights-worker
+  namespace: staging
+  labels:
+    app: trpl-regtrack-insights-worker
+
+spec:
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: trpl-regtrack-insights-worker
+
+  template:
+    metadata:
+      labels:
+        app: trpl-regtrack-insights-worker
+
+    spec:
+      automountServiceAccountToken: false
+
+      imagePullSecrets:
+        - name: acr-pull-secret
+
+      containers:
+        - name: trpl-regtrack-insights-worker
+
+          image: conatinerimages.azurecr.io/staging/trpl-regtrack-insights-worker:latest
+
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+
+          env:
+            - name: DOTNET_ENVIRONMENT
+              value: "staging"
+
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+
+            # [ADDED 2026-09-17] Going from 1 replica to 4 without cutting this would take the
+            # per-pod LLM concurrency gate (Agents:MaxConcurrentLlmCalls) from 3 total to 12 total -
+            # real measured capacity was already saturated AT 3 on a single pod (0/10 freehand
+            # reports completed in 30min at that setting, confirmed live). No shared/distributed
+            # rate limiter exists yet (each pod's LlmConcurrencyGate is in-process only), so the only
+            # way to keep aggregate concurrency sane across 4 pods today is a lower per-pod cap.
+            # 1 x 4 replicas = 4 concurrent, close to the old single-pod ceiling. Env var overrides
+            # appsettings.json (real deployed config comes from the CI/CD blob download, not this
+            # repo - see deploy.staging.yml), so this is the only way to actually land the change.
+            - name: Agents__MaxConcurrentLlmCalls
+              value: "1"
+
+          resources:
+            requests:
+              cpu: "150m"
+              memory: "512Mi"
+
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+          # [ADDED 2026-09-18] No probes existed at all until now - Kubernetes had zero signal to
+          # avoid routing traffic to a not-yet-ready pod (DurableTaskWorkerReadiness may still be
+          # false right after start - RegisterSqlOrchestrationService blocks synchronously on
+          # CreateIfNotExistsAsync against a real remote SQL Server) or to know a hung pod needs
+          # restarting. /health/live is "self only, always healthy, touches nothing" by design
+          # (HealthCheckRegistration.cs) - safe for liveness, will never flap on a transient DB
+          # blip. /health/ready checks the real DTFx dequeue-loop readiness - exactly what a
+          # readinessProbe needs.
+          #
+          # [BROKEN, 2026-09-19 - NOT FIXED HERE] Confirmed via real pod logs (Ravindra): both
+          # probes get 401'd in production. HealthCheckTokenMiddleware requires X-Health-Token
+          # whenever HealthCheckAuth:Token is set, and it IS set in this environment's real deployed
+          # config (the CI/CD blob's appsettings.json - never seen directly, not owned by this
+          # repo). Neither probe sends that header. Deliberately NOT fixed with a hardcoded value
+          # here - this repo's convention is secrets live in appsettings (gitignored, local-only)
+          # or a real Secret, never committed in a plain YAML. Needs a real k8s Secret plus either
+          # (a) an exec-based probe reading it from an env var (httpGet cannot read a header from a
+          # Secret - a real API limitation), which needs curl/wget confirmed present in the image,
+          # or (b) the actual HealthCheckAuth:Token value pulled from Tanvi/the blob and set via
+          # secretKeyRef for the app's own env var, still leaving the probe's own header problem
+          # open. Until one of those lands, these probes will keep failing pods out of readiness.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            # Deliberately lenient (5 consecutive failures = 75s) - a liveness restart kills
+            # whatever activity this pod is mid-executing. PersistActivity and
+            # RecordTenantTokenUsageActivity are now idempotent on redelivery (2026-09-18), so a
+            # restart is SAFE, but still real wasted work - no reason to trigger one eagerly for a
+            # transient blip that readiness/its own retries would otherwise absorb.
+            failureThreshold: 5
+
+          # Gives an in-flight activity a real chance to finish naturally on a rolling update or
+          # scale-down instead of being SIGKILLed mid-write - directly shrinks the redelivery
+          # window PersistActivity's idempotency fix (2026-09-18) exists to make safe, rather than
+          # relying on that fix alone. 130s (SqlOrchestrationServiceSettings.WorkItemLockTimeout's
+          # real default is 2 minutes, confirmed via the installed package) plus headroom for the
+          # preStop sleep itself.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+
+            capabilities:
+              drop:
+                - ALL
+
+      terminationGracePeriodSeconds: 130

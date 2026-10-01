@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
-public sealed record PostInsightJsonInput(int CustomerId, long UserId, string WeekEnding, FreeDigestAggregates Aggregates, InsightNarrative Narrative);
+public sealed record PostInsightJsonInput(int CustomerId, long UserId, string WeekEnding, InsightCard Card);
 
 public sealed record PostInsightJsonOutput(bool Posted, string? Reason);
 

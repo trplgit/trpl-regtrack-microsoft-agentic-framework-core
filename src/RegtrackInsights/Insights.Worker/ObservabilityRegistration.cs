@@ -25,6 +25,9 @@ public static class ObservabilityRegistration
 {
     public static IServiceCollection AddInsightsObservability(this IServiceCollection services, IConfiguration configuration)
     {
+        // Independent of the paid project below: its own keys, its own exporter, fails open alone.
+        services.AddFreeDigestLangfuse(configuration);
+
         var endpoint = configuration["Otel:LangfuseEndpoint"];
         if (string.IsNullOrWhiteSpace(endpoint))
         {
@@ -79,6 +82,9 @@ public static class ObservabilityRegistration
                 // FilterInstrumentationScopes documents the INTENT; there is nothing left for code
                 // to filter until/unless a broader auto-instrumentation package is added later.
                 .AddSource(MafAgentFactory.ChatClientActivitySourceName)
+                // [ADDED 2026-09-28] Before the exporter, so thinking tokens reach LangFuse inside
+                // output rather than as an unpriceable dotted usage key - see the class comment.
+                .AddProcessor(new LangfuseUsageNormalizingProcessor())
                 .AddOtlpExporter(o =>
                 {
                     o.Endpoint = new Uri($"{baseUri}/api/public/otel/v1/traces");
@@ -102,6 +108,77 @@ public static class ObservabilityRegistration
                 }));
 
         return services;
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-29] The FREE digest's LLM traces (<see cref="FreeDigestTelemetry"/>) go to a
+    /// SEPARATE LangFuse project, "Insights Basic", with its own key pair - so free-tier cost can be
+    /// read per tenant / user / month without the paid report's traffic mixed in.
+    ///
+    /// <para>A second TracerProvider, not a second exporter on the paid one: an exporter on the
+    /// paid provider would receive the paid spans too, and one provider cannot route spans to two
+    /// key pairs. This provider subscribes to the free-digest source only; the paid provider never
+    /// subscribes to it, so no span is sent twice.</para>
+    ///
+    /// <para>Fails OPEN like the paid project: no Otel:Basic:LangfusePublicKey = no free-digest
+    /// tracing, silently. Half-configured (one key without the other) fails LOUD at startup.</para>
+    /// </summary>
+    public static IServiceCollection AddFreeDigestLangfuse(this IServiceCollection services, IConfiguration configuration)
+    {
+        var publicKey = configuration["Otel:Basic:LangfusePublicKey"];
+        var secretKey = configuration["Otel:Basic:LangfuseSecretKey"];
+
+        if (string.IsNullOrWhiteSpace(publicKey) && string.IsNullOrWhiteSpace(secretKey))
+            return services;
+
+        if (string.IsNullOrWhiteSpace(publicKey) || string.IsNullOrWhiteSpace(secretKey))
+            throw new InvalidOperationException(
+                "Otel:Basic:LangfusePublicKey and Otel:Basic:LangfuseSecretKey must be set together (the Insights Basic LangFuse project). Set both, or neither to disable free-digest tracing.");
+
+        // Same LangFuse server as the paid project unless overridden.
+        var endpoint = configuration["Otel:Basic:LangfuseEndpoint"] is { Length: > 0 } basicEndpoint
+            ? basicEndpoint
+            : configuration["Otel:LangfuseEndpoint"] is { Length: > 0 } sharedEndpoint
+                ? sharedEndpoint
+                : throw new InvalidOperationException(
+                    "The Insights Basic LangFuse keys are set but no endpoint is: set Otel:Basic:LangfuseEndpoint or Otel:LangfuseEndpoint.");
+
+        var basicAuthValue = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{publicKey}:{secretKey}"));
+
+        // Same auth path as the paid exporter (see the [TRAP] note above on OtlpExporterOptions.Headers).
+        var provider = OpenTelemetry.Sdk.CreateTracerProviderBuilder()
+            .ConfigureResource(r => r.AddService("regtrack-insights-free-digest"))
+            .AddSource(FreeDigestTelemetry.ActivitySourceName)
+            .AddOtlpExporter(o =>
+            {
+                o.Endpoint = new Uri($"{endpoint.TrimEnd('/')}/api/public/otel/v1/traces");
+                o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                o.HttpClientFactory = () =>
+                {
+                    var client = new HttpClient();
+                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", basicAuthValue);
+                    client.DefaultRequestHeaders.Add("x-langfuse-ingestion-version", "4");
+                    return client;
+                };
+            })
+            .Build();
+
+        // Owns the provider's lifetime: flushed and disposed on host shutdown, so a one-shot run's
+        // last traces are not lost when the process exits.
+        services.AddHostedService(_ => new FreeDigestTraceExportLifetime(provider));
+        return services;
+    }
+
+    private sealed class FreeDigestTraceExportLifetime(OpenTelemetry.Trace.TracerProvider? provider) : Microsoft.Extensions.Hosting.IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken)
+        {
+            provider?.ForceFlush(5000);
+            provider?.Dispose();
+            return Task.CompletedTask;
+        }
     }
 
     private static string Require(IConfiguration configuration, string key) =>

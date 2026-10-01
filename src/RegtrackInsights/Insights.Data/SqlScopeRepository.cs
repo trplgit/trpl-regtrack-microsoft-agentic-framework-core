@@ -24,6 +24,27 @@ public sealed class SqlScopeRepository(string connectionString) : IScopeReposito
         return rows.AsList();
     }
 
+    public async Task<IReadOnlyList<LicenceScopePair>> GetLicenceScopePairsAsync(int userId, int customerId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqlConnection(connectionString);
+
+        // Same branch rules as sql/35's licence scope: this tenant, active branch only.
+        var rows = await connection.QueryAsync<LicenceScopePair>(
+            new CommandDefinition(
+                """
+                SELECT DISTINCT CAST(lea.BranchID AS BIGINT) AS BranchId, CAST(lea.LicenseTypeID AS BIGINT) AS LicenseTypeId
+                FROM LIC_EntitiesAssignment lea
+                JOIN CustomerBranch cb ON cb.ID = lea.BranchID
+                WHERE lea.UserID = @UserID
+                  AND cb.CustomerID = @CustomerID
+                  AND cb.IsDeleted = 0 AND cb.Status = 1
+                """,
+                new { UserID = userId, CustomerID = customerId },
+                cancellationToken: cancellationToken));
+
+        return rows.AsList();
+    }
+
     public async Task<ScopeClassification> ClassifyScopeAsync(int userId, int customerId, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(connectionString);

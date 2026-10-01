@@ -20,11 +20,16 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/RegtrackInsights/RegtrackInsights.csproj" />
+    <ProjectReference Include="../../tools/DrainCheck/DrainCheck.csproj" />
   </ItemGroup>
 
   <!-- Trplclientsecret.dll is a raw file Reference, not a PackageReference, in RegtrackInsights.csproj -
        those do not flow transitively through a ProjectReference, so a manual test that needs it here
-       (proving item 14's decrypt path) needs its own reference to the same vendored file. -->
+       (proving item 14's decrypt path) needs its own reference to the same vendored file.
+       MUST stay named exactly Trplclientsecret.dll - see RegtrackInsights.csproj's own comment on
+       this same file: renaming it breaks runtime assembly loading (the .NET runtime probes for a
+       file matching the assembly's internal name, not the HintPath filename). Confirmed UAT-only
+       secret, not production - documented here, not in the filename. -->
   <ItemGroup>
     <Reference Include="Trplclientsecret">
       <HintPath>../../libs/Trplclientsecret.dll</HintPath>
@@ -33,14 +38,17 @@
   </ItemGroup>
 
   <!--
-    Insights.Api is excluded from the worker build on purpose (the worker is private, no ingress).
-    Compiling it here lets a manual run host the endpoints on an in-memory server and hit them
-    against real UAT data - without giving the worker a port, and without a second host project.
+    [CHANGED 2026-09-16, ADR-0004] Insights.Api used to be excluded from RegtrackInsights.csproj,
+    so this project compiled the same source directly to host it on an in-memory server against
+    real UAT data. RegtrackInsights.csproj now compiles Insights.Api itself, so the
+    <Compile Include> below was removed - keeping it would produce CS0436 duplicate-type errors
+    against the types this project already gets through the ProjectReference above.
+    FrameworkReference and the TestHost package stay: this project still builds its own
+    TestServer directly.
   -->
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
-    <Compile Include="../../src/RegtrackInsights/Insights.Api/**/*.cs" LinkBase="Insights.Api" />
   </ItemGroup>
 
 </Project>

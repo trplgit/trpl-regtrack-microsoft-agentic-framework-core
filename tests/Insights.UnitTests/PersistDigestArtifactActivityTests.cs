@@ -19,7 +19,6 @@ public sealed class PersistDigestArtifactActivityTests
 {
     private static readonly FreeDigestSettings Settings = new()
     {
-        TokenCap = 1500,
         FromAddress = "noreply@example.invalid",
         FromName = "RegTrack Insights",
         UpgradeUrl = "https://placeholder.invalid/upgrade",

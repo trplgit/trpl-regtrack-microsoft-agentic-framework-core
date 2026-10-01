@@ -1,0 +1,479 @@
+/*===========================================================================
+  RegTrack Insights - v2 (2026-09-29): follow RegTrack's own Detailed Report
+  Object : dbo.usp_Insights_Dimension_Risk
+  Base   : the definition DEPLOYED on UAT on 2026-09-29 (not the repo copy)
+  Change : the window gate counts only active due dates (IsActive = 1 AND IsUpcomingNotDeleted = 1). Population and overdue come from the v2 functions.
+  Why    : product decision 2026-09-29 - Insights must count what RegTrack's own
+           Detailed Report (Kendo_DetailedReport_Pagination) counts. See
+           sql/v2/README.md for the full rule list and the parity proof.
+===========================================================================*/
+SET NOCOUNT ON;
+GO
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Risk', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Risk;
+GO
+CREATE PROCEDURE dbo.usp_Insights_Dimension_Risk
+    @UserID      INT,
+    @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
+    @AsOf        DATETIME = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @AsOf IS NULL SET @AsOf = GETDATE();
+
+    /*=====================================================================
+      0. PRE-FLIGHT - fail closed before computing anything
+    =====================================================================*/
+    IF NOT EXISTS (SELECT 1 FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
+        THROW 51060, N'SCOPE DENIED - user has no authorised (branch, category) pairs for this tenant. Refusing to compute.', 1;
+
+    EXEC dbo.usp_Insights_AssertStatusCoverage;   -- THROWs on dictionary gap
+
+    /*  Every risk value comes from the dictionary. A literal here would be an
+        enum literal in a WHERE clause - non-negotiable #4 - and would make this
+        proc agree with a wrong seed by construction. */
+    IF OBJECT_ID('tempdb..#risk') IS NOT NULL DROP TABLE #risk;
+    SELECT TRY_CAST(p.RawValue AS INT) AS RiskType,
+           p.Meaning                   AS RiskLabel
+    INTO #risk
+    FROM dbo.InsightsEnumPolarity p
+    JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
+    WHERE p.Semantic = 'RiskType' AND TRY_CAST(p.RawValue AS INT) IS NOT NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM #risk)
+        THROW 51065, N'DICTIONARY GAP - no RiskType values are mapped in InsightsEnumPolarity. Refusing to compute a risk dimension.', 1;
+
+    DECLARE @criticalRisk INT = (SELECT TOP 1 RiskType FROM #risk WHERE RiskLabel LIKE N'Critical%');
+
+    IF @criticalRisk IS NULL
+        THROW 51066, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+
+    /*=====================================================================
+      1. SCOPED INSTANCE BASE - both scope axes
+    =====================================================================*/
+    IF OBJECT_ID('tempdb..#inst') IS NOT NULL DROP TABLE #inst;
+    SELECT
+        s.ComplianceInstanceID,
+        s.BranchID,
+        s.RiskType,
+        s.Imprisonment
+    INTO #inst
+    FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s;
+
+    CREATE CLUSTERED INDEX IX_inst ON #inst (RiskType, ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Risk's own population (ComplianceInstance via tvfInsightsScopedInstances) carries
+        no per-row date - an instance persists across years while its real due dates
+        live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY and sql/11 Act: #inst is already materialised and indexed above,
+        so find which of those instances had >=1 scheduled occurrence in the window,
+        then narrow #inst itself down to just those. Every downstream step (per-level
+        rollup, reconciliation) already reads from #inst, so they inherit the window
+        for free - nothing else in this file changes.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51062, N'RISK DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51062, N'RISK DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd
+      AND cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1;   -- [v2] switched-off due dates do not count (RegTrack parity)
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
+
+    /*=====================================================================
+      2. OVERDUE (dictionary-driven, affirmative form)
+    =====================================================================*/
+    IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
+    SELECT DISTINCT o.ComplianceInstanceID
+    INTO #ovd
+    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
+    JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID;   -- scope-constrained
+
+    /*=====================================================================
+      3. OWNERSHIP - an instance with no performer is ownerless
+    =====================================================================*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
+    IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);      -- RoleID 3 = performer
+
+    /*=====================================================================
+      4. PER-LEVEL ROWS - from the dictionary member list, not the facts
+
+      [TRAP] Declare the table explicitly with ALL columns, base and derived.
+      SELECT ... INTO then ALTER TABLE ADD then referencing the new column in
+      the same procedure body fails: T-SQL resolves names for the whole batch
+      up front and a procedure cannot contain a GO.
+    =====================================================================*/
+    IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
+    CREATE TABLE #rows (
+        RiskType              INT            NOT NULL PRIMARY KEY,
+        RiskLabel             NVARCHAR(200)  NULL,
+        Instances             INT            NOT NULL,
+        Overdue               INT            NOT NULL,
+        OverduePct            DECIMAL(5,1)   NULL,
+        NoInstanceOwner             INT            NOT NULL,
+        ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,
+        BranchesCovered       INT            NOT NULL,
+        -- derived
+        VsTenantPP            DECIMAL(9,2)   NULL,
+        Flags                 VARCHAR(200)   NULL
+    );
+
+    INSERT #rows (RiskType, RiskLabel, Instances, Overdue, NoInstanceOwner,
+                  ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered)
+    SELECT
+        r.RiskType,
+        r.RiskLabel,
+        COUNT(i.ComplianceInstanceID),
+        SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.ComplianceInstanceID IS NOT NULL
+                  AND w.ComplianceInstanceID IS NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
+        COUNT(DISTINCT i.BranchID)
+    FROM #risk r
+    LEFT JOIN #inst  i ON i.RiskType = r.RiskType
+    LEFT JOIN #ovd   o ON o.ComplianceInstanceID = i.ComplianceInstanceID
+    LEFT JOIN #owned w ON w.ComplianceInstanceID = i.ComplianceInstanceID
+    GROUP BY r.RiskType, r.RiskLabel;
+
+    /*=====================================================================
+      5. CONTROL TOTALS + MANDATORY RECONCILIATION
+
+      An instance whose RiskType is absent from the dictionary joins no row, so
+      the per-level sum falls short and this THROWs. That is the intended
+      behaviour - an unknown enum must never be silently bucketed.
+    =====================================================================*/
+    DECLARE @rowSum      INT = (SELECT ISNULL(SUM(Instances),0) FROM #rows);
+    DECLARE @scopedTotal INT = (SELECT COUNT(*) FROM #inst);
+
+    IF @rowSum <> @scopedTotal
+        THROW 51061, N'RISK DIMENSION RECONCILIATION FAILED - per-level sums do not tie to the scoped instance total. An instance carries a RiskType absent from InsightsEnumPolarity. Refusing to publish.', 1;
+
+    DECLARE @tenantOverduePct DECIMAL(5,1) =
+        CASE WHEN @scopedTotal = 0 THEN 0
+             ELSE 100.0 * (SELECT COUNT(*) FROM #ovd) / @scopedTotal END;
+
+    DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
+
+    UPDATE #rows SET
+        OverduePct = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * Overdue / Instances END;
+
+    UPDATE #rows SET
+        VsTenantPP = CASE WHEN Instances = 0 THEN NULL ELSE OverduePct - @tenantOverduePct END;
+
+    /*  The imprisonment overlap. The spec measured 1,419 of 1,424 = 99.6% of
+        imprisonment-bearing instances sitting on the Critical tier, which is why
+        Critical and imprisonment must not be narrated as two separate findings. */
+    DECLARE @impTotal INT = (SELECT COUNT(*) FROM #inst WHERE Imprisonment = 1);
+    DECLARE @impOnCritical INT = (SELECT COUNT(*) FROM #inst WHERE Imprisonment = 1 AND RiskType = @criticalRisk);
+    DECLARE @impOverlapPct DECIMAL(5,1) =
+        CASE WHEN @impTotal = 0 THEN NULL ELSE 100.0 * @impOnCritical / @impTotal END;
+
+    SELECT
+        'control_totals'                  AS ResultSet,
+        @scopedTotal                      AS ScopedInstances,
+        @rowSum                           AS SumOfRows,
+        CAST(1 AS BIT)                    AS Reconciled,
+        (SELECT COUNT(*) FROM #ovd)       AS OverdueInstances,
+        @tenantOverduePct                 AS TenantOverduePct,
+        (SELECT COUNT(*) FROM #rows)      AS RiskLevelsReported,
+        (SELECT COUNT(*) FROM #rows WHERE Instances > 0) AS RiskLevelsWithObligations,
+        @criticalRisk                     AS CriticalRiskType,
+        @impTotal                         AS ImprisonmentInstances,
+        @impOverlapPct                    AS ImprisonmentOnCriticalPct;
+
+    /*=====================================================================
+      6. ROWS
+    =====================================================================*/
+    SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;
+
+    /*=====================================================================
+      7. DETECTIONS
+
+      The spec names no detector list for this dimension. The one detection it
+      DOES require is finding 2 - the coverage gap hiding in the middle tiers -
+      so that is what is detected: a non-Critical tier carrying MORE ownerless
+      obligations than the Critical tier does. Ownership is not following
+      severity.
+
+      Guarded on @hasAnyObligations: with nothing in scope every tier holds
+      zero, "more than Critical" is 0 > 0 which is false, but the guard makes
+      the intent explicit rather than relying on that.
+    =====================================================================*/
+    DECLARE @criticalNoInstanceOwner INT =
+        (SELECT ISNULL(MAX(NoInstanceOwner),0) FROM #rows WHERE RiskType = @criticalRisk);
+
+    UPDATE #rows SET Flags =
+        STUFF(
+            CASE WHEN @hasAnyObligations = 1
+                  AND Instances > 0
+                  AND RiskType <> @criticalRisk
+                  AND NoInstanceOwner > @criticalNoInstanceOwner
+                 THEN ',ownership_gap_below_critical' ELSE '' END
+        , 1, 1, '');
+
+    /*=====================================================================
+      8. DETECTOR EMISSION POLICY
+
+      Eligible and Flagged are drawn from the same population - tiers holding
+      obligations - so the rate cannot exceed 100%.
+
+      Note this dimension has at most four members, so flooding is structurally
+      impossible and the 20% aggregate threshold will almost always tip to
+      'aggregate' (1 of 4 = 25%). That is harmless here: with four members an
+      aggregate statement and four individual ones carry the same information.
+    =====================================================================*/
+    IF OBJECT_ID('tempdb..#detector') IS NOT NULL DROP TABLE #detector;
+    CREATE TABLE #detector (
+        Detector      VARCHAR(40) PRIMARY KEY,
+        Eligible      INT,
+        Flagged       INT,
+        FlaggedPct    DECIMAL(5,1),
+        EmitMode      VARCHAR(12)
+    );
+
+    DECLARE @withObl INT = (SELECT COUNT(*) FROM #rows WHERE Instances > 0);
+
+    INSERT #detector (Detector, Eligible, Flagged)
+    SELECT 'ownership_gap_below_critical', @withObl,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%ownership_gap_below_critical%');
+
+    UPDATE #detector
+       SET FlaggedPct = CASE WHEN Eligible = 0 THEN 0 ELSE 100.0 * Flagged / Eligible END;
+
+    /*  [TRAP] AGGREGATING A SMALL MEMBER SET DESTROYS THE FINDING.
+        The aggregate mode exists to stop a detector emitting 117 findings on an
+        819-branch tenant. Individual findings are already capped at the top 5 by
+        materiality, so when the eligible set is 5 or fewer the cap ALREADY bounds
+        the output and aggregating cannot reduce it - it only replaces named members
+        with a percentage. Measured on the Risk dimension, whose grain is fixed at
+        four levels: 3 of 4 tipped to 'aggregate' and the finding became "3 of 4 risk
+        levels (75%)", losing the tier names that ARE the finding the spec requires
+        ("the coverage gap hides in the MIDDLE tiers - High 31 + Medium 43 against
+        Critical's 9"). Below the cap, always name the members.                     */
+    UPDATE #detector
+       SET EmitMode = CASE WHEN Flagged = 0        THEN 'none'
+                           WHEN Eligible <= 5      THEN 'individual'
+                           WHEN FlaggedPct > 20.0  THEN 'aggregate'
+                           ELSE 'individual' END;
+
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
+    SELECT 'detector_policy' AS ResultSet, * FROM #detector;
+
+    /*=====================================================================
+      9. TYPED ASSERTIONS - comparatives COMPUTED here
+    =====================================================================*/
+    IF OBJECT_ID('tempdb..#assert') IS NOT NULL DROP TABLE #assert;
+    CREATE TABLE #assert (
+        AssertionId  VARCHAR(20),
+        Metric       VARCHAR(60),
+        ScopeLabel   NVARCHAR(500),
+        Value        DECIMAL(18,2),
+        Rank_        INT NULL,
+        OfN          INT NULL,
+        ComparatorValue DECIMAL(18,2) NULL,
+        VsComparatorPP  DECIMAL(9,2) NULL,
+        Direction    VARCHAR(10) NULL,
+        Caveat       NVARCHAR(500) NULL
+    );
+
+    INSERT #assert VALUES ('A-TENANT','overdue_pct',N'tenant',@tenantOverduePct,NULL,NULL,NULL,NULL,NULL,NULL);
+
+    /*  FINDING 1. The direction is the whole point. On the reference tenant
+        Critical ran 20.8% against a 29% average - BETTER than average, because
+        the organisation triages correctly. A narrator given only the volume
+        would report the largest tier as the biggest problem, which inverts the
+        finding. The comparative is computed here so it cannot be vibed.        */
+    IF @hasAnyObligations = 1
+    INSERT #assert
+    SELECT 'A-CRIT','overdue_pct',RiskLabel,OverduePct,NULL,NULL,
+           @tenantOverduePct, VsTenantPP,
+           CASE WHEN OverduePct > @tenantOverduePct THEN 'worse' ELSE 'better' END,
+           NULL
+    FROM #rows WHERE RiskType = @criticalRisk AND Instances > 0;
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05.
+        Emitted only where there is real exposure to rank.                     */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-RISK-EXP','imprisonment_overdue_count', RiskLabel, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by rate.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
+
+    /*  THE TRAP, as an assertion. Critical and imprisonment are ~95% the same
+        population; this states the overlap so a narrator can see it rather than
+        treating the two as independent axes.                                   */
+    IF @impTotal > 0
+    INSERT #assert
+    VALUES ('A-IMP-OVERLAP','imprisonment_on_critical_pct',N'tenant',@impOverlapPct,
+            NULL,@impTotal,NULL,NULL,NULL,
+            N'critical_and_imprisonment_overlap: these are largely the SAME obligations, not two independent exposures');
+
+    /*  FINDING 2. Ownership not following severity. Policy-gated. */
+    IF (SELECT EmitMode FROM #detector WHERE Detector='ownership_gap_below_critical') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-OWNGAP-' + CAST(ROW_NUMBER() OVER (ORDER BY NoInstanceOwner DESC) AS VARCHAR(5)),
+               'ownerless', RiskLabel, NoInstanceOwner, NULL, NULL,
+               @criticalNoInstanceOwner, NoInstanceOwner - @criticalNoInstanceOwner, 'worse',
+               N'ownership_gap_below_critical: attention follows severity, ownership does not'
+        FROM #rows WHERE Flags LIKE '%ownership_gap_below_critical%' ORDER BY NoInstanceOwner DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='ownership_gap_below_critical') = 'aggregate'
+        /*  ComparatorValue stays NULL. Value here is a COUNT OF RISK LEVELS; putting
+            Critical's ownerless COUNT beside it puts two different units in one
+            assertion, and a narrator reading 3 against 3 could write "equal to the
+            Critical tier", which is meaningless. Aggregates in sql/05 leave it NULL
+            for the same reason.                                                    */
+        INSERT #assert
+        SELECT 'A-OWNGAP-AGG','risk_levels_with_ownership_gap',N'tenant',
+               Flagged, NULL, Eligible, NULL, FlaggedPct, 'worse',
+               N'aggregate - unassigned ownership sits below the Critical tier across several levels'
+        FROM #detector WHERE Detector='ownership_gap_below_critical';
+
+    SELECT 'assertions' AS ResultSet, * FROM #assert;
+
+    /*=====================================================================
+      10. FINDINGS - every one backed by assertion ids
+
+      [TRAP] Anchor individual findings on [0-9] so the aggregate assertion
+      cannot also produce an individual-shaped finding.
+    =====================================================================*/
+    IF OBJECT_ID('tempdb..#find') IS NOT NULL DROP TABLE #find;
+    CREATE TABLE #find (
+        FindingId VARCHAR(20), Severity VARCHAR(10),
+        Headline NVARCHAR(1000), AssertionIds VARCHAR(400),
+        NarrativeGuard NVARCHAR(500) NULL
+    );
+
+    /*  Critical BETTER than average - the counter-intuitive case. The guard is
+        load-bearing: without it a narrator reports the largest, scariest-sounding
+        tier as the problem. */
+    INSERT #find
+    SELECT 'F-CRIT-BETTER','info',
+           CONCAT(N'', ScopeLabel, N' obligations run at ', Value, N'% overdue, ',
+                  ABS(VsComparatorPP), N' points BELOW the tenant average'),
+           'A-CRIT,A-TENANT',
+           N'MUST NOT be presented as a failure. This tier is better managed than the tenant average - the organisation triages correctly. Do not narrate Critical volume as a problem.'
+    FROM #assert WHERE AssertionId = 'A-CRIT' AND Direction = 'better';
+
+    INSERT #find
+    SELECT 'F-CRIT-WORSE','high',
+           CONCAT(N'', ScopeLabel, N' obligations run at ', Value, N'% overdue, ',
+                  VsComparatorPP, N' points above the tenant average'),
+           'A-CRIT,A-TENANT',
+           N'Do not also raise imprisonment exposure as a separate finding - see A-IMP-OVERLAP, they are largely the same obligations.'
+    FROM #assert WHERE AssertionId = 'A-CRIT' AND Direction = 'worse';
+
+    INSERT #find
+    SELECT 'F-OWNGAP','high',
+           CONCAT(N'', ScopeLabel, N' carries ', CAST(Value AS INT),
+                  N' obligations with no INSTANCE-LEVEL owner, more than the Critical tier'),
+           AssertionId,
+           N'Attention follows severity; ownership does not. The coverage gap is in the middle tiers, not the top one.'
+    FROM #assert WHERE AssertionId LIKE 'A-OWNGAP-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-OWNGAP-AGG','high',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' risk levels (', VsComparatorPP,
+                  N'%) carry more unassigned obligations than the Critical tier'),
+           AssertionId,
+           N'Attention follows severity; ownership does not.'
+    FROM #assert WHERE AssertionId = 'A-OWNGAP-AGG';
+
+    SELECT 'findings' AS ResultSet, * FROM #find;
+
+    /*=====================================================================
+      11. DATA QUALITY - declared, never silent
+    =====================================================================*/
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'NoInstanceOwner'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'critical_imprisonment_overlap'        THEN 'ImprisonmentOnCriticalPct'
+                   WHEN 'risk_levels_unused'                   THEN 'RiskLevelsWithObligations'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear in any row here even if it exists cumulatively.') AS Detail
+        UNION ALL
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
+        SELECT 'flow_metric_drift' AS Issue,
+               N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
+        UNION ALL
+        SELECT 'critical_imprisonment_overlap',
+               CONCAT(N'', @impOverlapPct, N'% of imprisonment-bearing obligations sit on the ',
+                      N'Critical tier. Critical risk and personal liability are largely the SAME ',
+                      N'population, not independent axes. Do not present them as two findings.')
+        WHERE @impTotal > 0
+        UNION ALL
+        SELECT 'risk_levels_unused',
+               CONCAT(N'', COUNT(*), N' mapped risk level(s) carry no obligations in this scope ',
+                      N'and are reported with zero counts rather than omitted.')
+        FROM #rows WHERE Instances = 0 HAVING COUNT(*) > 0
+    ) q;
+
+    DROP TABLE #risk; DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #owned;
+    DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
+END
+GO
+PRINT 'usp_Insights_Dimension_Risk (v2) installed.';
+GO

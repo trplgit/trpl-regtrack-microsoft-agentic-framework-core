@@ -54,6 +54,23 @@ Use a CSS-only radio-driven tab mechanism if you build tabs (input elements nest
 element your `:has()` selectors target — not as preceding siblings, which silently breaks
 `:has()`).
 
+**6. Long tables — contained, never page-growing.** [ADDED 2026-09-21] Real feedback on an early
+Act render: a "complete register" table with 30+ rows just kept growing the whole page - the
+reader had to scroll the entire document to reach the table's last row. Any table listing every
+real member of the dimension (a "complete register," "all configured X," or similar - not a
+capped top-5/top-10 list) goes inside a fixed-height container with its OWN internal scroll:
+```css
+.table-scroll{max-height:420px;overflow-y:auto;overflow-x:auto;border:1px solid var(--c-border);border-radius:var(--r-lg)}
+.table-scroll table{width:100%;border-collapse:separate;border-spacing:0}
+.table-scroll thead th{position:sticky;top:0;background:var(--c-mist);z-index:1}
+```
+`max-height` can be any value that keeps the container to roughly one screenful (350-500px is a
+reasonable range) - the TABLE scrolls, the PAGE around it does not grow to fit every row. Sticky
+header (`position:sticky;top:0`) keeps column labels visible while scrolling. A live search input
+above the table and clickable per-column sort are a real, approved enhancement for a large
+register - not mandatory, but worth doing when the composition plan's emphasis calls for the
+register being genuinely explorable rather than just present.
+
 ## Technical constraints (unrelated to visual freedom — security/platform requirements)
 
 1. Exactly one HTML document, `<meta charset="utf-8">` first inside `<head>`.
@@ -98,6 +115,8 @@ renewal/termination/rejection/not-applicable — NOT a lapse), `LapsingNext30`, 
 
 ## Self-check before returning
 
+- Any complete-register/all-members table sits inside `.table-scroll` (fixed max-height, its own
+  internal scroll, sticky header) - the page itself never grows to fit every row.
 - Every real licence-type row with meaningful volume is represented somewhere.
 - Every number on the page exists in `assertions`, `dimension_rows`, or `dimension_control_totals`.
 - No expiry horizon other than 30 days, no subject-clustering root-cause claim, no consequence

@@ -3,6 +3,7 @@ using Insights.Domain;
 using Insights.Worker.Orchestration.Activities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -16,6 +17,27 @@ public class PersistActivityTests
             .Options);
 
     /// <summary>
+    /// [ADDED 2026-09-24] EF Core's InMemory provider does not support transactions at all - see
+    /// ITenantReportLock's own doc comment for why the real sp_getapplock implementation needs one.
+    /// These tests care about encrypt/blob/SQL-row behaviour, not the distributed-lock mechanism
+    /// itself (which cannot be exercised against InMemory - it is SQL-Server-specific T-SQL), so
+    /// they run the caller's action directly with no lock at all, matching how the real lock behaves
+    /// from the caller's point of view when nothing else is contending for it.
+    /// </summary>
+    private sealed class NoOpTenantReportLock : ITenantReportLock
+    {
+        public int CallCount { get; private set; }
+        public int? LastTenantId { get; private set; }
+
+        public Task<T> ExecuteWithLockAsync<T>(DbContext db, int tenantId, Func<Task<T>> action)
+        {
+            CallCount++;
+            LastTenantId = tenantId;
+            return action();
+        }
+    }
+
+    /// <summary>
     /// PersistActivity now takes IServiceScopeFactory rather than InsightsReportsDbContext
     /// directly (fixes the "Cannot access a disposed context instance" bug where ActivityCreator's
     /// own scope disposed the context before RunAsync could use it). The fake factory hands back
@@ -26,6 +48,21 @@ public class PersistActivityTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(db);
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-18] Unlike ScopeFactoryFor above, this hands back a FRESH
+    /// InsightsReportsDbContext on every CreateScope call - matching real production wiring
+    /// (WorkerRegistration's ActivityCreator resolves a new scope per activity invocation) closely
+    /// enough to actually exercise the idempotency fast path: a "redelivered" second RunAsync call
+    /// queries the SAME underlying in-memory store through a DIFFERENT context instance, the same
+    /// way a second pod's fresh DbContext would query the same real SQL Server database.
+    /// </summary>
+    private static IServiceScopeFactory FreshContextPerCallScopeFactoryFor(string storeName)
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<InsightsReportsDbContext>(o => o.UseInMemoryDatabase(storeName));
         return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 
@@ -50,7 +87,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
 
         var result = await activity.RunAsync(new PersistInput(
             "<html></html>", TenantId: 29, ReportType: "compliance_health", Period: "FY2025-26",
@@ -98,7 +135,7 @@ public class PersistActivityTests
             .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
 
         await using var db = NewInMemoryDb();
-        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db));
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
 
         await activity.RunAsync(new PersistInput(
             "<html>real tenant data</html>", 29, "compliance_health", "FY2025-26", "tenant", 38));
@@ -124,7 +161,8 @@ public class PersistActivityTests
             var encryptor = new Mock<IReportEncryptor>();
             var blobWriter = new Mock<IReportBlobWriter>();
             await using var db = NewInMemoryDb();
-            var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), localFallbackDirectory: tempDir);
+            var activity = new PersistActivity(
+                encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock(), localFallbackDirectory: tempDir);
 
             var result = await activity.RunAsync(new PersistInput(
                 "<html>real tenant data</html>", 1008, "fixed_holistic", "90day", "tenant", 12116));
@@ -141,5 +179,203 @@ public class PersistActivityTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<PersistActivity>
+    {
+        public List<Exception?> LoggedExceptions { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) =>
+            LoggedExceptions.Add(exception);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-18] Found live: with 4 worker replicas genuinely parallel, 3 of 4 concurrent
+    /// PersistActivity calls failed at SaveChangesAsync with only "An error occurred while saving
+    /// the entity changes" recoverable afterward - DTFx's TaskFailed history event never keeps
+    /// ex.InnerException. This pins that the real exception (the one that matters, with its inner
+    /// exception intact) is now logged BEFORE it propagates, regardless of which step throws.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SaveChangesFails_LogsTheRealExceptionBeforeRethrowing()
+    {
+        var envelope = Envelope();
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
+
+        var blobWriter = new Mock<IReportBlobWriter>();
+        var dbFailure = new InvalidOperationException("simulated transient SQL failure");
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(dbFailure);
+
+        await using var db = NewInMemoryDb();
+        var logger = new CapturingLogger();
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), logger, new NoOpTenantReportLock());
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => activity.RunAsync(new PersistInput(
+            "<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38)));
+
+        Assert.Same(dbFailure, thrown);
+        Assert.Contains(logger.LoggedExceptions, ex => ex == dbFailure);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-18] The actual bug: report id used to be Guid.NewGuid() per call, so a
+    /// redelivered activity (pod dies mid-PersistActivity, DTFx re-runs it on another pod once the
+    /// lock expires) produced a SECOND blob and a SECOND GeneratedReport row for the same real
+    /// report. Same input must now yield the same id, deterministically, with no I/O at all.
+    /// </summary>
+    [Fact]
+    public void ReportId_ForTheSameInput_IsDeterministic()
+    {
+        var a = InsightsRunId.ReportId(29, "tenant", "compliance_health", "FY2025-26");
+        var b = InsightsRunId.ReportId(29, "tenant", "compliance_health", "FY2025-26");
+
+        Assert.Equal(a, b);
+    }
+
+    /// <summary>
+    /// The actual redelivery scenario, end to end: two full RunAsync calls with identical input,
+    /// each through its OWN fresh DbContext (matching a real second pod's own scope) against the
+    /// SAME underlying store. The second call must find the first call's row and return it WITHOUT
+    /// touching the encryptor or blob writer again - re-encrypting would mint a fresh AES key/IV
+    /// and silently strand the first row's own stored key against overwritten ciphertext.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_CalledTwiceWithIdenticalInput_SecondCallReturnsTheFirstRowWithoutReWriting()
+    {
+        var envelope = Envelope();
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
+
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
+
+        var storeName = Guid.NewGuid().ToString();
+        var input = new PersistInput("<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38);
+
+        var activity1 = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+        var first = await activity1.RunAsync(input);
+
+        // A different PersistActivity instance, own fresh scope factory pointed at the SAME store -
+        // simulates the redelivered attempt landing on a different pod, not just a different call.
+        var activity2 = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+        var second = await activity2.RunAsync(input);
+
+        Assert.Equal(first.ReportId, second.ReportId);
+        encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        blobWriter.Verify(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()), Times.Once);
+
+        await using var verifyDb = new InsightsReportsDbContext(
+            new DbContextOptionsBuilder<InsightsReportsDbContext>().UseInMemoryDatabase(storeName).Options);
+        Assert.Single(verifyDb.GeneratedReports);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-27, FOUND LIVE] A genuinely NEW run for the same key (cooldown off, or after
+    /// it expires - and "last_30_days" means different data every month) found the old row and
+    /// returned it, discarding the fresh render: tenant 1285's Act report kept serving 25 Sep's
+    /// content. A new orchestration execution must produce a new report.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SameKeyDifferentExecutions_ProducesTwoDistinctRows()
+    {
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(Envelope());
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports", "1285/dimension_selection/2026/09/x.html.enc"));
+
+        var storeName = Guid.NewGuid().ToString();
+        var input = new PersistInput("<html></html>", 1285, "dimension_selection", "last_30_days::dim=act", "tenant", 11416);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+
+        var first = await activity.RunAsync(input, executionId: "exec-25-sep");
+        var second = await activity.RunAsync(input, executionId: "exec-27-sep");
+
+        Assert.NotEqual(first.ReportId, second.ReportId);
+        encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    /// <summary>A redelivered activity within the SAME execution must still reuse its own row.</summary>
+    [Fact]
+    public async Task RunAsync_SameKeySameExecution_ReusesTheRow()
+    {
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(Envelope());
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports", "1285/dimension_selection/2026/09/x.html.enc"));
+
+        var storeName = Guid.NewGuid().ToString();
+        var input = new PersistInput("<html></html>", 1285, "dimension_selection", "last_30_days::dim=act", "tenant", 11416);
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+
+        var first = await activity.RunAsync(input, executionId: "exec-1");
+        var redelivered = await activity.RunAsync(input, executionId: "exec-1");
+
+        Assert.Equal(first.ReportId, redelivered.ReportId);
+        encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>Different input (different tenant here) must never collide onto the same row.</summary>
+    [Fact]
+    public async Task RunAsync_CalledTwiceWithDifferentInput_ProducesTwoDistinctRows()
+    {
+        var envelope = Envelope();
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
+
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports-temp", "29/compliance_health/2026/09/abc123.html.enc"));
+
+        var storeName = Guid.NewGuid().ToString();
+
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, FreshContextPerCallScopeFactoryFor(storeName), NullLogger<PersistActivity>.Instance, new NoOpTenantReportLock());
+        var first = await activity.RunAsync(new PersistInput("<html></html>", 29, "compliance_health", "FY2025-26", "tenant", 38));
+        var second = await activity.RunAsync(new PersistInput("<html></html>", 1285, "compliance_health", "FY2025-26", "tenant", 38));
+
+        Assert.NotEqual(first.ReportId, second.ReportId);
+        encryptor.Verify(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    /// <summary>
+    /// [ADDED 2026-09-24] The real fix for the 2026-09-18/2026-09-24 concurrent-write bug: the
+    /// insert must happen INSIDE the tenant's write lock, scoped to the input's own tenantId - not
+    /// skipped, and not locked under some other tenant's key (which would let two different
+    /// tenants' writes block each other for no reason, or worse, let same-tenant writes race past
+    /// each other because they locked under the wrong key).
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WritesTheRowInsideTheTenantsOwnLock()
+    {
+        var envelope = Envelope();
+        var encryptor = new Mock<IReportEncryptor>();
+        encryptor.Setup(e => e.EncryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(envelope);
+
+        var blobWriter = new Mock<IReportBlobWriter>();
+        blobWriter.Setup(w => w.WriteAsync(It.IsAny<EncryptedReportEnvelope>(), It.IsAny<BlobPathContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BlobLocation("insights-reports-temp", "1285/dimension_selection/2026/09/abc123.html.enc"));
+
+        await using var db = NewInMemoryDb();
+        var tenantLock = new NoOpTenantReportLock();
+        var activity = new PersistActivity(encryptor.Object, blobWriter.Object, ScopeFactoryFor(db), NullLogger<PersistActivity>.Instance, tenantLock);
+
+        await activity.RunAsync(new PersistInput(
+            "<html></html>", TenantId: 1285, ReportType: "dimension_selection", Period: "FY2025-26",
+            ScopeDescriptor: "tenant:Act", UserId: 11416));
+
+        Assert.Equal(1, tenantLock.CallCount);
+        Assert.Equal(1285, tenantLock.LastTenantId);
+        // The row must exist - proves the Add+SaveChanges genuinely ran INSIDE the fake's
+        // action() callback, not skipped or deferred outside the lock.
+        Assert.Single(db.GeneratedReports);
     }
 }

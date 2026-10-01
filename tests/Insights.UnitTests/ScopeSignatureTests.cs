@@ -58,4 +58,39 @@ public sealed class ScopeSignatureTests
     {
         Assert.Equal(string.Empty, ScopeSignature.For([]));
     }
+
+    // -- Licence scope (2026-09-29) ---------------------------------------------------------------
+
+    private static readonly ScopePair[] Compliance = [new ScopePair(10, 1), new ScopePair(20, 2)];
+
+    /// <summary>Different licence assignments must NOT share an email - the licence figures differ.</summary>
+    [Fact]
+    public void Signature_DiffersWhenOnlyLicenceScopeDiffers()
+    {
+        Assert.NotEqual(
+            ScopeSignature.For(Compliance, [new LicenceScopePair(10, 4)]),
+            ScopeSignature.For(Compliance, [new LicenceScopePair(10, 4), new LicenceScopePair(20, 4)]));
+    }
+
+    [Fact]
+    public void Signature_IsIndependentOfLicencePairOrder()
+    {
+        Assert.Equal(
+            ScopeSignature.For(Compliance, [new LicenceScopePair(10, 4), new LicenceScopePair(20, 5)]),
+            ScopeSignature.For(Compliance, [new LicenceScopePair(20, 5), new LicenceScopePair(10, 4)]));
+    }
+
+    /// <summary>No licence assignment = the signature every user had before licences were keyed in.</summary>
+    [Fact]
+    public void Signature_WithNoLicences_EqualsComplianceOnlySignature()
+    {
+        Assert.Equal(ScopeSignature.For(Compliance), ScopeSignature.For(Compliance, []));
+    }
+
+    /// <summary>Licences never grant access on their own: an empty compliance scope is still DENY.</summary>
+    [Fact]
+    public void Signature_WithLicencesButNoComplianceScope_IsEmpty()
+    {
+        Assert.Equal(string.Empty, ScopeSignature.For([], [new LicenceScopePair(10, 4)]));
+    }
 }

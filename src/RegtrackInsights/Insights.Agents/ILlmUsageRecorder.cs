@@ -38,7 +38,7 @@ public interface ILlmUsageRecorder
 ///
 /// A refusal, not a fault: a paid report is 4 LLM calls plus up to 2 reflection loops, and
 /// nothing else bounds how large any single one of them can get. The free digest already has
-/// this ceiling (FreeDigestWriter falls back to the deterministic template); the paid path cannot
+/// this ceiling (FreeMonthlyDigestWriter falls back to the deterministic body); the paid path cannot
 /// fall back to anything, so it refuses and the run fails visibly rather than billing silently.
 /// </summary>
 public sealed class LlmBudgetExceededException(LlmUsage usage, int capTokens)

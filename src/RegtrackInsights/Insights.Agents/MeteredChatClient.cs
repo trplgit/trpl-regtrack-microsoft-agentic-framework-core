@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Agents;
 
@@ -14,7 +16,7 @@ namespace Insights.Agents;
 /// [TRAP] The cap is checked AFTER the call, not before, and that is deliberate: the tokens are
 /// already billed by then. It exists to stop a runaway from continuing through the remaining
 /// stages of a report (4 calls plus up to 2 reflection loops), not to prevent the first
-/// overspend - which nothing on this side of the wire can do. Same shape as FreeDigestWriter's
+/// overspend - which nothing on this side of the wire can do. Same shape as FreeMonthlyDigestWriter's
 /// tokenCap, except the paid path refuses instead of falling back.
 /// </summary>
 public sealed class MeteredChatClient(
@@ -22,14 +24,36 @@ public sealed class MeteredChatClient(
     string stage,
     string model,
     ILlmUsageRecorder recorder,
-    int? maxTokensPerCall) : DelegatingChatClient(inner)
+    int? maxTokensPerCall,
+    ILogger? logger = null) : DelegatingChatClient(inner)
 {
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await base.GetResponseAsync(messages, options, cancellationToken);
+        /*  [DIAG - temporary, ADDED 2026-09-29] See MafAgentFactory.Create's own doc comment on
+            `logger` for why this exists: several real Compose calls hung with the scheduled
+            Durable Task work item silently re-dequeued 100+ times and NEVER once completing or
+            throwing - no exception, no timeout, nothing. This "starting" line is the one signal
+            that can prove the call was actually dispatched and pin down exactly when; if it hangs
+            again, the worker's own logs will show this line with no matching "returned"/"threw"
+            line ever following it, instead of the current total silence.                        */
+        var sw = Stopwatch.StartNew();
+        logger?.LogInformation("LLM call starting: stage={Stage} model={Model}", stage, model);
+
+        ChatResponse response;
+        try
+        {
+            response = await base.GetResponseAsync(messages, options, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "LLM call THREW after {ElapsedMs}ms: stage={Stage} model={Model}", sw.ElapsedMilliseconds, stage, model);
+            throw;
+        }
+
+        logger?.LogInformation("LLM call returned after {ElapsedMs}ms: stage={Stage} model={Model}", sw.ElapsedMilliseconds, stage, model);
 
         /*  Usage is nullable on the M.E.AI contract and some providers omit it. A missing count is
             reported as zero rather than skipped: a stage that silently stops appearing in the

@@ -3,8 +3,9 @@ using System.Threading.RateLimiting;
 namespace Insights.Data.Email;
 
 /// <summary>
-/// Decorates whichever IEmailSender FreeDigestRegistration selected (ElasticEmail, SendGrid, or
-/// the failover pair) with a steady, no-burst rate limit.
+/// Decorates ONE provider's IEmailSender with a steady, no-burst rate limit. FreeDigestRegistration
+/// builds one of these per provider (Email:ElasticEmail:RateLimit:*, Email:SendGrid:RateLimit:*),
+/// so each provider is paced independently and neither spends the other's share.
 ///
 /// -- WHY A STEADY LIMIT, NOT A BURST-THEN-WAIT ONE -------------------------------------------
 /// The ElasticEmail account is shared with other services outside this project. A limiter that

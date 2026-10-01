@@ -1,0 +1,266 @@
+using System.Globalization;
+using Insights.Agents;
+using Insights.Data;
+using Insights.Domain;
+using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace Insights.Worker;
+
+/// <summary>
+/// The free digest email content (spec Sec.10).
+///
+/// <para><b>Only the token caps are configuration</b> - Budget:FreeMonthlyTokenCap:* - because they
+/// are a spend control an environment may legitimately set differently. They have no default in
+/// code, so a missing one stops the worker at startup naming the key (the same "fail at startup,
+/// not at 3am" stance as FreeDigestRegistration's Require()).</para>
+///
+/// <para>The rest are product decisions with one right answer everywhere, so they live here.</para>
+/// </summary>
+public sealed class FreeMonthlySettings
+{
+    /// <summary>
+    /// Passed to sql/38's <c>@AllowPersonNames</c>. true names people in the Users email; false
+    /// describes them without a name ("one person who is no longer an active user ...").
+    ///
+    /// <para>[MOVED OUT OF CONFIG 2026-09-22] This and <see cref="MaxDraftAttempts"/> were required
+    /// appsettings keys, which meant every environment had to carry them and a missing one stopped
+    /// the worker at startup. Neither is environment-specific: naming people is a product decision
+    /// that is the same everywhere, and the attempt count is a behaviour of the composer. A value
+    /// that is identical in every environment does not belong in per-environment config.</para>
+    /// </summary>
+    public bool AllowPersonNames { get; init; } = true;
+
+    /// <summary>Budget:FreeMonthlyTokenCap:{Overview|Users|Location|Act|Licence} - total (prompt + completion) per call.</summary>
+    public required IReadOnlyDictionary<MonthlyDigestSlot, int> TokenCaps { get; init; }
+
+    /// <summary>
+    /// How many times the model may write one email. 1 means a rejected draft falls straight back
+    /// to the deterministic body; above 1, a rejected draft is handed its own failure list and
+    /// rewritten, and each attempt is a billed call.
+    ///
+    /// <para>1 is deliberate: [MEASURED 2026-09-21] the repair pass now fixes the style failures
+    /// that used to cause rejections, so a second attempt would double the spend to rescue a draft
+    /// that is already being rescued deterministically.</para>
+    /// </summary>
+    public int MaxDraftAttempts { get; init; } = 1;
+
+    public int TokenCapFor(MonthlyDigestSlot slot) => TokenCaps[slot];
+
+    /// <summary>Binds and validates. Throws on a missing or bad value - including a prompt file that does not exist.</summary>
+    public static FreeMonthlySettings Build(IConfiguration configuration, string promptDirectory)
+    {
+        var slots = Enum.GetValues<MonthlyDigestSlot>();
+
+        /*  [2026-09-23] The configured cap is a FLOOR-ADJUSTED value: an environment may raise
+            it, never starve the email below what its own prompts need. The 4-name, 6-example,
+            700-word email measured 6-7.5k input and 1-2.5k output tokens per slot on the
+            reasoning deployment; a stale 12,000/9,000 cap from before that change would send the
+            deterministic fallback on every call, silently, in whichever environment forgot to
+            update appsettings. The key stays required so a missing one still fails at startup. */
+        var caps = slots.ToDictionary(
+            s => s,
+            s => Math.Max(RequiredPositiveInt(configuration, $"Budget:FreeMonthlyTokenCap:{s}"), MinimumTokenCapFor(s)));
+
+        var settings = new FreeMonthlySettings
+        {
+            TokenCaps = caps,
+        };
+
+        /*  A missing prompt file would otherwise surface on the first Sunday, per scope group, as a
+            FileNotFoundException inside an activity. Every digest uses these prompts, so a worker
+            that cannot find them refuses to start.                                              */
+        var root = Path.IsPathRooted(promptDirectory) ? promptDirectory : Path.Combine(AppContext.BaseDirectory, promptDirectory);
+        var files = new[] { FreeMonthlyPromptFiles.SharedRules() }
+            .Concat(slots.Select(FreeMonthlyPromptFiles.ForSlot));
+        foreach (var file in files)
+            if (!File.Exists(Path.Combine(root, file)))
+                throw new InvalidOperationException($"Free digest prompt '{file}' does not exist in {root} - it ships as Content from src/RegtrackInsights/prompts.");
+
+        return settings;
+    }
+
+    private static string Required(IConfiguration configuration, string key) =>
+        configuration[key] is { Length: > 0 } value
+            ? value
+            : throw new InvalidOperationException($"{key} is not configured. It has no default in code - add it to appsettings.json.");
+
+    /// <summary>
+    /// The least a slot needs for the current prompts: ~7.5k input plus reasoning and a 700-word
+    /// body for the Overview, ~7k plus a 620-word body for the rest, with headroom for a redraft.
+    ///
+    /// <para>[RESTORED 2026-09-29, 15,000 -> 14,000 for the non-Overview slots] The 2026-09-27 raise
+    /// existed only for the reflection rewrite, which was removed on the product owner's
+    /// instruction.</para>
+    /// </summary>
+    public static int MinimumTokenCapFor(MonthlyDigestSlot slot) =>
+        slot == MonthlyDigestSlot.Overview ? 16_000 : 14_000;
+
+    private static int RequiredPositiveInt(IConfiguration configuration, string key) =>
+        int.TryParse(Required(configuration, key), out var value) && value > 0
+            ? value
+            : throw new InvalidOperationException($"{key} must be a positive whole number.");
+}
+
+/// <summary>
+/// Composes one monthly digest body for a scope group: slot proc -> prompt -> LLM -> validate -> bind,
+/// with the deterministic <see cref="FreeMonthlyFallbackBody"/> on any LLM-side failure.
+///
+/// A SQL refusal (<see cref="FreeMonthlyDigestRefusedException"/>) is NOT caught here - it is a
+/// different failure class from an LLM rejection. The fallback exists so an email always goes out
+/// when the DATA is good; when SQL refuses the data, nothing may go out (CLAUDE.md non-negotiable 2).
+///
+/// <para>A draft the validator passes ships; a rejected one falls back to the deterministic body.
+/// [2026-09-29] The reflection critic/rewrite pass (2026-09-27) was removed on the product owner's
+/// instruction.</para>
+/// </summary>
+public sealed class FreeMonthlyDigestComposer(
+    IFreeMonthlyDigestRepository repository,
+    FreeMonthlyDigestWriter writer,
+    FreeMonthlySettings monthlySettings,
+    FreeDigestSettings digestSettings,
+    ILogger<FreeMonthlyDigestComposer> logger,
+    FreeDigestMetrics? metrics = null)
+{
+    private const string Lane = "email";
+
+    public async Task<ComposeDigestOutput> ComposeAsync(
+        int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride,
+        CancellationToken cancellationToken = default) =>
+        (await ComposeWithDiagnosticsAsync(tenantId, representativeUserId, edition, asOfOverride, cancellationToken)).Output;
+
+    /// <summary>
+    /// Same as <see cref="ComposeAsync"/>, plus what the model was given and what it wrote - for
+    /// FreeMonthlyPreviewWorker, where tuning a prompt means reading exactly that.
+    /// </summary>
+    public async Task<MonthlyComposeDiagnostics> ComposeWithDiagnosticsAsync(
+        int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride,
+        CancellationToken cancellationToken = default)
+    {
+        // LangFuse (Insights Basic): every model call below is traced under this tenant's week.
+        using var _ = FreeDigestTelemetry.Push(new FreeDigestTraceContext(
+            tenantId, representativeUserId, Lane, edition.Slot.ToString().ToLowerInvariant(), edition.Sunday));
+
+        /*  ONE clock read, clamped into the edition's month. CurrMonthStart comes from the Sunday
+            (the claim key), @AsOf from now - sql/34 refuses 51237 if the two disagree, so the clamp
+            is what keeps a late retry across a month boundary from being refused.               */
+        var localNow = string.IsNullOrWhiteSpace(asOfOverride)
+            ? TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, digestSettings.ScheduleTimeZone)
+            : DateTime.Parse(asOfOverride, CultureInfo.InvariantCulture);
+        var asOf = MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition);
+
+        var data = await repository.GetSlotAsync(edition, tenantId, representativeUserId, asOf, monthlySettings.AllowPersonNames, cancellationToken);
+
+        foreach (var dq in data.DataQuality.Where(d => d.ItemCount > 0))
+            logger.LogInformation(
+                "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - data_quality {Code} = {Count}.",
+                tenantId, representativeUserId, edition.Slot, dq.Code, dq.ItemCount);
+
+        var prompt = FreeMonthlyDigestPrompt.Build(data);
+        var systemPrompt = await writer.LoadSystemPromptAsync(edition.Slot, cancellationToken);
+
+        /*  [ADDED 2026-09-20] The model gets MaxDraftAttempts tries, each rejection handed back as
+            the validator's own failure list. Without this, one banned phrase costs the reader the
+            whole written email and substitutes the deterministic fallback - which made every rule
+            expensive and pushed us to loosen rules that should have stayed. The validator is still
+            the only gate and still deterministic: a redraft does not lower the bar, it just asks
+            again.                                                                                */
+        var userMessage = prompt.UserMessage;
+        FreeDigestEmail draft;
+        string reason;
+        var inputTokens = 0;
+        var outputTokens = 0;
+        var attempt = 0;
+        var writerTokenCap = monthlySettings.TokenCapFor(edition.Slot);
+        var maxAttempts = monthlySettings.MaxDraftAttempts;
+
+        while (true)
+        {
+            attempt++;
+            draft = await writer.WriteAsync(systemPrompt, userMessage, writerTokenCap, cancellationToken);
+            inputTokens += draft.InputTokens;
+            outputTokens += draft.OutputTokens;
+
+            if (draft.Source != FreeDigestSource.Llm)
+            {
+                reason = draft.SkippedReason ?? "LLM skipped";
+                logger.LogWarning(
+                    "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM SKIPPED, falling back. Tokens spent anyway: {InputTokens} in / {OutputTokens} out. {Reason}",
+                    tenantId, representativeUserId, edition.Slot, inputTokens, outputTokens, reason);
+                break;
+            }
+
+            var prepared = FreeMonthlyDraftPipeline.Prepare(draft.Body, prompt);
+
+            if (prepared.Removed.Count > 0)
+                logger.LogInformation(
+                    "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - removed {Count} sentence(s) before validating: {Removed}",
+                    tenantId, representativeUserId, edition.Slot, prepared.Removed.Count, string.Join(" | ", prepared.Removed));
+
+            var validation = prepared.Review;
+
+            if (validation.Advisories.Count > 0)
+                logger.LogInformation(
+                    "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - advisories (email still sent): {Advisories}",
+                    tenantId, representativeUserId, edition.Slot, string.Join("; ", validation.Advisories));
+
+            if (validation.IsValid)
+            {
+                // The validated text is what the reader gets.
+                var body = FreeMonthlyPlaceholderBinder.Bind(prepared.Body, prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition);
+
+                logger.LogInformation(
+                    "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body accepted on attempt {Attempt}. Tokens: {InputTokens} in / {OutputTokens} out.",
+                    tenantId, representativeUserId, edition.Slot, attempt, inputTokens, outputTokens);
+                return new MonthlyComposeDiagnostics(
+                    new ComposeDigestOutput(body, "Llm", null, inputTokens, outputTokens), prompt.Data, prompt.UserMessage, draft.Body);
+            }
+
+            reason = "validator rejected the LLM body: " + string.Join("; ", validation.FailedChecks);
+
+            if (attempt >= maxAttempts)
+            {
+                logger.LogWarning(
+                    "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body REJECTED on attempt {Attempt} of {MaxAttempts}, falling back. Tokens spent anyway: {InputTokens} in / {OutputTokens} out. {Reason}\nRejected body was:\n{Body}",
+                    tenantId, representativeUserId, edition.Slot, attempt, maxAttempts, inputTokens, outputTokens, reason, draft.Body);
+                break;
+            }
+
+            logger.LogInformation(
+                "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - attempt {Attempt} of {MaxAttempts} rejected, redrafting. {Reason}",
+                tenantId, representativeUserId, edition.Slot, attempt, maxAttempts, reason);
+
+            userMessage = FreeMonthlyRedraft.Message(prompt.UserMessage, draft.Body, validation.FailedChecks);
+        }
+
+        return Fallback(prompt, reason, draft.Body, inputTokens, outputTokens, tenantId, representativeUserId);
+    }
+
+    /// <summary>
+    /// The deterministic body. If the send-quality build ever fails its own validation, the legacy
+    /// floor ships - loudly: an error log and a metric, because a silently degrading fallback is the
+    /// one failure this path must not have.
+    /// </summary>
+    private MonthlyComposeDiagnostics Fallback(
+        FreeMonthlyDigestPrompt prompt, string reason, string rawDraft, int inputTokens, int outputTokens, int tenantId, int userId)
+    {
+        var fallback = FreeMonthlyFallbackBody.Build(prompt);
+        if (fallback.UsedFloor)
+        {
+            metrics?.RecordFallbackFloor(Lane);
+            logger.LogError(
+                "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - the send-quality fallback FAILED its own validation, legacy floor shipped. {Problems}",
+                tenantId, userId, prompt.Data.Edition.Slot, string.Join("; ", fallback.FloorReasons));
+        }
+
+        return new MonthlyComposeDiagnostics(
+            new ComposeDigestOutput(fallback.Body, "Fallback", reason, inputTokens, outputTokens),
+            prompt.Data, prompt.UserMessage, rawDraft, fallback.UsedFloor);
+    }
+}
+
+/// <summary>A composed monthly body plus its inputs and the model's raw draft (accepted or rejected).</summary>
+/// <param name="FallbackFloorUsed">True when the send-quality fallback failed its own validation and the legacy body shipped.</param>
+public sealed record MonthlyComposeDiagnostics(
+    ComposeDigestOutput Output, MonthlyDigestData Data, string UserMessage, string RawDraft, bool FallbackFloorUsed = false);

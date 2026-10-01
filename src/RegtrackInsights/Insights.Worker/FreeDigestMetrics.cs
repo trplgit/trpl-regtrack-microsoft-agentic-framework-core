@@ -23,6 +23,7 @@ public sealed class FreeDigestMetrics : IDisposable
     private readonly Counter<long> _sent;
     private readonly Counter<long> _skipped;
     private readonly Histogram<double> _tenantDuration;
+    private readonly Counter<long> _fallbackFloor;
 
     public FreeDigestMetrics()
     {
@@ -30,7 +31,13 @@ public sealed class FreeDigestMetrics : IDisposable
         _sent = _meter.CreateCounter<long>("insights.digest.sent_total", "email", "Free digests delivered.");
         _skipped = _meter.CreateCounter<long>("insights.digest.skipped_total", "recipient", "Free digests not sent, by reason.");
         _tenantDuration = _meter.CreateHistogram<double>("insights.digest.tenant_duration_ms", "ms", "Wall time per tenant.");
+
+        // Tag is a closed set: lane email|card. Never a tenant, a quote or a name.
+        _fallbackFloor = _meter.CreateCounter<long>("insights.digest.fallback_floor_total", "text", "Send-quality fallbacks that failed their own validation. Any non-zero value is a defect.");
     }
+
+    public void RecordFallbackFloor(string lane) =>
+        _fallbackFloor.Add(1, new KeyValuePair<string, object?>("lane", lane));
 
     /// <summary>Source is llm or fallback - the split matters, because a persistent fallback rate means LLM spend with no output.</summary>
     public void RecordSent(string source, string provider) =>

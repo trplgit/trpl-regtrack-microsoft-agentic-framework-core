@@ -2,6 +2,7 @@ using Insights.Data;
 using Insights.Domain;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -28,7 +29,7 @@ public class GatherScopeActivityTests
         tenants.Setup(r => r.IsEligibleAsync(38, 29, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new EligibleTenant(29, "Acme Holdings", EntitlementTier.Paid, ScopeClass.TenantWide));
 
-        var activity = new GatherScopeActivity(entitlement.Object, scope.Object, entity.Object, tenants.Object);
+        var activity = new GatherScopeActivity(entitlement.Object, scope.Object, entity.Object, tenants.Object, NullLogger<GatherScopeActivity>.Instance);
         var result = await activity.RunAsync(new GatherScopeInput(38, 29));
 
         Assert.Equal(2, result.ScopePairs.Count);
@@ -48,7 +49,8 @@ public class GatherScopeActivityTests
             .ReturnsAsync(Array.Empty<ScopePair>());
 
         var activity = new GatherScopeActivity(
-            entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object, new Mock<ITenantDirectoryRepository>().Object);
+            entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object, new Mock<ITenantDirectoryRepository>().Object,
+            NullLogger<GatherScopeActivity>.Instance);
 
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() =>
             activity.RunAsync(new GatherScopeInput(38, 29)));
@@ -64,7 +66,8 @@ public class GatherScopeActivityTests
 
         var scope = new Mock<IScopeRepository>();
         var activity = new GatherScopeActivity(
-            entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object, new Mock<ITenantDirectoryRepository>().Object);
+            entitlement.Object, scope.Object, new Mock<IEntityRepository>().Object, new Mock<ITenantDirectoryRepository>().Object,
+            NullLogger<GatherScopeActivity>.Instance);
 
         var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() =>
             activity.RunAsync(new GatherScopeInput(38, 29)));

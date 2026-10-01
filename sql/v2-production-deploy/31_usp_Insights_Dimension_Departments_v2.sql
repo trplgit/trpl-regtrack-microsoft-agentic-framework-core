@@ -1,0 +1,444 @@
+/*===========================================================================
+  RegTrack Insights - v2 (2026-09-29): follow RegTrack's own Detailed Report
+  Object : dbo.usp_Insights_Dimension_Departments
+  Base   : the definition DEPLOYED on UAT on 2026-09-29 (not the repo copy)
+  Change : the window gate counts only active due dates (IsActive = 1 AND IsUpcomingNotDeleted = 1). Population and overdue come from the v2 functions.
+  Why    : product decision 2026-09-29 - Insights must count what RegTrack's own
+           Detailed Report (Kendo_DetailedReport_Pagination) counts. See
+           sql/v2/README.md for the full rule list and the parity proof.
+  [FIX 2026-09-30] The overdue join was scope-constrained by ComplianceInstanceID
+  alone (see #ovd below), not by which SPECIFIC occurrence is overdue. An instance
+  in scope for this window (via #active) whose window occurrence is NOT overdue
+  still got flagged overdue if it had any OTHER, out-of-window occurrence that was
+  overdue (found live via the "Detailed Report.xlsx" ground-truth reconciliation,
+  tenant 1285/Adi Demo Customer, Aug 2026: proc reported 25 overdue, real answer
+  is 18). #ovd now also requires the overdue occurrence's own ScheduleOn to fall
+  inside [@WindowStart, @WindowEnd) - the same bound #active already uses.
+===========================================================================*/
+SET NOCOUNT ON;
+GO
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Departments', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Departments;
+GO
+CREATE PROCEDURE dbo.usp_Insights_Dimension_Departments
+    @UserID      INT,
+    @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
+    @AsOf        DATETIME = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @AsOf IS NULL SET @AsOf = GETDATE();
+
+    /*-- 0. PRE-FLIGHT --------------------------------------------------*/
+    IF NOT EXISTS (SELECT 1 FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
+        THROW 51080, N'SCOPE DENIED - user has no authorised (branch, category) pairs for this tenant. Refusing to compute.', 1;
+
+    EXEC dbo.usp_Insights_AssertStatusCoverage;
+
+    DECLARE @criticalRisk INT = (
+        SELECT TRY_CAST(p.RawValue AS INT)
+        FROM dbo.InsightsEnumPolarity p
+        JOIN dbo.InsightsDictionaryVersion v ON v.VersionId = p.VersionId AND v.IsCurrent = 1
+        WHERE p.Semantic = 'RiskType' AND p.Meaning LIKE N'Critical%');
+
+    IF @criticalRisk IS NULL
+        THROW 51085, N'DICTIONARY GAP - no RiskType value is mapped to Critical in InsightsEnumPolarity. Refusing to compute.', 1;
+
+    /*-- 1. SCOPED INSTANCE BASE (DepartmentID lives on the instance) ----*/
+    IF OBJECT_ID('tempdb..#inst') IS NOT NULL DROP TABLE #inst;
+    SELECT
+        s.ComplianceInstanceID,
+        s.BranchID,
+        s.RiskType,
+        s.Imprisonment,
+        ci.DepartmentID
+    INTO #inst
+    FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s
+    JOIN ComplianceInstance ci ON ci.ID = s.ComplianceInstanceID;
+
+    CREATE CLUSTERED INDEX IX_inst ON #inst (DepartmentID, ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Departments' own population (ComplianceInstance via tvfInsightsScopedInstances)
+        carries no per-row date - an instance persists across years while its real due
+        dates live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY and sql/11 Act: #inst is already materialised and indexed above,
+        so find which of those instances had >=1 scheduled occurrence in the window,
+        then narrow #inst itself down to just those. Every downstream step (per-
+        department rollup, reconciliation) already reads from #inst, so they inherit
+        the window for free - nothing else in this file changes.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51082, N'DEPARTMENTS DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51082, N'DEPARTMENTS DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd
+      AND cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1;   -- [v2] switched-off due dates do not count (RegTrack parity)
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
+
+    /*-- 2. OVERDUE ------------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
+    SELECT DISTINCT o.ComplianceInstanceID
+    INTO #ovd
+    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
+    JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+    -- [FIX 2026-09-30, found live REQ-1085/Detailed Report reconciliation, tenant 1285] o was
+    -- matched by ComplianceInstanceID alone - an instance in #inst (window-active) whose window
+    -- occurrence is NOT overdue still got flagged overdue here if it had ANY other, out-of-window
+    -- occurrence that was overdue (e.g. a July-overdue + August-pending pair, reported for an
+    -- August window). tvfInsightsOverdueSchedules carries its own ScheduleOn per occurrence -
+    -- constrain it to THIS window too, same bound #active already uses.
+    WHERE o.ScheduleOn >= @WindowStart AND o.ScheduleOn < @WindowEnd;
+
+    /*-- 3. OWNERSHIP + PEOPLE ------------------------------------------*/
+    /*  [CORRECTED 2026-09-05] Ownership has TWO mechanisms - ComplianceAssignment
+        (instance-level) AND ComplianceScheduleOn.Performerid (schedule-level,
+        99.8% populated). Reading only the first overstated "ownerless" by 181x.
+        #owned keeps its original meaning (instance-level assignment) so the rest
+        of this proc is unchanged; #ownership carries the full picture.
+        [PERF] Materialised and indexed - never joined as an inline TVF.        */
+    IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
+    SELECT o.ComplianceInstanceID, o.HasInstanceOwner, o.HasScheduleOwner,
+           o.HasNoSchedules, o.NoInstanceOwner, o.NoOwnerAnywhere, o.OwnerClass
+    INTO #ownership
+    FROM dbo.tvfInsightsOwnership(@UserID, @CustomerID) o;
+    CREATE CLUSTERED INDEX IX_ownership ON #ownership (ComplianceInstanceID);
+
+    IF OBJECT_ID('tempdb..#owned') IS NOT NULL DROP TABLE #owned;
+    SELECT ComplianceInstanceID INTO #owned
+    FROM #ownership WHERE HasInstanceOwner = 1;
+    CREATE CLUSTERED INDEX IX_owned ON #owned (ComplianceInstanceID);
+
+    IF OBJECT_ID('tempdb..#people') IS NOT NULL DROP TABLE #people;
+    SELECT i.DepartmentID, COUNT(DISTINCT ca.UserID) AS DistinctUsers
+    INTO #people
+    FROM #inst i
+    JOIN ComplianceAssignment ca ON ca.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE ca.UserID > 0 AND i.DepartmentID IS NOT NULL
+    GROUP BY i.DepartmentID;
+
+    /*-- 4. MEMBER LIST = the department master --------------------------*/
+    IF OBJECT_ID('tempdb..#dept') IS NOT NULL DROP TABLE #dept;
+    SELECT d.ID AS DepartmentID, d.Name AS DepartmentName
+    INTO #dept
+    FROM Department d
+    WHERE d.CustomerID = @CustomerID AND d.IsDeleted = 0;
+
+    /*-- 5. ROWS ---------------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
+    CREATE TABLE #rows (
+        DepartmentID          INT            NOT NULL PRIMARY KEY,
+        DepartmentName        NVARCHAR(300)  NULL,
+        Instances             INT            NOT NULL,
+        Overdue               INT            NOT NULL,
+        OverduePct            DECIMAL(5,1)   NULL,
+        NoInstanceOwner             INT            NOT NULL,
+        NoInstanceOwnerPct          DECIMAL(5,1)   NULL,
+        ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
+        CriticalInstances     INT            NOT NULL,
+        DistinctUsers         INT            NOT NULL,
+        BranchesCovered       INT            NOT NULL,
+        -- derived
+        OverdueRank           INT            NULL,
+        Flags                 VARCHAR(200)   NULL
+    );
+
+    INSERT #rows (DepartmentID, DepartmentName, Instances, Overdue, NoInstanceOwner,
+                  ImprisonmentInstances, ImprisonmentOverdue, CriticalInstances, DistinctUsers, BranchesCovered)
+    SELECT
+        d.DepartmentID, d.DepartmentName,
+        COUNT(i.ComplianceInstanceID),
+        SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.ComplianceInstanceID IS NOT NULL AND w.ComplianceInstanceID IS NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.RiskType = @criticalRisk THEN 1 ELSE 0 END),
+        ISNULL(MAX(p.DistinctUsers), 0),
+        COUNT(DISTINCT i.BranchID)
+    FROM #dept d
+    LEFT JOIN #inst   i ON i.DepartmentID = d.DepartmentID
+    LEFT JOIN #ovd    o ON o.ComplianceInstanceID = i.ComplianceInstanceID
+    LEFT JOIN #owned  w ON w.ComplianceInstanceID = i.ComplianceInstanceID
+    LEFT JOIN #people p ON p.DepartmentID = d.DepartmentID
+    GROUP BY d.DepartmentID, d.DepartmentName;
+
+    /*-- 6. RECONCILIATION, with the unassigned bucket counted back -----*/
+    DECLARE @rowSum      INT = (SELECT ISNULL(SUM(Instances),0) FROM #rows);
+    DECLARE @scopedTotal INT = (SELECT COUNT(*) FROM #inst);
+    DECLARE @unassigned  INT = (SELECT COUNT(*) FROM #inst i
+                                WHERE i.DepartmentID IS NULL
+                                   OR NOT EXISTS (SELECT 1 FROM #dept d WHERE d.DepartmentID = i.DepartmentID));
+
+    IF @rowSum + @unassigned <> @scopedTotal
+        THROW 51081, N'DEPARTMENTS DIMENSION RECONCILIATION FAILED - per-department sums plus the unassigned bucket do not tie to the scoped instance total. Refusing to publish.', 1;
+
+    DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
+    DECLARE @tenantOverduePct DECIMAL(5,1) =
+        CASE WHEN @scopedTotal = 0 THEN 0 ELSE 100.0 * (SELECT COUNT(*) FROM #ovd) / @scopedTotal END;
+
+    UPDATE #rows SET
+        OverduePct   = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * Overdue   / Instances END,
+        NoInstanceOwnerPct = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * NoInstanceOwner / Instances END;
+
+    DECLARE @tenantNoInstanceOwnerPct DECIMAL(5,1) =
+        CASE WHEN @scopedTotal = 0 THEN 0
+             ELSE 100.0 * (SELECT ISNULL(SUM(NoInstanceOwner),0) FROM #rows) / @scopedTotal END;
+
+    /*  Materiality floor on ranking - see the trap note in sql/05. */
+    DECLARE @materialityFloor INT = 50;
+    DECLARE @materialMembers  INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @materialityFloor);
+    DECLARE @rankDegraded     BIT = CASE WHEN @materialMembers < 2 THEN 1 ELSE 0 END;
+    DECLARE @rankFloor        INT = CASE WHEN @rankDegraded = 1 THEN 1 ELSE @materialityFloor END;
+
+    ;WITH r AS (SELECT DepartmentID, RANK() OVER (ORDER BY OverduePct DESC) AS rk
+                FROM #rows WHERE Instances >= @rankFloor)
+    UPDATE #rows SET OverdueRank = r.rk FROM #rows JOIN r ON r.DepartmentID = #rows.DepartmentID;
+
+    /*-- 7. DETECTIONS ---------------------------------------------------*/
+    UPDATE #rows SET Flags =
+        STUFF(
+            CASE WHEN @hasAnyObligations = 1 AND Instances >= @rankFloor
+                  AND OverduePct > @tenantOverduePct
+                 THEN ',worst_department' ELSE '' END +
+            CASE WHEN Instances > 0 AND NoInstanceOwnerPct >= 10.0 THEN ',high_no_instance_owner' ELSE '' END +
+            CASE WHEN Instances > 0 AND DistinctUsers <= 1  THEN ',single_user_department' ELSE '' END
+        , 1, 1, '');
+
+    SELECT
+        'control_totals'             AS ResultSet,
+        @scopedTotal                 AS ScopedInstances,
+        @rowSum                      AS AssignedInstances   /* + UnassignedInstances = ScopedInstances.
+                          Renamed from SumOfRows: rows cover only instances WITH a
+                          DepartmentID, so a field called SumOfRows compared against
+                          ScopedInstances reads as a gap when it is a declared residual. */,
+        CAST(1 AS BIT)               AS Reconciled,
+        (SELECT COUNT(*) FROM #ovd)  AS OverdueInstances,
+        @tenantOverduePct            AS TenantOverduePct,
+        (SELECT COUNT(*) FROM #rows) AS DepartmentsReported,
+        (SELECT COUNT(*) FROM #rows WHERE Instances > 0) AS DepartmentsWithObligations,
+        @unassigned                  AS UnassignedInstances,
+        CAST(CASE WHEN @scopedTotal = 0 THEN 0
+                  ELSE 100.0 * @unassigned / @scopedTotal END AS DECIMAL(5,1)) AS UnassignedPct,
+        @tenantNoInstanceOwnerPct          AS TenantNoInstanceOwnerPct;
+
+    SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;
+
+    /*-- 8. EMISSION POLICY ---------------------------------------------*/
+    IF OBJECT_ID('tempdb..#detector') IS NOT NULL DROP TABLE #detector;
+    CREATE TABLE #detector (
+        Detector VARCHAR(40) PRIMARY KEY, Eligible INT, Flagged INT,
+        FlaggedPct DECIMAL(5,1), EmitMode VARCHAR(12));
+
+    DECLARE @withObl  INT = (SELECT COUNT(*) FROM #rows WHERE Instances > 0);
+    DECLARE @material INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @rankFloor);
+
+    INSERT #detector (Detector, Eligible, Flagged)
+    SELECT 'worst_department', @material,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%worst_department%')
+    UNION ALL SELECT 'high_no_instance_owner', @withObl,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%high_no_instance_owner%')
+    UNION ALL SELECT 'single_user_department', @withObl,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%single_user_department%');
+
+    UPDATE #detector SET FlaggedPct = CASE WHEN Eligible = 0 THEN 0 ELSE 100.0 * Flagged / Eligible END;
+    UPDATE #detector
+       SET EmitMode = CASE WHEN Flagged = 0        THEN 'none'
+                           WHEN Eligible <= 5      THEN 'individual'
+                           WHEN FlaggedPct > 20.0  THEN 'aggregate'
+                           ELSE 'individual' END;
+
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
+    SELECT 'detector_policy' AS ResultSet, * FROM #detector;
+
+    /*-- 9. ASSERTIONS ---------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#assert') IS NOT NULL DROP TABLE #assert;
+    CREATE TABLE #assert (
+        AssertionId VARCHAR(20), Metric VARCHAR(60), ScopeLabel NVARCHAR(500),
+        Value DECIMAL(18,2), Rank_ INT NULL, OfN INT NULL,
+        ComparatorValue DECIMAL(18,2) NULL, VsComparatorPP DECIMAL(9,2) NULL,
+        Direction VARCHAR(10) NULL, Caveat NVARCHAR(500) NULL);
+
+    INSERT #assert VALUES ('A-TENANT','overdue_pct',N'tenant',@tenantOverduePct,NULL,NULL,NULL,NULL,NULL,NULL);
+
+    DECLARE @rankable  INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @rankFloor);
+    DECLARE @tiedAtTop INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @rankFloor AND OverdueRank = 1);
+
+    IF @rankable >= 2
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-DEPT','overdue_pct',DepartmentName,OverduePct,OverdueRank,@rankable,
+           @tenantOverduePct, OverduePct - @tenantOverduePct,
+           CASE WHEN OverduePct > @tenantOverduePct THEN 'worse' ELSE 'better' END,
+           NULLIF(CONCAT(
+               CASE WHEN @rankDegraded = 1
+                    THEN CONCAT(N'degraded_ranking_sample: no department reaches the ', @materialityFloor,
+                                N'-instance materiality floor. ') ELSE N'' END,
+               CASE WHEN @tiedAtTop > 1
+                    THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' departments share this rate - not uniquely the highest. ')
+                    ELSE N'' END), N'')
+    FROM #rows WHERE Instances >= @rankFloor ORDER BY OverduePct DESC, Instances DESC;
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. A-WORST-DEPT ranks by
+        OverduePct - on a live pilot that put a 69-obligation department with
+        ZERO imprisonment exposure at rank 1, above one with 1,440 overdue
+        obligations of which ~46% carry personal liability. Both assertions are
+        emitted; the composition layer chooses.                                */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-DEPT-EXP','imprisonment_overdue_count', DepartmentName,
+           ImprisonmentOverdue, NULL, (SELECT SUM(ImprisonmentOverdue) FROM #rows),
+           NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - '
+         + N'not by overdue rate. A higher rate on a smaller, liability-free portfolio '
+         + N'is a different and lesser problem.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
+
+    IF (SELECT EmitMode FROM #detector WHERE Detector='high_no_instance_owner') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-OWN-' + CAST(ROW_NUMBER() OVER (ORDER BY NoInstanceOwner DESC) AS VARCHAR(5)),
+               'no_instance_owner_pct', DepartmentName, NoInstanceOwnerPct, NULL, NULL,
+               @tenantNoInstanceOwnerPct, NoInstanceOwnerPct - @tenantNoInstanceOwnerPct, 'worse', NULL
+        FROM #rows WHERE Flags LIKE '%high_no_instance_owner%' ORDER BY NoInstanceOwner DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='high_no_instance_owner') = 'aggregate'
+        INSERT #assert
+        SELECT 'A-OWN-AGG','departments_high_no_instance_owner',N'tenant',
+               Flagged, NULL, Eligible, @tenantNoInstanceOwnerPct, FlaggedPct, 'worse',
+               N'aggregate - unassigned ownership is a tenant-wide pattern'
+        FROM #detector WHERE Detector='high_no_instance_owner';
+
+    IF (SELECT EmitMode FROM #detector WHERE Detector='single_user_department') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-SOLO-' + CAST(ROW_NUMBER() OVER (ORDER BY Instances DESC) AS VARCHAR(5)),
+               'distinct_users', DepartmentName, DistinctUsers, NULL, NULL, NULL, NULL, NULL,
+               N'single_user_department: the whole function depends on one person'
+        FROM #rows WHERE Flags LIKE '%single_user_department%' ORDER BY Instances DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='single_user_department') = 'aggregate'
+        INSERT #assert
+        SELECT 'A-SOLO-AGG','departments_single_user',N'tenant',
+               Flagged, NULL, Eligible, NULL, FlaggedPct, NULL,
+               N'aggregate - thin staffing is a tenant-wide pattern, not per-department exceptions'
+        FROM #detector WHERE Detector='single_user_department';
+
+    SELECT 'assertions' AS ResultSet, * FROM #assert;
+
+    /*-- 10. FINDINGS ----------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#find') IS NOT NULL DROP TABLE #find;
+    CREATE TABLE #find (FindingId VARCHAR(20), Severity VARCHAR(10),
+        Headline NVARCHAR(1000), AssertionIds VARCHAR(400), NarrativeGuard NVARCHAR(500) NULL);
+
+    INSERT #find
+    SELECT 'F-WORST-DEPT','high',
+           CONCAT(N'', ScopeLabel, N' has the highest overdue rate at ', Value, N'%'),
+           'A-WORST-DEPT,A-TENANT', NULL
+    FROM #assert WHERE AssertionId = 'A-WORST-DEPT' AND Direction = 'worse';
+
+    INSERT #find
+    SELECT 'F-OWN','high',
+           CONCAT(N'', ScopeLabel, N' has ', Value, N'% of obligations with no INSTANCE-LEVEL owner'),
+           AssertionId,
+           N'NOT "nobody is doing this" - most of these have a performer named on each occurrence. '
+         + N'They lack an owner on the obligation itself.'
+    FROM #assert WHERE AssertionId LIKE 'A-OWN-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-OWN-AGG','high',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' departments (', VsComparatorPP,
+                  N'%) have 10%+ of obligations with no INSTANCE-LEVEL owner'),
+           AssertionId,
+           N'NOT "nobody is doing this" - most of these have a performer named on each occurrence. '
+         + N'They lack an owner on the obligation itself.'
+    FROM #assert WHERE AssertionId = 'A-OWN-AGG';
+
+    INSERT #find
+    SELECT 'F-SOLO','medium',
+           CONCAT(N'', ScopeLabel, N' depends on a single person'),
+           AssertionId, NULL
+    FROM #assert WHERE AssertionId LIKE 'A-SOLO-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-SOLO-AGG','medium',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' departments (', VsComparatorPP,
+                  N'%) depend on a single person'),
+           AssertionId, NULL
+    FROM #assert WHERE AssertionId = 'A-SOLO-AGG';
+
+    SELECT 'findings' AS ResultSet, * FROM #find;
+
+    /*-- 11. DATA QUALITY ------------------------------------------------*/
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
+                   WHEN 'ownership_has_two_mechanisms'   THEN 'TenantNoInstanceOwnerPct'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'unassigned_department'                THEN 'UnassignedPct'
+                   WHEN 'departments_unused'                   THEN 'DepartmentsWithObligations'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear in any row here even if it exists cumulatively.') AS Detail
+        UNION ALL
+        SELECT 'ownership_has_two_mechanisms' AS Issue,
+               N'RegTrack assigns a performer by TWO mechanisms: ComplianceAssignment (on the '
+             + N'obligation) and ComplianceScheduleOn.Performerid (on each occurrence, 99.8% '
+             + N'populated). This metric counts only the FIRST. Most obligations it counts DO '
+             + N'have someone named per occurrence - what is missing is accountability for the '
+             + N'obligation itself. NEVER present it as "nobody is doing this". NoOwnerAnywhere '
+             + N'is the stricter measure.' AS Detail
+        UNION ALL
+        SELECT 'flow_metric_drift',
+               N'Overdue is a live figure and moves between runs; stock metrics are stable.'
+        UNION ALL
+        SELECT 'unassigned_department',
+               CONCAT(N'', @unassigned, N' obligation(s) in this scope carry no department, or a department '
+                    + N'absent from the master. They are counted in the tenant total but appear in no '
+                    + N'department row. A configuration gap - any per-department statement excludes them.')
+        WHERE @unassigned > 0
+        UNION ALL
+        SELECT 'departments_unused',
+               CONCAT(N'', COUNT(*), N' configured department(s) carry no obligations in this scope and are '
+                    + N'reported with zero counts rather than omitted.')
+        FROM #rows WHERE Instances = 0 HAVING COUNT(*) > 0
+    ) q;
+
+    DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #owned; DROP TABLE #people;
+    DROP TABLE #dept; DROP TABLE #rows; DROP TABLE #detector;
+    DROP TABLE #assert; DROP TABLE #find;
+END
+GO
+PRINT 'usp_Insights_Dimension_Departments (v2, overdue-window fix 2026-09-30) installed.';
+GO

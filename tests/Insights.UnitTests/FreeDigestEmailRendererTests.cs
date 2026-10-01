@@ -11,7 +11,7 @@ namespace Insights.UnitTests;
 ///      "&amp;" in a composed sentence (or a prompt-injected tag) would have rendered as live
 ///      markup in a customer's inbox.
 ///   2. **bold** markdown in the body becomes &lt;strong&gt;, so the prompt can emphasise the one
-///      figure per paragraph that matters (06_freetier_digest.md "Emphasis").
+///      figure per paragraph that matters (shared rules, "Form").
 /// </summary>
 public sealed class FreeDigestEmailRendererTests
 {
@@ -22,7 +22,7 @@ public sealed class FreeDigestEmailRendererTests
     {
         var html = await Renderer().RenderHtmlAsync(
             "**66 obligations** are due this week.", "ABC Training",
-            new DateTime(2026, 8, 23), "https://example.com/upgrade", "https://example.com/unsubscribe");
+            Insights.Domain.MonthlyDigestCalendar.For(new DateOnly(2026, 8, 23)), "https://example.com/upgrade", "https://example.com/unsubscribe");
 
         Assert.Contains("<strong>66 obligations</strong>", html);
         // Not a blanket "no ** anywhere in the page" - the shell's own doc comment legitimately
@@ -35,7 +35,7 @@ public sealed class FreeDigestEmailRendererTests
     {
         var html = await Renderer().RenderHtmlAsync(
             "Section 4 & 5 apply where risk < threshold.", "ABC Training",
-            new DateTime(2026, 8, 23), "https://example.com/upgrade", "https://example.com/unsubscribe");
+            Insights.Domain.MonthlyDigestCalendar.For(new DateOnly(2026, 8, 23)), "https://example.com/upgrade", "https://example.com/unsubscribe");
 
         Assert.Contains("Section 4 &amp; 5 apply where risk &lt; threshold.", html);
     }
@@ -49,7 +49,7 @@ public sealed class FreeDigestEmailRendererTests
     {
         var html = await Renderer().RenderHtmlAsync(
             "<img src=x onerror=alert(1)>", "ABC Training",
-            new DateTime(2026, 8, 23), "https://example.com/upgrade", "https://example.com/unsubscribe");
+            Insights.Domain.MonthlyDigestCalendar.For(new DateOnly(2026, 8, 23)), "https://example.com/upgrade", "https://example.com/unsubscribe");
 
         // Not a blanket "no <img anywhere in the page" - the shell itself has real logo/icon <img>
         // tags. The property under test is that the BODY's own malicious tag never lands unescaped.
@@ -62,7 +62,7 @@ public sealed class FreeDigestEmailRendererTests
     {
         var html = await Renderer().RenderHtmlForArtifactAsync(
             "**214 obligations** were completed last week.", "ABC Training",
-            new DateTime(2026, 8, 23), "https://example.com/upgrade");
+            Insights.Domain.MonthlyDigestCalendar.For(new DateOnly(2026, 8, 23)), "https://example.com/upgrade");
 
         var withRealUrl = FreeDigestEmailRenderer.SubstituteUnsubscribeUrl(html, "https://example.com/unsubscribe?token=abc");
 

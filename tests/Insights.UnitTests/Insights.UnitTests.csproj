@@ -24,18 +24,16 @@
   </ItemGroup>
 
   <!--
-    Insights.Api is excluded from the worker build on purpose (see RegtrackInsights.csproj):
-    those endpoints belong to the RegTrack API, where auth lives, not to this private worker.
-
-    The stated CONSEQUENCE was that they are not compile-checked anywhere - so a rename in
-    IFreeDigestRepository or ITenantDirectoryRepository breaks nothing until someone copies the
-    files into the other repo and finds out there. Compiling them HERE closes that hole without
-    giving the worker an ingress: the test assembly type-checks the endpoints and can exercise
-    them, while Program.cs still maps nothing and opens no port.
+    [CHANGED 2026-09-16, ADR-0004] Insights.Api used to be excluded from RegtrackInsights.csproj,
+    so this project compiled the same source directly to keep it type-checked. RegtrackInsights.csproj
+    now compiles Insights.Api itself (the worker and the HTTP API are one combined host), so the
+    <Compile Include> below was removed - keeping it would produce CS0436 duplicate-type errors
+    against the types this project already gets through the ProjectReference below.
+    FrameworkReference stays: InsightsApiTestHost.cs still builds a real TestServer/WebApplication
+    directly in this project.
   -->
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <Compile Include="../../src/RegtrackInsights/Insights.Api/**/*.cs" LinkBase="Insights.Api" />
   </ItemGroup>
 
 </Project>

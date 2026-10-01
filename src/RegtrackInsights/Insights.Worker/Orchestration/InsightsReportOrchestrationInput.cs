@@ -26,8 +26,34 @@ namespace Insights.Worker.Orchestration;
 /// concern. Null for callers with no such concept (manual tests, the CLI trigger,
 /// PaidKeepWarmScheduler); every activity falls back to the DTFx run id itself when this is null.
 /// </summary>
+/// <summary>
+/// RunVisionQa [ADDED 2026-09-15] - defaults to true, real production behavior unchanged for
+/// every existing caller. When false, the render-retry loop's real vision-model gate
+/// (VisionQaActivity) is skipped entirely - NOTE: PlaywrightQaActivity is already advisory-only
+/// (its result is discarded, never gates anything - see InsightsReportOrchestrator.cs's own
+/// comment), so with this false, NOTHING checks the rendered HTML for a real visual defect before
+/// it ships. This is a deliberate, explicit opt-out for fast local iteration (real vision defects
+/// on large-row-count tenants were the main cause of the 3-retry/60+ minute runs found live
+/// tonight) - not meant to stay on for anything that will actually be persisted/shown to a user.
+/// Lives on the orchestration INPUT, not read from live config inside the orchestrator body,
+/// because the orchestrator must stay deterministic across replay (CLAUDE.md Sec.6) - this way the
+/// value is captured once at enqueue time and DTFx replay sees the exact same value every time.
+/// </summary>
+/// <summary>
+/// WindowStart/WindowEnd [ADDED 2026-09-25] - the caller-resolved period-picker window
+/// (ReportPeriodResolver.Resolve, done server-side in RunEndpoints against the request's Period
+/// string), threaded through to FetchDimensionsInput for the dimensions that need a real window
+/// (TimelinessFY, EvidenceIntegrity, Act, Event). Both null for every existing caller (tests, the
+/// CLI trigger) - trailing optional default, same reasoning as Priority above. Null/null still
+/// means "current financial year to date" for TimelinessFY/EvidenceIntegrity specifically (their
+/// own long-standing fallback in FetchDimensionsActivity); Act/Event have NO such fallback - see
+/// that activity's own doc comment on why FY-only defaulting stays specific to TimelinessFY.
+/// </summary>
 public sealed record InsightsReportOrchestrationInput(
     int TenantId, string ReportType, InsightsScopeRequest Scope, string Period, int UserId,
     LlmCallPriority Priority = LlmCallPriority.Interactive,
     IReadOnlyList<string>? RequestedDimensions = null,
-    string? ReqId = null);
+    string? ReqId = null,
+    bool RunVisionQa = true,
+    DateTime? WindowStart = null,
+    DateTime? WindowEnd = null);

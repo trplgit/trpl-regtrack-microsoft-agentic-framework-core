@@ -124,6 +124,8 @@ public sealed partial class MafReportHtmlAgent(AIAgent agent) : IReportHtmlAgent
                 tenant_name = tenantName,
                 report_type = reportType,
                 generated_at = generatedAt,
+                // [ADDED 2026-09-27] Header line 2 - see ReportPeriodContext. Null = counted as of today.
+                report_period = ReportPeriodContext.CurrentLabel is { } periodLabel ? new { label = periodLabel } : null,
                 coverage_status_counts = ComputeCoverageStatusCounts(locationRows),
                 dimension_rows = dimensionRows,
                 dimension_control_totals = dimensionControlTotals,

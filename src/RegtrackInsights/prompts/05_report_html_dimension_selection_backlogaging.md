@@ -52,7 +52,24 @@ you do use tabs, they must look like this real, already-shipping mechanism:
 ```
 Use a CSS-only radio-driven tab mechanism if you build tabs (input elements nested INSIDE the
 element your `:has()` selectors target — not as preceding siblings, which silently breaks
-`:has()`). Given this dimension has only 3 real members, a tab strip is likely overkill — a single
+`:has()`).
+
+**6. Long tables — contained, never page-growing.** [ADDED 2026-09-21] Real feedback on an early
+Act render: a "complete register" table with 30+ rows just kept growing the whole page - the
+reader had to scroll the entire document to reach the table's last row. Any table listing every
+real member of the dimension (a "complete register," "all configured X," or similar - not a
+capped top-5/top-10 list) goes inside a fixed-height container with its OWN internal scroll:
+```css
+.table-scroll{max-height:420px;overflow-y:auto;overflow-x:auto;border:1px solid var(--c-border);border-radius:var(--r-lg)}
+.table-scroll table{width:100%;border-collapse:separate;border-spacing:0}
+.table-scroll thead th{position:sticky;top:0;background:var(--c-mist);z-index:1}
+```
+`max-height` can be any value that keeps the container to roughly one screenful (350-500px is a
+reasonable range) - the TABLE scrolls, the PAGE around it does not grow to fit every row. Sticky
+header (`position:sticky;top:0`) keeps column labels visible while scrolling. A live search input
+above the table and clickable per-column sort are a real, approved enhancement for a large
+register - not mandatory, but worth doing when the composition plan's emphasis calls for the
+register being genuinely explorable rather than just present. Given this dimension has only 3 real members, a tab strip is likely overkill — a single
 section is probably the honest shape here, but that is your call.
 
 ## Technical constraints (unrelated to visual freedom — security/platform requirements)
@@ -92,6 +109,8 @@ already-reconciled SQL output. Everything you state must trace to it.
 
 ## Self-check before returning
 
+- Any complete-register/all-members table sits inside `.table-scroll` (fixed max-height, its own
+  internal scroll, sticky header) - the page itself never grows to fit every row.
 - All 3 real buckets are represented somewhere — none silently dropped.
 - Every number on the page exists in `assertions`, `dimension_rows`, or `dimension_control_totals`.
 - No late rate stated or implied anywhere, no sub-3-years breakdown, no per-branch/owner cut.

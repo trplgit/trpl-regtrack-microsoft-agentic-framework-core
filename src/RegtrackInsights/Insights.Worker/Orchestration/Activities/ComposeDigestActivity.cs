@@ -1,7 +1,5 @@
 using DurableTask.Core;
-using Insights.Agents;
-using Insights.Data;
-using Insights.Presentation;
+using Insights.Domain;
 using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
@@ -12,80 +10,62 @@ public sealed record ComposeDigestInput(int TenantId, int RepresentativeUserId, 
 /// Real tokens billed for this scope group's LLM call - present even when <paramref name="Source"/>
 /// is "Fallback", because a validator rejection or an over-budget/truncated response still means
 /// the call happened and was charged. Only genuinely zero when the LLM was never called at all
-/// (there is no such path today - draft.SkippedReason still comes from an attempted call), which
-/// is exactly why this is not optional: every token that was actually spent must be accounted for,
-/// whether or not the output shipped.
+/// (a SQL refusal), which is exactly why this is not optional: every token that was actually spent
+/// must be accounted for, whether or not the output shipped.
 /// </param>
 public sealed record ComposeDigestOutput(string Body, string Source, string? Reason, int InputTokens, int OutputTokens);
 
 /// <summary>
 /// Node 2: produce ONE digest body for a whole scope group.
 ///
+/// -- WHAT THE EMAIL SAYS (spec 2026-09-18) ---------------------------------------------------
+/// The week's Sunday decides which email it is - overview, users, location, act or licence
+/// (MonthlyDigestCalendar) - and FreeMonthlyDigestComposer builds it from that slot's proc
+/// (sql/36-41) and versioned prompt (prompts/06a-06e). The decision uses WeekEnding only, which
+/// is fixed before this activity runs, so FreeDigestGenerateOrchestrator's replay is unaffected.
+///
+/// The previous weekly content (sql/06's 13 counts + the 06_freetier_digest.md prompt, both
+/// replaced 2026-09-19) is gone from the email. sql/06 and FreeDigestValidator stay: the insight
+/// JSON lane still reads them.
+///
 /// -- THIS IS THE COST CONTROL ----------------------------------------------------------------
 /// One LLM call per distinct SCOPE, not per recipient. Everyone in the group holds identical
-/// (branch, category) pairs, so sql/06 returns them identical aggregates and the model would
-/// write the same words for each. Design doc 10.5's budget - ~1,500 tokens an email, ~30M tokens
-/// a year across ~600 tenants - only holds if this is the granularity.
+/// (branch, category) pairs, so the slot proc returns them identical data and the model would
+/// write the same words for each.
 ///
-/// -- THE EMAIL NEVER FAILS TO GO OUT (10.5) --------------------------------------------------
+/// -- THE EMAIL NEVER FAILS TO GO OUT (10.5) - WHEN THE DATA IS GOOD ---------------------------
 /// Over budget, a truncated response, or a validator rejection all fall back to the deterministic
-/// template. This activity never throws for those; it returns Source = "Fallback" with the reason
-/// attached so the run stays observable.
+/// body built from the same facts; Source = "Fallback" with the reason attached.
+///
+/// A SQL REFUSAL is the other failure class: the proc THROWs (51230-51309) because the data itself
+/// failed a check. Then Source = "Refused" with an empty body, and the orchestrator releases the
+/// slot and persists nothing - never the fallback, which exists for a bad draft on good data.
 /// </summary>
 public sealed class ComposeDigestActivity(
-    IFreeDigestRepository repository,
-    FreeDigestWriter writer,
-    FreeDigestEmailRenderer renderer,
-    FreeDigestSettings settings,
+    FreeMonthlyDigestComposer composer,
     ILogger<ComposeDigestActivity> logger)
     : AsyncTaskActivity<ComposeDigestInput, ComposeDigestOutput>
 {
+    public const string RefusedSource = "Refused";
+
     protected override Task<ComposeDigestOutput> ExecuteAsync(TaskContext context, ComposeDigestInput input) => RunAsync(input);
 
     internal async Task<ComposeDigestOutput> RunAsync(ComposeDigestInput input)
     {
-        var asOf = string.IsNullOrWhiteSpace(input.AsOf) ? (DateTime?)null : DateTime.Parse(input.AsOf);
-        var weekEnding = DateOnly.ParseExact(input.WeekEnding, "yyyy-MM-dd").ToDateTime(TimeOnly.MinValue);
+        var edition = MonthlyDigestCalendar.For(DateOnly.ParseExact(input.WeekEnding, "yyyy-MM-dd"));
 
-        var aggregates = await repository.GetAggregatesAsync(input.TenantId, input.RepresentativeUserId, asOf);
-
-        var draft = await writer.WriteAsync(aggregates, settings.TokenCap);
-
-        if (draft.Source == Insights.Domain.FreeDigestSource.Llm)
+        try
         {
-            var validation = FreeDigestValidator.Validate(draft.Body, aggregates);
-            if (validation.IsValid)
-            {
-                logger.LogInformation(
-                    "ComposeDigestActivity: tenant {TenantId} user {RepresentativeUserId} - LLM body accepted. Tokens: {InputTokens} in / {OutputTokens} out.",
-                    input.TenantId, input.RepresentativeUserId, draft.InputTokens, draft.OutputTokens);
-                return new ComposeDigestOutput(draft.Body, "Llm", null, draft.InputTokens, draft.OutputTokens);
-            }
-
-            var reason = "validator rejected the LLM body: " + string.Join("; ", validation.FailedChecks);
-
-            // The whole point of falling back is "the email must still go out" - never let this
-            // failure surface as a warning that could be mistaken for an operational problem. It
-            // IS one worth knowing about (every rejection here is silent token spend for nothing),
-            // just not at a severity that pages anyone.
-            logger.LogWarning(
-                "ComposeDigestActivity: tenant {TenantId} user {RepresentativeUserId} - LLM body REJECTED, falling back. Tokens spent anyway: {InputTokens} in / {OutputTokens} out. {Reason}\nRejected body was:\n{Body}",
-                input.TenantId, input.RepresentativeUserId, draft.InputTokens, draft.OutputTokens, reason, draft.Body);
-
-            var rejected = await renderer.RenderFallbackBodyAsync(aggregates, recipientName: null, weekEnding);
-            return new ComposeDigestOutput(rejected, "Fallback", reason, draft.InputTokens, draft.OutputTokens);
+            return await composer.ComposeAsync(input.TenantId, input.RepresentativeUserId, edition, input.AsOf);
         }
-
-        logger.LogWarning(
-            "ComposeDigestActivity: tenant {TenantId} user {RepresentativeUserId} - LLM SKIPPED, falling back. Tokens spent anyway: {InputTokens} in / {OutputTokens} out. {Reason}",
-            input.TenantId, input.RepresentativeUserId, draft.InputTokens, draft.OutputTokens, draft.SkippedReason);
-
-        /*  The greeting is rendered WITHOUT a recipient name, because this body is shared across
-            everyone in the group. The LLM path has the same property - the model is given only
-            numbers and never a name - so both paths address the reader generically. Personalising
-            here would mean one render per recipient, which is the cost this activity exists to
-            avoid.                                                                                */
-        var body = await renderer.RenderFallbackBodyAsync(aggregates, recipientName: null, weekEnding);
-        return new ComposeDigestOutput(body, "Fallback", draft.SkippedReason, draft.InputTokens, draft.OutputTokens);
+        catch (FreeMonthlyDigestRefusedException ex)
+        {
+            // Fail closed and loud (CLAUDE.md non-negotiable 2): refuse this scope group, log the
+            // code, send nothing.
+            logger.LogError(ex,
+                "ComposeDigestActivity: tenant {TenantId} user {RepresentativeUserId} {Slot} - REFUSED by SQL error {SqlError}. Nothing will be sent to this scope group this week.",
+                input.TenantId, input.RepresentativeUserId, edition.Slot, ex.SqlErrorNumber);
+            return new ComposeDigestOutput(string.Empty, RefusedSource, ex.Message, 0, 0);
+        }
     }
 }

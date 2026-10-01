@@ -1,4 +1,5 @@
-﻿using Insights.Agents;
+﻿using System.Globalization;
+using Insights.Agents;
 using Insights.Data;
 using Insights.Data.Email;
 using Insights.Persistence;
@@ -40,34 +41,94 @@ public static class FreeDigestRegistration
         var promptDirectory = Require(configuration, "Agents:PromptDirectory");
         var templateDirectory = Require(configuration, "Email:TemplatePath");
         var chatClientFactory = BuildChatClientFactory(configuration);
-        var emailSenderFactory = BuildEmailSenderFactory(configuration);
+
+        /*  [MEASURED on tenant 1082, 2026-09-24] The card is two sentences chosen from a closed set
+            of numbers, not analysis, and it does not need the email's thinking budget: at medium
+            effort the same card cost 1,664 output tokens, at low 927, and the text that shipped
+            passed the same validator either way. Reasoning tokens are billed as output, so this is
+            the whole saving. It gets its own knob rather than sharing the email's, so raising the
+            email's effort later cannot quietly re-inflate a call that never needed it.          */
+        var cardChatClientFactory = BuildChatClientFactory(
+            configuration, configuration["Llm:AzureOpenAi:InsightCardReasoningEffort"] ?? "low");
+
+        var emailSenderRegistryFactory = BuildEmailSenderRegistryFactory(configuration);
+        var defaultEmailGateway = ReadDefaultEmailGateway(configuration);
+        var emailHttpTimeout = TimeSpan.FromSeconds(RequirePositive(configuration, "Email:HttpTimeoutSeconds", 30));
 
         /*  Named HttpClients via the factory, never `new HttpClient()`. A long-lived host that
             constructs its own clients exhausts sockets; one holding a single static client never
             picks up DNS changes. The factory solves both.                                      */
         services.AddHttpClient(LlmClientName);
-        services.AddHttpClient(EmailClientName);
+
+        /*  An explicit timeout, not HttpClient's 100s default: one wedged provider call would
+            otherwise hold a recipient for ~6.5 minutes across the three retry attempts.        */
+        services.AddHttpClient(EmailClientName, http => http.Timeout = emailHttpTimeout);
         services.AddHttpClient(InsightApiClientName, http => http.Timeout = settings.InsightApiTimeout);
 
         services.AddSingleton(settings);
         services.AddSingleton<FreeDigestMetrics>();
         services.AddSingleton<IPromptLoader>(_ => new FilePromptLoader(promptDirectory));
-        services.AddSingleton(_ => new FreeDigestEmailRenderer(templateDirectory));
+        services.AddSingleton(sp => new FreeDigestEmailRenderer(
+            templateDirectory,
+            sp.GetRequiredService<FreeDigestSettings>().CdnBaseUrl));
 
         services.AddSingleton(sp =>
             chatClientFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(LlmClientName)));
 
-        /*  ADR-0001 (2026-09-10) - every send in this worker passes through the rate limiter here,
-            wrapping whichever concrete provider (or FailoverEmailSender pair) the factory above
-            selected. This is the ONLY IEmailSender registration - nothing sends unrated-limited.  */
-        services.AddSingleton<IEmailSender>(sp =>
-        {
-            var inner = emailSenderFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(EmailClientName));
-            return new RateLimitedEmailSender(inner, settings.EmailRateLimitPerSecond, settings.EmailRateLimitAcquireTimeout);
-        });
+        /*  Per-tenant email routing (2026-09-25). Every send goes through the registry, and every
+            sender in it is individually rate-limited - nothing sends un-rate-limited. There is
+            deliberately NO plain IEmailSender registration any more: a consumer that asked for
+            "the" sender would bypass per-tenant routing.                                        */
+        services.AddSingleton<IEmailSenderRegistry>(sp =>
+            emailSenderRegistryFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(EmailClientName)));
 
-        services.AddSingleton<FreeDigestWriter>();
+        var gatewayConnectionString = Require(configuration, "ConnectionStrings:RegTrack");
+        services.AddSingleton<IEmailGatewayResolver>(_ => new SqlEmailGatewayResolver(gatewayConnectionString, defaultEmailGateway));
+
         services.AddSingleton<InsightNarrativeWriter>();
+
+        // ADR-0004 (2026-09-23) - the insight card lane: the two lines of card text from the
+        // monthly slot input, and the composer that turns slot data into the full card.
+        services.AddSingleton(sp => new InsightCardWriter(
+            cardChatClientFactory(sp.GetRequiredService<IHttpClientFactory>().CreateClient(LlmClientName)),
+            sp.GetRequiredService<IPromptLoader>()));
+        services.AddTransient<InsightCardComposer>();
+
+        /*  The digest email content (spec 2026-09-18) - ComposeDigestActivity always uses these.
+            Settings are read and validated HERE, eagerly - including that every configured prompt
+            version exists on disk - for the same reason as BuildSettings above.                  */
+        var monthlySettings = FreeMonthlySettings.Build(configuration, promptDirectory);
+        services.AddSingleton(monthlySettings);
+
+        /*  FreeDigest:Preview:DraftsDir re-runs the deterministic layers over drafts the model
+            already wrote (see RecordedDraftClient) - no billed call. Development only, like
+            ReplayDir below: ignored unless the preview is enabled.                            */
+        var draftsDir = configuration.GetValue("FreeDigest:Preview:Enabled", false)
+            ? configuration["FreeDigest:Preview:DraftsDir"]
+            : null;
+
+        /*  Recorded-first, live-after: the first draft is replayed, a validator redraft (whose
+            message is not the recorded input) goes to the live writer - otherwise the redraft
+            would be answered with the very draft it is meant to fix.                          */
+        if (draftsDir is { Length: > 0 })
+            services.AddSingleton(sp => new FreeMonthlyDigestWriter(
+                new RecordedDraftClient(Path.GetFullPath(draftsDir), sp.GetRequiredService<IClaudeClient>()), sp.GetRequiredService<IPromptLoader>()));
+        else
+            services.AddSingleton<FreeMonthlyDigestWriter>();
+
+        /*  FreeDigest:Preview:ReplayDir replaces SQL with slot data captured earlier to disk, so
+            prompt and model tuning can continue when the UAT database is unavailable. Development
+            only: it is ignored unless FreeDigest:Preview:Enabled is also true, which no deployed
+            worker sets. See CapturedFreeMonthlyDigestRepository.                                */
+        var replayDir = configuration.GetValue("FreeDigest:Preview:Enabled", false)
+            ? configuration["FreeDigest:Preview:ReplayDir"]
+            : null;
+
+        if (replayDir is { Length: > 0 })
+            services.AddSingleton<IFreeMonthlyDigestRepository>(_ => new CapturedFreeMonthlyDigestRepository(Path.GetFullPath(replayDir)));
+        else
+            services.AddSingleton<IFreeMonthlyDigestRepository>(_ => new SqlFreeMonthlyDigestRepository(Require(configuration, "ConnectionStrings:RegTrack")));
+        services.AddTransient<FreeMonthlyDigestComposer>();
 
         // ADR-0002 (2026-09-11) - the insight JSON POST lane. Registered unconditionally (same
         // "inert unless configured" pattern as FreeDigestScheduler below) - a named HttpClient with
@@ -131,11 +192,10 @@ public static class FreeDigestRegistration
 
     private static FreeDigestSettings BuildSettingsCore(IConfiguration configuration) => new()
     {
-        TokenCap = configuration.GetValue<int?>("Budget:FreeDigestTokenCap")
-                   ?? throw new InvalidOperationException("Budget:FreeDigestTokenCap is not configured."),
         InsightJsonTokenCap = configuration.GetValue("Budget:InsightJsonTokenCap", 3000),
         FromAddress = Require(configuration, "Email:FromAddress"),
         FromName = configuration["Email:FromName"] ?? "RegTrack Insights",
+        CdnBaseUrl = Require(configuration, "Email:CdnBaseUrl").TrimEnd('/'),
         UpgradeUrl = Require(configuration, "Email:UpgradeUrl"),
         PortalUrl = configuration["Email:PortalUrl"],
         UnsubscribeBaseUrl = Require(configuration, "Email:UnsubscribeBaseUrl"),
@@ -151,11 +211,10 @@ public static class FreeDigestRegistration
         ScheduleTimeZone = TimeZoneInfo.FindSystemTimeZoneById(configuration["FreeDigest:Schedule:TimeZone"] ?? "India Standard Time"),
         GenerateDay = Enum.Parse<DayOfWeek>(configuration["FreeDigest:Schedule:GenerateDay"] ?? "Sunday"),
         SendDay = Enum.Parse<DayOfWeek>(configuration["FreeDigest:Schedule:SendDay"] ?? "Monday"),
-        SendHourLocal = configuration.GetValue("FreeDigest:Schedule:SendHourLocal", 9),
+        GenerateHourLocal = RequireHour(configuration, "FreeDigest:Schedule:GenerateHourLocal", 0),
+        SendHourLocal = RequireHour(configuration, "FreeDigest:Schedule:SendHourLocal", 8),
         ArtifactFreshnessDays = configuration.GetValue("FreeDigest:Artifact:FreshnessDays", 3),
         ArtifactRetentionDays = configuration.GetValue("FreeDigest:Artifact:RetentionDays", 90),
-        EmailRateLimitPerSecond = configuration.GetValue("Email:RateLimit:RequestsPerSecond", 5),
-        EmailRateLimitAcquireTimeout = TimeSpan.FromSeconds(configuration.GetValue("Email:RateLimit:AcquireTimeoutSeconds", 30)),
 
         // ADR-0002 (2026-09-11) - deliberately NOT Require()'d. The destination endpoint is not
         // configured yet (the user will supply it later); the worker must still boot with this
@@ -172,7 +231,25 @@ public static class FreeDigestRegistration
         Both FAIL CLOSED on an unrecognised name. Falling back to a default would mean shipping
         mail, or spending LLM budget, through something nobody selected - the same silent-default
         failure the dictionary's coverage check exists to prevent elsewhere.                    */
-    private static Func<HttpClient, IClaudeClient> BuildChatClientFactory(IConfiguration configuration)
+    /// <param name="reasoningEffortOverride">
+    /// A lane that needs less thinking than the deployment's default (the insight card, ADR-0004).
+    /// Applied ONLY when the deployment is already a reasoning one: setting an effort on a
+    /// non-reasoning deployment switches the request to <c>max_completion_tokens</c> and it would
+    /// reject the call outright.
+    /// </param>
+    private static Func<HttpClient, IClaudeClient> BuildChatClientFactory(IConfiguration configuration, string? reasoningEffortOverride = null)
+    {
+        /*  [2026-09-29] Every free-digest client is wrapped in TracingClaudeClient, so each model
+            call (email AND insight card) reaches the "Insights Basic" LangFuse project with its
+            tokens, tenant, user and month. A no-op when that project is not configured - see
+            ObservabilityRegistration.AddFreeDigestLangfuse.                                    */
+        var captureContent = configuration.GetValue("Otel:Basic:CaptureContent", false);
+        var inner = BuildUntracedChatClientFactory(configuration, reasoningEffortOverride, out var system, out var model);
+        return http => new TracingClaudeClient(inner(http), system, model, captureContent);
+    }
+
+    private static Func<HttpClient, IClaudeClient> BuildUntracedChatClientFactory(
+        IConfiguration configuration, string? reasoningEffortOverride, out string system, out string model)
     {
         var provider = Require(configuration, "Llm:Provider");
 
@@ -182,16 +259,74 @@ public static class FreeDigestRegistration
                 var endpoint = Require(configuration, "Llm:AzureOpenAi:Endpoint");
                 var deployment = Require(configuration, "Llm:AzureOpenAi:Deployment");
                 var azureKey = Require(configuration, "Llm:AzureOpenAi:ApiKey");
-                return http => new AzureOpenAiChatClient(http, endpoint, deployment, azureKey);
+
+                /*  Optional, and deliberately so: absent means no temperature is sent and the
+                    deployment's own default applies. An explicit value is rejected outright by some
+                    deployments, so this must stay "unset" rather than defaulting to a number.     */
+                var temperature = configuration["Llm:AzureOpenAi:Temperature"] is { Length: > 0 } rawTemperature
+                    ? double.TryParse(rawTemperature, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && parsed is >= 0 and <= 2
+                        ? parsed
+                        : throw new InvalidOperationException("Llm:AzureOpenAi:Temperature must be a number between 0 and 2, or absent to use the deployment default.")
+                    : (double?)null;
+
+                /*  ReasoningEffort present = this is a reasoning deployment (gpt-5.6-luna and
+                    siblings). It steers accuracy in place of temperature, which such a model
+                    rejects outright - so the two are mutually exclusive and setting both stops
+                    startup rather than failing on the first call at 3am. Leave it empty for
+                    gpt-4o-mini and nothing about the request changes.                          */
+                var effort = configuration["Llm:AzureOpenAi:ReasoningEffort"]?.Trim().ToLowerInvariant();
+                if (effort is { Length: > 0 })
+                {
+                    if (effort is not ("none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max"))
+                        throw new InvalidOperationException($"Llm:AzureOpenAi:ReasoningEffort '{effort}' is not a known level (none|minimal|low|medium|high|xhigh|max).");
+
+                    if (temperature is not null)
+                        throw new InvalidOperationException(
+                            "Llm:AzureOpenAi:Temperature and ReasoningEffort are both set. A reasoning model rejects "
+                            + "temperature - clear Temperature and use ReasoningEffort as the accuracy control.");
+                }
+
+                var verbosity = configuration["Llm:AzureOpenAi:Verbosity"]?.Trim().ToLowerInvariant();
+                if (verbosity is { Length: > 0 } and not ("low" or "medium" or "high"))
+                    throw new InvalidOperationException($"Llm:AzureOpenAi:Verbosity '{verbosity}' is not a known level (low|medium|high).");
+
+                /*  Sized in THOUSANDS when reasoning is on: reasoning tokens are spent from this same
+                    budget, so a reply-sized number lets the model think itself out of an answer and
+                    return an empty body.                                                          */
+                int? maxOutputTokens = int.TryParse(configuration["Llm:AzureOpenAi:MaxOutputTokens"], out var parsedMax) ? parsedMax : null;
+                if (effort is { Length: > 0 } && maxOutputTokens is null or < 1000)
+                    throw new InvalidOperationException(
+                        "Llm:AzureOpenAi:MaxOutputTokens must be at least 1000 when ReasoningEffort is set. "
+                        + "Reasoning tokens come out of it, so a small budget returns an empty body. 8000 is a sensible start.");
+
+                /*  A lane may think less than the deployment's default, never more cheaply than it
+                    can: an override on a deployment with no reasoning effort at all is ignored,
+                    because turning reasoning ON for one lane would change the request shape.    */
+                if (reasoningEffortOverride is { Length: > 0 } && effort is { Length: > 0 })
+                {
+                    effort = reasoningEffortOverride.Trim().ToLowerInvariant();
+                    if (effort is not ("none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max"))
+                        throw new InvalidOperationException(
+                            $"Llm:AzureOpenAi:InsightCardReasoningEffort '{effort}' is not a known level (none|minimal|low|medium|high|xhigh|max).");
+                }
+
+                system = "azure_openai";
+                model = deployment;
+                return http => new AzureOpenAiChatClient(
+                    http, endpoint, deployment, azureKey, temperature, effort, verbosity, maxOutputTokens);
 
             case "openai":
                 var openAiKey = Require(configuration, "Llm:OpenAi:ApiKey");
                 var openAiModel = configuration["Llm:OpenAi:Model"] ?? "gpt-4o-mini";
+                system = "openai";
+                model = openAiModel;
                 return http => new OpenAiChatClient(http, openAiKey, openAiModel);
 
             case "anthropic":
                 var anthropicKey = Require(configuration, "Llm:Anthropic:ApiKey");
                 var anthropicModel = Require(configuration, "Llm:Anthropic:Model");
+                system = "anthropic";
+                model = anthropicModel;
                 return http => new AnthropicClaudeClient(http, anthropicKey, anthropicModel);
 
             default:
@@ -200,33 +335,56 @@ public static class FreeDigestRegistration
         }
     }
 
-    private static Func<HttpClient, IEmailSender> BuildEmailSenderFactory(IConfiguration configuration)
+    /*  Per-tenant routing (2026-09-25): ANY tenant can be routed to EITHER provider by
+        dbo.EmailDeliveryGatewayCustomization, so both keys and both rate limits are required at
+        startup - a missing SendGrid key must stop the host now, not fail the first SendGrid-routed
+        tenant on a Monday morning.                                                             */
+    private static Func<HttpClient, IEmailSenderRegistry> BuildEmailSenderRegistryFactory(IConfiguration configuration)
     {
-        var provider = Require(configuration, "Email:Provider");
+        /*  Email:Provider used to pick ONE provider for every tenant. Silently ignoring a leftover
+            value would let someone believe they had forced all mail through one provider when
+            they had not - so its presence stops startup and says what replaced it.             */
+        if (configuration["Email:Provider"] is { Length: > 0 } retired)
+            throw new InvalidOperationException(
+                $"Email:Provider ('{retired}') is retired - the provider is now chosen per tenant from "
+                + "dbo.EmailDeliveryGatewayCustomization (no row = Email:DefaultGatewayId). Remove the key.");
 
-        switch (Normalise(provider))
+        var elasticKey = Require(configuration, "Email:ElasticEmail:ApiKey");
+        var sendGridKey = Require(configuration, "Email:SendGrid:ApiKey");
+
+        var elasticRate = RequirePositive(configuration, "Email:ElasticEmail:RateLimit:RequestsPerSecond", 5);
+        var elasticAcquire = TimeSpan.FromSeconds(RequirePositive(configuration, "Email:ElasticEmail:RateLimit:AcquireTimeoutSeconds", 30));
+        var sendGridRate = RequirePositive(configuration, "Email:SendGrid:RateLimit:RequestsPerSecond", 5);
+        var sendGridAcquire = TimeSpan.FromSeconds(RequirePositive(configuration, "Email:SendGrid:RateLimit:AcquireTimeoutSeconds", 30));
+
+        return http => new EmailSenderRegistry(new Dictionary<EmailGateway, IEmailSender>
         {
-            case "elasticemail":
-                var elasticKey = Require(configuration, "Email:ElasticEmail:ApiKey");
-                return http => new ElasticEmailSender(http, elasticKey);
+            [EmailGateway.ElasticEmail] = new RateLimitedEmailSender(new ElasticEmailSender(http, elasticKey), elasticRate, elasticAcquire),
+            [EmailGateway.SendGrid] = new RateLimitedEmailSender(new SendGridEmailSender(http, sendGridKey), sendGridRate, sendGridAcquire),
+        });
+    }
 
-            case "sendgrid":
-                var sendGridKey = Require(configuration, "Email:SendGrid:ApiKey");
-                return http => new SendGridEmailSender(http, sendGridKey);
+    /// <summary>Email:DefaultGatewayId - the provider for a tenant with no active gateway row. An EmailGatewayMaster ID; default 1 (Elastic Email).</summary>
+    private static EmailGateway ReadDefaultEmailGateway(IConfiguration configuration)
+    {
+        var id = configuration.GetValue("Email:DefaultGatewayId", (int)EmailGateway.ElasticEmail);
 
-            case "failover":
-                /*  Order matters: FailoverEmailSender only tries the secondary when the primary
-                    throws, so the pair is not symmetric.                                        */
-                var primaryKey = Require(configuration, "Email:ElasticEmail:ApiKey");
-                var secondaryKey = Require(configuration, "Email:SendGrid:ApiKey");
-                return http => new FailoverEmailSender(
-                    new ElasticEmailSender(http, primaryKey),
-                    new SendGridEmailSender(http, secondaryKey));
+        return Enum.IsDefined(typeof(EmailGateway), id)
+            ? (EmailGateway)id
+            : throw new InvalidOperationException(
+                $"Email:DefaultGatewayId {id} is not a known gateway. Expected 1 (Elastic Email) or 2 (SendGrid).");
+    }
 
-            default:
-                throw new InvalidOperationException(
-                    $"Unknown Email:Provider '{provider}'. Expected elastic_email, sendgrid or failover.");
-        }
+    private static int RequirePositive(IConfiguration configuration, string key, int defaultValue)
+    {
+        var value = configuration.GetValue(key, defaultValue);
+        return value > 0 ? value : throw new InvalidOperationException($"{key} must be greater than 0 (was {value}).");
+    }
+
+    private static int RequireHour(IConfiguration configuration, string key, int defaultValue)
+    {
+        var value = configuration.GetValue(key, defaultValue);
+        return value is >= 0 and <= 23 ? value : throw new InvalidOperationException($"{key} must be an hour from 0 to 23 (was {value}).");
     }
 
     /// <summary>

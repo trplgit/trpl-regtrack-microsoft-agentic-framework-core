@@ -36,7 +36,8 @@ public sealed class ReportContentService(
     IReportBlobReader blobReader,
     IReportViewPublisher viewPublisher,
     TimeSpan sasLifetime,
-    ILogger<ReportContentService> logger) : IReportContentService
+    ILogger<ReportContentService> logger,
+    IReasoningTraceStore? reasoningTraceStore = null) : IReportContentService
 {
     public async Task<ReportContentResult?> OpenAsync(
         Guid reportId, int tenantId, int viewerUserId, CancellationToken cancellationToken = default)
@@ -63,7 +64,37 @@ public sealed class ReportContentService(
         var encryptedContent = await blobReader.ReadAsync(new BlobLocation(report.BlobContainer, report.BlobPath), cancellationToken);
         var plaintextHtml = await decryptor.DecryptAsync(encryptedContent, report.EncryptedAesKey, report.KeyVaultObjectVersion, cancellationToken);
 
-        var location = await viewPublisher.PublishAsync(plaintextHtml, sasLifetime, cancellationToken);
+        var location = await viewPublisher.PublishAsync(plaintextHtml, sasLifetime, cancellationToken: cancellationToken);
+
+        // [ADDED 2026-09-26] The reasoning trace (ReasoningExplainerAgent's real Markdown output) -
+        // optional on BOTH ends: reasoningTraceStore is null when this host was never configured
+        // with one (every existing caller/test keeps compiling and behaving unchanged), and even
+        // when configured, a specific report may simply have no trace (generated before this
+        // feature shipped, or the write failed and was swallowed at generation time - see the
+        // orchestrator's own fail-soft stance on this). The path is fully re-derived from columns
+        // GeneratedReport already stores (CustomerId, ReportType, GeneratedAtUtc, Id) - no new
+        // schema needed. Same "never a long-lived SAS against the permanent artifact" rule as the
+        // report itself: read the permanent plain-text blob, then republish a fresh throwaway copy
+        // through the SAME viewPublisher, same short TTL - never a SAS minted directly against the
+        // permanent reasoning-trace blob.
+        Uri? reasoningContentUrl = null;
+        if (reasoningTraceStore is not null)
+        {
+            var reasoningPath = AzureReasoningTraceStore.BuildBlobPath(
+                new BlobPathContext(report.CustomerId, report.ReportType, DateOnly.FromDateTime(report.GeneratedAtUtc), report.Id));
+            var reasoningMarkdown = await reasoningTraceStore.ReadIfExistsAsync(
+                new BlobLocation(report.BlobContainer, reasoningPath), cancellationToken);
+
+            if (reasoningMarkdown is not null)
+            {
+                var reasoningLocation = await viewPublisher.PublishAsync(
+                    // [2026-09-29] Served as .txt (user decision) - new traces are plain text (prompt 08 v3);
+                    // an older Markdown trace still opens fine as text.
+                    reasoningMarkdown, sasLifetime, extension: "txt", contentType: "text/plain; charset=utf-8",
+                    cancellationToken: cancellationToken);
+                reasoningContentUrl = reasoningLocation.ContentUrl;
+            }
+        }
 
         // sql/19 - stamped only on a SUCCESSFUL view (past the scope re-check, decrypt and
         // publish above), never on a refusal. This is the paid keep-warm scheduler's sole signal
@@ -79,7 +110,7 @@ public sealed class ReportContentService(
             "Report {ReportId} (tenant {TenantId}, scope {ScopeDescriptor}) opened by user {UserId} at {OpenedAtUtc}.",
             reportId, tenantId, report.ScopeDescriptor, viewerUserId, DateTimeOffset.UtcNow);
 
-        return new ReportContentResult(location.ContentUrl, location.ExpiresUtc, SandboxRequired: true);
+        return new ReportContentResult(location.ContentUrl, location.ExpiresUtc, SandboxRequired: true, reasoningContentUrl);
     }
 
     private async Task<bool> CoversReportScopeAsync(

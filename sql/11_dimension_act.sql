@@ -35,6 +35,16 @@
   population. A hardcoded list of law names would be exactly the kind of literal
   this project bans. CONFIRM the proxy with the BA before narrating adoption lag
   to a customer.
+
+  -- [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default --
+  @WindowStart/@WindowEnd are now REQUIRED. Act.StartDate (the law's own enactment
+  date, see the open item above) is NOT the scoping date - it would near-empty this
+  dimension for almost every tenant, since most laws predate any selectable window.
+  Scoping instead answers "which of this tenant's obligations had a scheduled
+  occurrence in the selected period", via ComplianceScheduleOn - see the note at
+  #inst's window-gate step below for the full mechanism, matching sql/23
+  TimelinessFY's proven pattern. This is a period picker window (30/60/90 days or a
+  quarter), never a fiscal year - FY-only scoping stays specific to TimelinessFY.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -46,6 +56,8 @@ GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_Act
     @UserID      INT,
     @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
     @AsOf        DATETIME = NULL
 AS
 BEGIN
@@ -70,6 +82,39 @@ BEGIN
     FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s;
 
     CREATE CLUSTERED INDEX IX_inst ON #inst (ActID, ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Act's own population (ComplianceInstance via tvfInsightsScopedInstances) carries
+        no per-row date - an instance persists across years while its real due dates
+        live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY: #inst is already materialised and indexed above, so find which
+        of those instances had >=1 scheduled occurrence in the window, then narrow
+        #inst itself down to just those. Every downstream step (overdue join, Act
+        member list, row aggregation, reconciliation) already reads from #inst, so
+        they inherit the window for free - nothing else in this file changes.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51093, N'ACT DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51093, N'ACT DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd;
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
 
     /*-- 2. OVERDUE ------------------------------------------------------*/
     IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
@@ -102,6 +147,7 @@ BEGIN
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
         BranchesCovered       INT            NOT NULL,
         -- derived
         StartDate             DATETIME       NULL,
@@ -110,12 +156,13 @@ BEGIN
     );
 
     INSERT #rows (ActID, ActName, State, RegulatorID, CategoryId, Instances, Overdue,
-                  ImprisonmentInstances, BranchesCovered, StartDate)
+                  ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered, StartDate)
     SELECT
         a.ActID, a.ActName, a.State, a.RegulatorID, a.CategoryId,
         COUNT(i.ComplianceInstanceID),
         SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
         COUNT(DISTINCT i.BranchID),
         a.StartDate
     FROM #act a
@@ -280,6 +327,18 @@ BEGIN
                     ELSE N'' END), N'')
     FROM #rows WHERE Instances >= @rankFloor ORDER BY OverduePct DESC, Instances DESC;
 
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05: on a
+        live pilot the rate-ranked finding put a 69-obligation area with ZERO
+        imprisonment exposure at rank 1. Both assertions are emitted; the
+        composition layer chooses. Emitted only where exposure exists to rank. */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-ACT-EXP','imprisonment_overdue_count', ActName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by rate.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
+
     /*  The state-divergence assertion carries the SPREAD, not a rate, because
         the finding is that the same law is executed differently - the law is
         not the variable. */
@@ -366,12 +425,19 @@ BEGIN
         exist ONLY here - attached to no assertion and no finding. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
+                   WHEN 'window'                                THEN 'ScopedInstances'
                    WHEN 'flow_metric_drift'                    THEN 'OverduePct'
                    WHEN 'emerging_law_proxy'                   THEN 'ActsReported'
                    WHEN 'acts_without_state'                   THEN 'StatesCovered'
                    WHEN 'instances_not_linked_to_an_act'       THEN 'UnlinkedPct'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear in any row here even if it exists cumulatively.') AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL
@@ -394,7 +460,7 @@ BEGIN
         WHERE @unlinked > 0
     ) q;
 
-    DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #act; DROP TABLE #spread;
+    DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #act; DROP TABLE #spread;
     DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

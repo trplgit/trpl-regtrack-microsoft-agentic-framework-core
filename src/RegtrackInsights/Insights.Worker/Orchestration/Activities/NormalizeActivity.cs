@@ -1,5 +1,6 @@
 using DurableTask.Core;
 using Insights.Presentation;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -34,7 +35,7 @@ public sealed record NormalizeOutput(string Html);
 /// this tenant's particular row count/content; whether a shorter per-user leaderboard (fewer
 /// named rows) changes the failure rate.
 /// </summary>
-public sealed class NormalizeActivity(string? localFallbackDirectory = null) : AsyncTaskActivity<NormalizeInput, NormalizeOutput>
+public sealed class NormalizeActivity(string? localFallbackDirectory, ILogger<NormalizeActivity> logger) : AsyncTaskActivity<NormalizeInput, NormalizeOutput>
 {
     protected override Task<NormalizeOutput> ExecuteAsync(TaskContext context, NormalizeInput input) => RunAsync(input);
 
@@ -51,6 +52,7 @@ public sealed class NormalizeActivity(string? localFallbackDirectory = null) : A
                 File.WriteAllLines(Path.ChangeExtension(path, ".violations.txt"), result.Violations);
             }
 
+            logger.LogWarning("Report refused at normalize gate: {Violations}", string.Join(" | ", result.Violations));
             throw new OrchestrationRefusedException("NOT_NORMALIZABLE", "We couldn't generate this report to our accuracy standard. Our team has been notified.", result.Violations);
         }
 

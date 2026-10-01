@@ -41,6 +41,20 @@
   IsDeleted = 0) still holding live assignments is the continuity risk this
   dimension exists to surface. Keep them and FLAG them - never filter to
   IsActive = 1.
+
+  -- [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default --
+  @WindowStart/@WindowEnd are now REQUIRED. Users' own population carries no
+  per-row date - an instance persists across years while its real due dates live
+  on ComplianceScheduleOn, one row per recurring occurrence. Scoping answers
+  "which of this tenant's obligations had a scheduled occurrence in the selected
+  period", via ComplianceScheduleOn - see the note at #inst's window-gate step
+  below for the full mechanism, matching sql/23 TimelinessFY's and sql/11 Act's
+  proven pattern. This is a period picker window (30/60/90 days or a quarter),
+  never a fiscal year - FY-only scoping stays specific to TimelinessFY. The gate
+  narrows #inst - the SINGLE base population #asg (performer AND reviewer
+  assignments alike) is built from - so both roles inherit the window identically;
+  there is only one instance population here, not two, despite performer and
+  reviewer being different ROLES on the same #inst rows.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -52,6 +66,8 @@ GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_Users
     @UserID      INT,
     @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
     @AsOf        DATETIME = NULL
 AS
 BEGIN
@@ -71,6 +87,41 @@ BEGIN
     FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s;
 
     CREATE CLUSTERED INDEX IX_inst ON #inst (ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Users' own population (ComplianceInstance via tvfInsightsScopedInstances) carries
+        no per-row date - an instance persists across years while its real due dates
+        live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY and sql/11 Act: #inst is already materialised and indexed above,
+        so find which of those instances had >=1 scheduled occurrence in the window,
+        then narrow #inst itself down to just those. #asg (built next, section 2) joins
+        #inst for BOTH performer and reviewer roles, so both inherit the window
+        identically - there is only one instance population in this dimension, not two.
+        Every downstream step (quality, timing, per-user rollup, reconciliation) already
+        reads from #inst/#asg, so they inherit the window for free too.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51104, N'USERS DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51104, N'USERS DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd;
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
 
     IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
     SELECT DISTINCT o.ComplianceInstanceID
@@ -110,6 +161,14 @@ BEGIN
        reviewer timing, which would need a different date pair (submission vs
        review date) and is not built here. Timeliness (facet B2 above) only says
        on_time/delayed; this says BY HOW MUCH, in real days, from real dates:
+       [DECIDED 2026-09-13] Dated is the SYSTEM RECORD date - a real timestamp on 100%
+       of rows. StatusChangedOn is the USER-STATED completion date - midnight on 86.6%
+       of rows, i.e. a date not a timestamp. Record date is used because a completion
+       that was never recorded cannot be evidenced to a regulator. The two disagree
+       materially: tenant 1817 medians of +18 days (record) and -1 day (stated) - the
+       same events, opposite conclusions. The choice is therefore DECLARED in
+       data_quality below, never left implicit.
+
        ComplianceScheduleOn.ScheduleOn (the due date) vs ComplianceTransaction.Dated
        (the actual completion-event date - the same column
        tvfInsightsLatestStatus itself already orders by, confirmed live on tenant
@@ -188,6 +247,7 @@ BEGIN
         Overdue               INT            NOT NULL,
         OverduePct            DECIMAL(5,1)   NULL,
         ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
         BranchesCovered       INT            NOT NULL,
         Logins12m             INT            NOT NULL,
         EngagementBand        VARCHAR(20)    NULL,
@@ -205,7 +265,7 @@ BEGIN
     );
 
     INSERT #rows (UserID, UserName, IsActive, Instances, PerformerInstances, ReviewerInstances,
-                  OtherRoleInstances, Overdue, ImprisonmentInstances, BranchesCovered, Logins12m,
+                  OtherRoleInstances, Overdue, ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered, Logins12m,
                   CompletedEvents, OnTimeEvents)
     SELECT
         a.UserID,
@@ -217,6 +277,7 @@ BEGIN
         COUNT(DISTINCT CASE WHEN a.RoleID NOT IN (3,4) THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT CASE WHEN i.Imprisonment = 1 THEN a.ComplianceInstanceID END),
+        COUNT(DISTINCT CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN a.ComplianceInstanceID END),
         COUNT(DISTINCT i.BranchID),
         ISNULL(MAX(lg.Logins12m), 0),
         ISNULL(MAX(q.CompletedEvents), 0),
@@ -471,6 +532,20 @@ BEGIN
             NULL,@assignedUnion,NULL,NULL,NULL,
             N'single_reviewer_dependency: counted at INSTANCE level so it cannot be double-counted across users');
 
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05: on a
+        live pilot the rate-ranked finding put a 69-obligation area with ZERO
+        imprisonment exposure at rank 1. Both assertions are emitted; the
+        composition layer chooses. Emitted only where exposure exists to rank. */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-USER-EXP','imprisonment_overdue_count', UserName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by '
+         + N'rate or by load. A user holding many low-consequence items is a capacity question; '
+         + N'this is a liability one.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
     SELECT 'assertions' AS ResultSet, * FROM #assert;
 
     /*-- 10. FINDINGS ----------------------------------------------------*/
@@ -537,15 +612,25 @@ BEGIN
         added here so they follow the same binding convention. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
                    WHEN 'flow_metric_drift'                    THEN 'OverduePct'
                    WHEN 'engagement_is_not_quality'            THEN 'LoginBand'
                    WHEN 'users_without_quality_reading'        THEN 'OnTimePct'
                    WHEN 'unassigned_instances'                 THEN 'UnassignedInstances'
                    WHEN 'login_keyed_by_email'                 THEN 'LoginBand'
+                   WHEN 'timing_measured_from_record_date'     THEN 'MedianDaysEarlyLate'
+                   WHEN 'recording_lag'                        THEN 'MedianDaysEarlyLate'
                    WHEN 'implausible_completion_gaps'          THEN 'MedianDaysEarlyLate'
                    WHEN 'undocumented_role_id'                 THEN 'OtherRoleInstances'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear against any user here even if it exists '
+                    + N'cumulatively.') AS Detail
+        UNION ALL
         SELECT 'flow_metric_drift' AS Issue,
                N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
         UNION ALL
@@ -565,6 +650,23 @@ BEGIN
                CONCAT(N'', @unassigned, N' obligation(s) in this scope have no assigned user at all and '
                     + N'therefore appear in no user row.')
         WHERE @unassigned > 0
+        UNION ALL
+        SELECT 'timing_measured_from_record_date',
+               N'MedianDaysEarlyLate is measured from ComplianceTransaction.Dated - the SYSTEM RECORD '
+             + N'date, when the completion was entered. A second date exists: StatusChangedOn, the date '
+             + N'the user states the work was done. They are NOT the same and the choice changes the SIGN '
+             + N'of the answer. Measured live 2026-09-13 on tenant 1817: median 18 days LATE by record '
+             + N'date, 1 day EARLY by stated date - the same events, opposite conclusions. Record date is '
+             + N'used deliberately: a completion that was never recorded cannot be evidenced to a '
+             + N'regulator. NEVER present this as "when the work was done" - it is when the work was '
+             + N'RECORDED.'
+        UNION ALL
+        SELECT 'recording_lag',
+               N'Across four production tenants the record date is later than the user-stated date on 74% '
+             + N'to 99.6% of completed events, never earlier, by a mean of 23 to 66 days. That lag is the '
+             + N'distance between doing the work and being able to prove it, and it inflates every '
+             + N'days-late figure here by roughly that amount. Treat MedianDaysEarlyLate as RECORDING '
+             + N'timeliness, not working timeliness.'
         UNION ALL
         SELECT 'implausible_completion_gaps',
                CONCAT(N'', @timingOutliersExcluded, N' completed event(s) show a gap of more than 365 days '
@@ -590,7 +692,7 @@ BEGIN
         WHERE ids.List IS NOT NULL
     ) q;
 
-    DROP TABLE #inst; DROP TABLE #ovd; DROP TABLE #asg; DROP TABLE #quality;
+    DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #asg; DROP TABLE #quality;
     DROP TABLE #timing; DROP TABLE #medtiming;
     DROP TABLE #login; DROP TABLE #rows; DROP TABLE #detector;
     DROP TABLE #assert; DROP TABLE #find;

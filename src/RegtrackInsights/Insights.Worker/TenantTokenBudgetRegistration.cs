@@ -1,6 +1,7 @@
 using Insights.Data;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker;
 
@@ -27,7 +28,8 @@ public static class TenantTokenBudgetRegistration
     {
         var connectionString = configuration["ConnectionStrings:RegTrackReportsWrite"]
             ?? Require(configuration, "ConnectionStrings:RegTrack");
-        services.AddScoped<ITenantTokenBudgetRepository>(_ => new SqlTenantTokenBudgetRepository(connectionString));
+        services.AddScoped<ITenantTokenBudgetRepository>(sp =>
+            new SqlTenantTokenBudgetRepository(connectionString, sp.GetRequiredService<ILogger<SqlTenantTokenBudgetRepository>>()));
 
         /*  Eager, not a factory lambda - same trap PaidKeepWarmRegistration/FreeDigestRegistration
             already call out: a missing key must throw while the host starts, not on the first run

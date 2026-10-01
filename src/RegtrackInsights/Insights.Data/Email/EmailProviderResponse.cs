@@ -38,4 +38,17 @@ public sealed class EmailProviderException(string providerName, System.Net.HttpS
     public string ProviderName { get; } = providerName;
     public System.Net.HttpStatusCode StatusCode { get; } = statusCode;
     public string ResponseBody { get; } = responseBody;
+
+    /// <summary>
+    /// 400 / 403 / 422: the provider rejected THIS message (bad address, blocked recipient, rejected
+    /// content). Retrying sends the identical request and fails the identical way, so the caller
+    /// records the recipient as failed and moves on instead of spending the retry budget.
+    ///
+    /// Everything else - 401 (bad key), 429 (throttled), 5xx - may clear up and is retried. 401 is
+    /// deliberately NOT here: it affects every recipient on that provider and must stay loud.
+    /// </summary>
+    public bool IsPermanentRecipientFailure => StatusCode is
+        System.Net.HttpStatusCode.BadRequest or
+        System.Net.HttpStatusCode.Forbidden or
+        System.Net.HttpStatusCode.UnprocessableEntity;
 }

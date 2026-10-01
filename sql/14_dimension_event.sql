@@ -28,6 +28,14 @@
   -- FRAME: COMPLIANCE-MODE COVERAGE ----------------------------------------
   The question this answers is not "how are events performing" but "which
   compliance MODES are actually live" - periodic, event-triggered, internal.
+
+  -- [ADDED 2026-09-25, CORRECTED SAME DAY] HARD WINDOW GATE ------------------
+  @WindowStart/@WindowEnd are now REQUIRED, caller-supplied from the period
+  picker (last 30/60/90 days, or a quarter) - filtered on EventInstance.StartDate,
+  the instance's own real temporal anchor. First built as a hardcoded current-FY
+  cut; corrected the same day once it was confirmed FY-only scoping is specific
+  to TimelinessFY, not a default for every dimension. See the window-gate note
+  at #ei's build, below, for the full mechanism.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -39,6 +47,8 @@ GO
 CREATE PROCEDURE dbo.usp_Insights_Dimension_Event
     @UserID          INT,
     @CustomerID      INT,
+    @WindowStart     DATETIME,
+    @WindowEnd       DATETIME,
     @AsOf            DATETIME = NULL,
     @DormancyMonths  INT      = 12      -- activity window; 12 months per the spec's observation
 AS
@@ -56,13 +66,36 @@ BEGIN
     INTO #branch
     FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID) sp;
 
+    /*  [ADDED 2026-09-25, CORRECTED 2026-09-25] HARD WINDOW GATE - caller-supplied
+        period, no FY default. First built as a hardcoded current-FY-only cut; that
+        was wrong - fiscal-year scoping stays specific to TimelinessFY alone. Every
+        other dimension, including this one, takes whatever period the caller
+        resolves from the picker (last 30/60/90 days, or a quarter) and passes as
+        concrete dates, same shape as sql/23 TimelinessFY and sql/11 Act.
+        Event is one of the few dimensions where the base population carries a real
+        per-row date (StartDate) that already means what it needs to mean here:
+        every detector, EarliestStart/LatestStart and DistinctStartDates below
+        already treat StartDate as this instance's own temporal anchor, so
+        filtering the population on it does not change what any existing field
+        represents - it just narrows WHICH instances are in scope, same as every
+        other dimension's scope filters. Half-open range: an instance dated exactly
+        @WindowEnd belongs to the NEXT window, not this one.
+        Applied to #ei itself - the SAME population @eventTotal and every #rows
+        figure is built from - so reconciliation ties out automatically, not
+        because anything downstream was touched.                                */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51122, N'EVENT DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51122, N'EVENT DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
     IF OBJECT_ID('tempdb..#ei') IS NOT NULL DROP TABLE #ei;
     SELECT ei.ID AS EventInstanceID, ei.EventID, ei.CustomerBranchID AS BranchID, ei.StartDate
     INTO #ei
     FROM EventInstance ei
     JOIN CustomerBranch cb ON cb.ID = ei.CustomerBranchID
     JOIN #branch b ON b.BranchID = ei.CustomerBranchID
-    WHERE ei.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.Status = 1 AND cb.CustomerID = @CustomerID;
+    WHERE ei.IsDeleted = 0 AND cb.IsDeleted = 0 AND cb.Status = 1 AND cb.CustomerID = @CustomerID
+      AND ei.StartDate >= @WindowStart AND ei.StartDate < @WindowEnd;
 
     CREATE CLUSTERED INDEX IX_ei ON #ei (EventID, EventInstanceID);
 
@@ -306,11 +339,17 @@ BEGIN
         exist ONLY here - attached to no assertion and no finding. */
     SELECT 'data_quality' AS ResultSet, Issue,
            CASE Issue
+                   WHEN 'window'                               THEN 'ScopedInstances'
                    WHEN 'event_scope_is_branch_only'           THEN 'ScopedInstances'
                    WHEN 'events_may_be_tracked_off_system'     THEN 'EventModuleDormant'
                    WHEN 'no_events_configured'                 THEN 'EventTypesReported'
                    ELSE NULL END AS AppliesToMetric,
            Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to event instances whose StartDate falls between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An event instance outside this window is excluded entirely, not just its activity figures.') AS Detail
+        UNION ALL
         SELECT 'event_scope_is_branch_only' AS Issue,
                N'EventInstance carries no compliance category, so this population is constrained on the '
              + N'BRANCH axis only while every statutory cut is constrained on branch AND category. The '

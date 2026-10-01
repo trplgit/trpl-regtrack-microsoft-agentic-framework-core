@@ -120,4 +120,38 @@ public sealed class InsightsRunIdTests
     [InlineData("  ", "compliance_health", "FY2025-26")]
     public void For_RefusesAnEmptyKeyComponent(string scope, string type, string period) =>
         Assert.Throws<ArgumentException>(() => InsightsRunId.For(23, scope, type, period));
+
+    /// <summary>
+    /// PersistActivity's idempotency key (2026-09-18) - a redelivered activity must derive the
+    /// SAME report id, or a duplicate write is exactly what this exists to prevent.
+    /// </summary>
+    [Fact]
+    public void ReportId_IsDeterministicForTheSameKey()
+    {
+        var a = InsightsRunId.ReportId(23, "tenant", "dimension_selection", "90day::dim=act");
+        var b = InsightsRunId.ReportId(23, "tenant", "dimension_selection", "90day::dim=act");
+
+        Assert.Equal(a, b);
+    }
+
+    [Theory]
+    [InlineData(24, "tenant", "dimension_selection", "90day::dim=act")]
+    [InlineData(23, "entity:92442", "dimension_selection", "90day::dim=act")]
+    [InlineData(23, "tenant", "fixed_holistic", "90day::dim=act")]
+    [InlineData(23, "tenant", "dimension_selection", "90day::dim=nature")]
+    public void ReportId_DiffersWhenAnyKeyComponentDiffers(int tenantId, string scope, string type, string period)
+    {
+        var baseline = InsightsRunId.ReportId(23, "tenant", "dimension_selection", "90day::dim=act");
+
+        Assert.NotEqual(baseline, InsightsRunId.ReportId(tenantId, scope, type, period));
+    }
+
+    /// <summary>Not the same Guid as the orchestration instance id's own hash half happens to imply - different derivation target, same key space.</summary>
+    [Fact]
+    public void ReportId_IsNotTheSameValueAcrossDifferentCalls_SanityAgainstAnAllZeroBug()
+    {
+        var reportId = InsightsRunId.ReportId(23, "tenant", "dimension_selection", "90day::dim=act");
+
+        Assert.NotEqual(Guid.Empty, reportId);
+    }
 }
