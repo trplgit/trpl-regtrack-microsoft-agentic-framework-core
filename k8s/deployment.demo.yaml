@@ -43,6 +43,9 @@ spec:
             - name: ASPNETCORE_URLS
               value: "http://+:8080"
 
+            - name: Agents__MaxConcurrentLlmCalls
+              value: "1"
+
           resources:
             requests:
               cpu: "500m"
@@ -52,9 +55,34 @@ spec:
               cpu: "1"
               memory: "2Gi"
 
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
           securityContext:
             allowPrivilegeEscalation: false
 
             capabilities:
               drop:
                 - ALL
+
+      terminationGracePeriodSeconds: 130
