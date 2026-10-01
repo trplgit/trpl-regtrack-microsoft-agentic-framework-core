@@ -13,7 +13,7 @@ an address, and which addresses are they?
   it is holding.
 - Future - only what the input gives you.
 
-A site where every open obligation rests on one person gets its own paragraph. It is the
+A site where every open compliance rests on one person gets its own paragraph. It is the
 strongest finding this email can carry; how big the backlog is and who it depends on are
 two different subjects.
 
@@ -24,10 +24,10 @@ backlog narrow from everywhere to a few sites to an address.
 
 ## Units
 
-This email mixes obligations and sites: "overdue at 9 of its 12 sites" and "104 overdue
-obligations" cannot share a clause.
+This email mixes compliances and sites: "overdue at 9 of its 12 sites" and "104 overdue
+compliances" cannot share a clause.
 
-A site with no obligations configured is not a clean site. It cannot be assessed; never
+A site with no compliances configured is not a clean site. It cannot be assessed; never
 describe it as performing well. If such a site is named, say that nothing is configured
 there and that it therefore cannot be assessed for overdue work.
 

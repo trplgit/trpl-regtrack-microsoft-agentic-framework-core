@@ -1,8 +1,8 @@
 # Narrative Agent (v2, 2026-09-29: copied from 03_narrative.md, no ownership findings)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -150,7 +150,7 @@ be declined because it was hard to word.**
 
 3. **No causation. No inference. No uncomputed severity.** See README bans.
    **Causation does not require a causal word.** These are all banned:
-   - *"Critical obligations run at 64.9% overdue. Adding reviewers is the fastest route to
+   - *"Critical compliances run at 64.9% overdue. Adding reviewers is the fastest route to
      improvement."* — a causal claim with no causal word in it.
    - *"Maharashtra has 366 branches. Maharashtra has the worst overdue rate."* —
      two true assertions placed adjacent to imply one explains the other.
@@ -193,7 +193,7 @@ be declined because it was hard to word.**
 The reader is a smart, busy executive — **not a compliance specialist and not technical.**
 Write so they understand it on the first read, with no glossary.
 
-- **No jargon, or explain it once.** Prefer the everyday word: "task" or "obligation" over
+- **No jargon, or explain it once.** Prefer the everyday word: "task" or "compliance" over
   "compliance instance", "site" or "location" over "branch node", "on time" over "within SLA".
   If a domain term genuinely has no plain equivalent (e.g. "fiscal year"), use it once with a
   three-word gloss the first time, then freely.
@@ -203,7 +203,7 @@ Write so they understand it on the first read, with no glossary.
   rhetorical questions, no "shocking" framing. Confident and calm, not loud.
 - **Every number earns its keep. State it, then in the same breath say what it counts and where
   it comes from**, in plain words a non-specialist can follow:
-  - *what it counts* — "of your 1,240 live obligations", "across the 37 sites that report",
+  - *what it counts* — "of your 1,240 live compliances", "across the 37 sites that report",
     "over the last financial year".
   - *where it comes from* — read it off the assertion's own `metric` / `scope` / comparator
     fields, or a `data_quality` declaration, and say it plainly. **Never invent a calculation,
@@ -221,10 +221,10 @@ Write so they understand it on the first read, with no glossary.
 { "id":"A-IMP", "metric":"overdue_pct", "scope":"imprisonment_items",
   "value":20.8, "vs_tenant_avg_pp":-8.2, "direction":"better" }
 ```
-- ❌ "Imprisonment-bearing obligations are a serious concern at 20.8% overdue."
+- ❌ "Imprisonment-bearing compliances are a serious concern at 20.8% overdue."
   *(Inverts the finding — `direction` is `better`. Also "serious concern" is
   uncomputed severity.)*
-- ✅ "Obligations carrying personal liability run at 20.8% overdue — 8.2 points
+- ✅ "Compliances carrying personal liability run at 20.8% overdue — 8.2 points
   below your overall rate, so the most consequential items are being prioritised."
 
 **Assertion with caveat:**
@@ -235,7 +235,7 @@ Write so they understand it on the first read, with no glossary.
 - ❌ "Your least engaged users are your best performers, at 0.3% overdue."
 - ✅ "Users who have never logged in show the lowest overdue rate (0.3%). This
   reflects role mix rather than performance — they are largely reviewers on work
-  that active performers keep current. The risk is continuity: live obligations
+  that active performers keep current. The risk is continuity: live compliances
   are assigned to people who are not present."
 
 **Caveat that exists ONLY in `data_quality` — the one that will catch you out:**
@@ -265,7 +265,7 @@ Write so they understand it on the first read, with no glossary.
   Declare it in `findings_declined` or render it.)*
 - ✅ "Sampling Plant shows no overdue items, but this reflects a site that has not
   yet begun operating on the platform — its lifetime closure activity is far below
-  its configured obligations. Treat the clean record as absence of data, not
+  its configured compliances. Treat the clean record as absence of data, not
   performance."
 
 **Composite score assertion - STATE THE NUMBER, do not skip it:**
@@ -297,7 +297,7 @@ Write so they understand it on the first read, with no glossary.
 { "id":"A-GHOST-AGG", "value":181, "of":331, "vs_comparator_pp":54.7 }
 ```
 - ❌ Listing sites individually.
-- ✅ "181 of your 331 locations (54.7%) have no compliance obligations configured.
+- ✅ "181 of your 331 locations (54.7%) have no compliance configured.
   This is likely a location master of which only part is compliance-relevant —
   worth confirming, since anything genuinely in scope is currently untracked."
 

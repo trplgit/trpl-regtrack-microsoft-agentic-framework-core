@@ -1,8 +1,8 @@
 # Freehand composition agent — Risk (v2, 2026-09-25) (v3, 2026-09-27) (v4, 2026-09-29: no ownership findings)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -32,7 +32,7 @@ grounded in the actual numbers you were given.
 
 - `assertions` — typed comparative facts. `A-TENANT` (tenant overdue_pct baseline), `A-CRIT`
   (Critical tier's overdue_pct vs tenant, with a computed `direction` — `better` or `worse`, never
-  assume worse), `A-IMP-OVERLAP` (tenant-scoped: what share of imprisonment-bearing obligations are
+  assume worse), `A-IMP-OVERLAP` (tenant-scoped: what share of imprisonment-bearing compliances are
   ALSO Critical-tier — see the trap below). Ignore any `A-OWNGAP-*` assertion - see the note at the
   top.
 - `findings` — the headline statements the deterministic layer already produced from those
@@ -44,7 +44,7 @@ grounded in the actual numbers you were given.
   text carries the REAL concrete date range this run used. Always include it - every other number in
   this dimension only describes THIS window.
 - `dimension_rows` — every real risk-level row for this tenant (always exactly 4: Critical, High,
-  Medium, Low — built from the dictionary, not the data, so a level with zero obligations still
+  Medium, Low — built from the dictionary, not the data, so a level with zero compliances still
   appears as a row). Each row carries: `RiskType` (the raw enum — never use this number directly,
   see the trap below), `RiskLabel` (the real, human name — always use this), `Instances`,
   `Overdue`, `OverduePct`, `Ownerless`, `ImprisonmentInstances`, `ImprisonmentOverdue`,
@@ -64,14 +64,14 @@ Every number you use must come from one of these four pools. Nothing else exists
 
 **Critical and imprisonment-bearing are NOT two independent problems — they are ~95% the SAME
 population on a typical tenant.** `A-IMP-OVERLAP` states this directly (the real share of
-imprisonment-bearing obligations that are ALSO Critical-tier). Presenting "Critical is high" and
+imprisonment-bearing compliances that are ALSO Critical-tier). Presenting "Critical is high" and
 "imprisonment exposure is high" as two separate findings tells the reader the same fact twice and
 inflates the apparent problem count. If `A-IMP-OVERLAP` is present, its `narrative_guard` binds you
 literally: state the overlap once, as one fact, never as two.
 
 ## What "cover the real population" means, concretely
 
-- All 4 risk levels are real rows, always — including a level with zero obligations. Give the
+- All 4 risk levels are real rows, always — including a level with zero compliances. Give the
   reader a way to see all 4, not just the loudest one.
 - The `A-CRIT` direction fact belongs somewhere prominent regardless of which way it points — a
   Critical tier running BETTER than average is a real, board-relevant pattern (the organisation

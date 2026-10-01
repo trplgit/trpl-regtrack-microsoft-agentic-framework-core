@@ -1,8 +1,8 @@
 # Report Generation — Nature of Compliance, freehand (v4, 2026-09-27) (v5, 2026-09-29: no ownership findings)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -187,7 +187,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -346,7 +346,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -428,7 +428,7 @@ always present — see below.
 | "{N} of {M} instances are properly categorised by nature" | **REAL** — but must be paired with `UncategorisedPct`/`UncategorisedInstances` in the SAME breath, never stated alone as if categorisation were complete. |
 | "This report covers the full estate by nature" | **NOT AVAILABLE as an unqualified claim** — roughly half the estate is typically uncategorised (`UncategorisedPct`). State the real coverage fraction instead. |
 | "{Nature} has the highest overdue rate" | **REAL, only for a real named nature** — `A-WORST-NATURE`. The "Others" row is NEVER eligible for this claim even if its own `OverduePct` is numerically highest — it is excluded from the ranking by construction; never override that by computing your own rank from the raw rows. |
-| "{Nature} carries personal liability on {X}% of its obligations" | **REAL** — `ImprisonmentSharePct` (a real per-nature rate) or `A-IMPLIN-*`. Do not present this as a SEPARATE exposure from Critical risk — this run has no Risk-dimension data to check that overlap; state the real percentage without an independence claim either way. |
+| "{Nature} carries personal liability on {X}% of its compliances" | **REAL** — `ImprisonmentSharePct` (a real per-nature rate) or `A-IMPLIN-*`. Do not present this as a SEPARATE exposure from Critical risk — this run has no Risk-dimension data to check that overlap; state the real percentage without an independence claim either way. |
 | A root cause for why a nature runs worse, or why the estate is uncategorised | **NOT AVAILABLE** — state the pattern, never infer why. |
 | "Untagged" as a nature with its own name/identity | **NOT AVAILABLE** — untagged instances are a real control-total figure (`UntaggedInstances`), not a member with a name. Never invent a row for it. |
 
@@ -443,7 +443,7 @@ already written for you — **use it**, do not paraphrase it into something vagu
 `detail` names the actual concrete date range this run was scoped to.
 
 - ❌ "The supplied window data-quality flag applies; no further definition was provided."
-- ✅ "This view covers obligations with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
+- ✅ "This view covers compliances with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
   only — a nature's real counts here reflect only that window, not the tenant's all-time nature
   breakdown." (the real dates come from the `window` entry's own `detail` text, reformatted for
   readability, never invented)

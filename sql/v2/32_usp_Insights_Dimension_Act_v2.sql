@@ -1,0 +1,442 @@
+/*===========================================================================
+  RegTrack Insights - v2 (2026-09-29): follow RegTrack's own Detailed Report
+  Object : dbo.usp_Insights_Dimension_Act
+  Base   : the definition DEPLOYED on UAT on 2026-09-29 (not the repo copy)
+  Change : the window gate counts only active due dates (IsActive = 1 AND IsUpcomingNotDeleted = 1). Population and overdue come from the v2 functions.
+  Why    : product decision 2026-09-29 - Insights must count what RegTrack's own
+           Detailed Report (Kendo_DetailedReport_Pagination) counts. See
+           sql/v2/README.md for the full rule list and the parity proof.
+  [FIX 2026-09-30] The overdue join was scope-constrained by ComplianceInstanceID
+  alone (see #ovd below), not by which SPECIFIC occurrence is overdue. An instance
+  in scope for this window (via #active) whose window occurrence is NOT overdue
+  still got flagged overdue if it had any OTHER, out-of-window occurrence that was
+  overdue (found live via the "Detailed Report.xlsx" ground-truth reconciliation,
+  tenant 1285/Adi Demo Customer, Aug 2026: proc reported 25 overdue, real answer
+  is 18). #ovd now also requires the overdue occurrence's own ScheduleOn to fall
+  inside [@WindowStart, @WindowEnd) - the same bound #active already uses.
+===========================================================================*/
+SET NOCOUNT ON;
+GO
+IF OBJECT_ID('dbo.usp_Insights_Dimension_Act', 'P') IS NOT NULL DROP PROCEDURE dbo.usp_Insights_Dimension_Act;
+GO
+CREATE PROCEDURE dbo.usp_Insights_Dimension_Act
+    @UserID      INT,
+    @CustomerID  INT,
+    @WindowStart DATETIME,
+    @WindowEnd   DATETIME,
+    @AsOf        DATETIME = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @AsOf IS NULL SET @AsOf = GETDATE();
+
+    /*-- 0. PRE-FLIGHT --------------------------------------------------*/
+    IF NOT EXISTS (SELECT 1 FROM dbo.tvfInsightsScopePairs(@UserID, @CustomerID))
+        THROW 51090, N'SCOPE DENIED - user has no authorised (branch, category) pairs for this tenant. Refusing to compute.', 1;
+
+    EXEC dbo.usp_Insights_AssertStatusCoverage;
+
+    /*-- 1. SCOPED INSTANCE BASE ----------------------------------------*/
+    IF OBJECT_ID('tempdb..#inst') IS NOT NULL DROP TABLE #inst;
+    SELECT
+        s.ComplianceInstanceID,
+        s.BranchID,
+        s.Imprisonment,
+        s.ActID,
+        s.CategoryId
+    INTO #inst
+    FROM dbo.tvfInsightsScopedInstances(@UserID, @CustomerID) s;
+
+    CREATE CLUSTERED INDEX IX_inst ON #inst (ActID, ComplianceInstanceID);
+
+    /*  [ADDED 2026-09-25] HARD WINDOW GATE - caller-supplied period, no FY default.
+        Act's own population (ComplianceInstance via tvfInsightsScopedInstances) carries
+        no per-row date - an instance persists across years while its real due dates
+        live on ComplianceScheduleOn, one row per recurring occurrence (a single
+        instance can have dozens). "Which instances are in scope for the selected
+        period" is answered at the SCHEDULE level, same proven pattern as sql/23
+        TimelinessFY: #inst is already materialised and indexed above, so find which
+        of those instances had >=1 scheduled occurrence in the window, then narrow
+        #inst itself down to just those. Every downstream step (overdue join, Act
+        member list, row aggregation, reconciliation) already reads from #inst, so
+        they inherit the window for free - nothing else in this file changes.
+        Do NOT reintroduce a join hint or skip the materialise-first step - the same
+        shape of query against ComplianceScheduleOn's 29.4M rows without it measured
+        183,502 ms on a real tenant versus 157 ms scoped-first (sql/23's own numbers).
+        @WindowStart/@WindowEnd are REQUIRED, always caller-resolved from a period-
+        picker choice (last 30/60/90 days, or a quarter) - no fiscal-year default here,
+        that convention stays specific to TimelinessFY alone.                          */
+    IF @WindowStart IS NULL OR @WindowEnd IS NULL
+        THROW 51093, N'ACT DIMENSION - @WindowStart and @WindowEnd are required (resolve the period-picker choice to a concrete date range before calling).', 1;
+    IF @WindowEnd <= @WindowStart
+        THROW 51093, N'ACT DIMENSION - @WindowEnd must be strictly after @WindowStart.', 1;
+
+    IF OBJECT_ID('tempdb..#active') IS NOT NULL DROP TABLE #active;
+    SELECT DISTINCT cso.ComplianceInstanceID
+    INTO #active
+    FROM #inst i
+    JOIN ComplianceScheduleOn cso ON cso.ComplianceInstanceID = i.ComplianceInstanceID
+    WHERE cso.ScheduleOn >= @WindowStart AND cso.ScheduleOn < @WindowEnd
+      AND cso.IsActive = 1 AND cso.IsUpcomingNotDeleted = 1;   -- [v2] switched-off due dates do not count (RegTrack parity)
+    CREATE CLUSTERED INDEX IX_active ON #active (ComplianceInstanceID);
+
+    DELETE i FROM #inst i
+    WHERE NOT EXISTS (SELECT 1 FROM #active a WHERE a.ComplianceInstanceID = i.ComplianceInstanceID);
+
+    /*-- 2. OVERDUE ------------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#ovd') IS NOT NULL DROP TABLE #ovd;
+    SELECT DISTINCT o.ComplianceInstanceID
+    INTO #ovd
+    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
+    JOIN #inst i ON i.ComplianceInstanceID = o.ComplianceInstanceID
+    -- [FIX 2026-09-30, found live REQ-1085/Detailed Report reconciliation, tenant 1285] o was
+    -- matched by ComplianceInstanceID alone - an instance in #inst (window-active) whose window
+    -- occurrence is NOT overdue still got flagged overdue here if it had ANY other, out-of-window
+    -- occurrence that was overdue (e.g. a July-overdue + August-pending pair, reported for an
+    -- August window). tvfInsightsOverdueSchedules carries its own ScheduleOn per occurrence -
+    -- constrain it to THIS window too, same bound #active already uses.
+    WHERE o.ScheduleOn >= @WindowStart AND o.ScheduleOn < @WindowEnd;
+
+    /*-- 3. MEMBER LIST = the Acts actually in scope ---------------------
+       Unlike Location or Nature there is no bounded master worth walking -
+       the Act table is national. The member list is the set of Acts this
+       scope touches, which is why an Act with zero instances cannot exist
+       here and no "unused member" declaration is needed.               */
+    IF OBJECT_ID('tempdb..#act') IS NOT NULL DROP TABLE #act;
+    SELECT DISTINCT a.ID AS ActID, a.Name AS ActName, a.State, a.StateID,
+           a.RegulatorID, a.ComplianceCategoryId AS CategoryId, a.StartDate
+    INTO #act
+    FROM Act a
+    WHERE EXISTS (SELECT 1 FROM #inst i WHERE i.ActID = a.ID);
+
+    /*-- 4. ROWS ---------------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
+    CREATE TABLE #rows (
+        ActID                 INT            NOT NULL PRIMARY KEY,
+        ActName               NVARCHAR(500)  NULL,
+        State                 NVARCHAR(200)  NULL,
+        RegulatorID           INT            NULL,
+        CategoryId            INT            NULL,
+        Instances             INT            NOT NULL,
+        Overdue               INT            NOT NULL,
+        OverduePct            DECIMAL(5,1)   NULL,
+        ImprisonmentInstances INT            NOT NULL,
+        ImprisonmentOverdue   INT            NOT NULL,   -- [ADDED 2026-09-13] consequence ranking
+        BranchesCovered       INT            NOT NULL,
+        -- derived
+        StartDate             DATETIME       NULL,
+        OverdueRank           INT            NULL,
+        Flags                 VARCHAR(200)   NULL
+    );
+
+    INSERT #rows (ActID, ActName, State, RegulatorID, CategoryId, Instances, Overdue,
+                  ImprisonmentInstances, ImprisonmentOverdue, BranchesCovered, StartDate)
+    SELECT
+        a.ActID, a.ActName, a.State, a.RegulatorID, a.CategoryId,
+        COUNT(i.ComplianceInstanceID),
+        SUM(CASE WHEN o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END),
+        SUM(CASE WHEN i.Imprisonment = 1 AND o.ComplianceInstanceID IS NOT NULL THEN 1 ELSE 0 END),
+        COUNT(DISTINCT i.BranchID),
+        a.StartDate
+    FROM #act a
+    LEFT JOIN #inst i ON i.ActID = a.ActID
+    LEFT JOIN #ovd  o ON o.ComplianceInstanceID = i.ComplianceInstanceID
+    GROUP BY a.ActID, a.ActName, a.State, a.RegulatorID, a.CategoryId, a.StartDate;
+
+    /*-- 5. RECONCILIATION, with the unlinked bucket counted back --------*/
+    DECLARE @rowSum      INT = (SELECT ISNULL(SUM(Instances),0) FROM #rows);
+    DECLARE @scopedTotal INT = (SELECT COUNT(*) FROM #inst);
+    DECLARE @unlinked    INT = (SELECT COUNT(*) FROM #inst WHERE ActID IS NULL);
+    DECLARE @orphan      INT = (SELECT COUNT(*) FROM #inst i
+                                WHERE i.ActID IS NOT NULL
+                                  AND NOT EXISTS (SELECT 1 FROM #act a WHERE a.ActID = i.ActID));
+
+    IF @orphan > 0
+        THROW 51091, N'ACT DIMENSION RECONCILIATION FAILED - an instance carries an ActID absent from the Act master. This is a referential break, not a linkage gap. Refusing to publish.', 1;
+
+    IF @rowSum + @unlinked <> @scopedTotal
+        THROW 51092, N'ACT DIMENSION RECONCILIATION FAILED - per-Act sums plus the unlinked bucket do not tie to the scoped instance total. Refusing to publish.', 1;
+
+    DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
+    DECLARE @tenantOverduePct DECIMAL(5,1) =
+        CASE WHEN @scopedTotal = 0 THEN 0 ELSE 100.0 * (SELECT COUNT(*) FROM #ovd) / @scopedTotal END;
+
+    UPDATE #rows SET
+        OverduePct = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * Overdue / Instances END;
+
+    DECLARE @materialityFloor INT = 50;
+    DECLARE @materialMembers  INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @materialityFloor);
+    DECLARE @rankDegraded     BIT = CASE WHEN @materialMembers < 2 THEN 1 ELSE 0 END;
+    DECLARE @rankFloor        INT = CASE WHEN @rankDegraded = 1 THEN 1 ELSE @materialityFloor END;
+
+    ;WITH r AS (SELECT ActID, RANK() OVER (ORDER BY OverduePct DESC) AS rk
+                FROM #rows WHERE Instances >= @rankFloor)
+    UPDATE #rows SET OverdueRank = r.rk FROM #rows JOIN r ON r.ActID = #rows.ActID;
+
+    /*-- 6. ACT x STATE DIVERGENCE --------------------------------------
+       Group Act rows by NAME. Where one law appears in two or more states
+       and both cuts are material, the spread between its best and worst
+       state is the finding. The act is its own peer, so this is inherently
+       peer-relative - no absolute rate is asserted.                     */
+    IF OBJECT_ID('tempdb..#spread') IS NOT NULL DROP TABLE #spread;
+    SELECT r.ActName,
+           COUNT(*)                AS StatesCovered,
+           SUM(r.Instances)        AS Instances,
+           MIN(r.OverduePct)       AS MinOverduePct,
+           MAX(r.OverduePct)       AS MaxOverduePct,
+           MAX(r.OverduePct) - MIN(r.OverduePct) AS SpreadPP
+    INTO #spread
+    FROM #rows r
+    WHERE r.Instances >= @rankFloor AND r.State IS NOT NULL
+    GROUP BY r.ActName
+    HAVING COUNT(*) >= 2;
+
+    /*-- 7. DETECTIONS ---------------------------------------------------*/
+    DECLARE @medianStart DATETIME =
+        (SELECT TOP 1 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(StartDate AS FLOAT)) OVER ()
+         FROM #rows WHERE StartDate IS NOT NULL);
+
+    UPDATE #rows SET Flags =
+        STUFF(
+            CASE WHEN @hasAnyObligations = 1 AND Instances >= @rankFloor
+                  AND EXISTS (SELECT 1 FROM #spread s WHERE s.ActName = #rows.ActName AND s.SpreadPP >= 20.0)
+                 THEN ',act_state_divergence' ELSE '' END +
+            CASE WHEN @hasAnyObligations = 1 AND Instances >= @rankFloor
+                  AND @medianStart IS NOT NULL AND StartDate > @medianStart
+                  AND OverduePct > @tenantOverduePct
+                 THEN ',emerging_law_adoption_lag' ELSE '' END
+        , 1, 1, '');
+
+    /*  Regulator concentration is a TENANT-level fact, not a per-Act flag:
+        the share of the estate governed by the single largest regulator. */
+    DECLARE @topRegulatorShare DECIMAL(5,1) = NULL;
+    DECLARE @topRegulatorId INT = NULL;
+    IF @hasAnyObligations = 1
+        SELECT TOP 1 @topRegulatorId = RegulatorID,
+                     @topRegulatorShare = CAST(100.0 * SUM(Instances) / @scopedTotal AS DECIMAL(5,1))
+        FROM #rows WHERE RegulatorID IS NOT NULL
+        GROUP BY RegulatorID ORDER BY SUM(Instances) DESC;
+
+    SELECT
+        'control_totals'             AS ResultSet,
+        @scopedTotal                 AS ScopedInstances,
+        @rowSum                      AS SumOfRows,
+        CAST(1 AS BIT)               AS Reconciled,
+        (SELECT COUNT(*) FROM #ovd)  AS OverdueInstances,
+        @tenantOverduePct            AS TenantOverduePct,
+        (SELECT COUNT(*) FROM #rows) AS ActsReported,
+        (SELECT COUNT(DISTINCT ActName) FROM #rows) AS DistinctActNames,
+        (SELECT COUNT(DISTINCT State) FROM #rows WHERE State IS NOT NULL) AS StatesCovered,
+        (SELECT COUNT(*) FROM #spread) AS ActsSpanningMultipleStates,
+        @unlinked                    AS UnlinkedInstances,
+        CAST(CASE WHEN @scopedTotal = 0 THEN 0
+                  ELSE 100.0 * @unlinked / @scopedTotal END AS DECIMAL(5,1)) AS UnlinkedPct,
+        @topRegulatorId              AS LargestRegulatorId,
+        @topRegulatorShare           AS LargestRegulatorSharePct;
+
+    SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;
+
+    /*-- 8. EMISSION POLICY ---------------------------------------------*/
+    IF OBJECT_ID('tempdb..#detector') IS NOT NULL DROP TABLE #detector;
+    CREATE TABLE #detector (
+        Detector VARCHAR(40) PRIMARY KEY, Eligible INT, Flagged INT,
+        FlaggedPct DECIMAL(5,1), EmitMode VARCHAR(12));
+
+    DECLARE @material INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @rankFloor);
+
+    INSERT #detector (Detector, Eligible, Flagged)
+    SELECT 'act_state_divergence', @material,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%act_state_divergence%')
+    UNION ALL SELECT 'emerging_law_adoption_lag', @material,
+           (SELECT COUNT(*) FROM #rows WHERE Flags LIKE '%emerging_law_adoption_lag%');
+
+    UPDATE #detector SET FlaggedPct = CASE WHEN Eligible = 0 THEN 0 ELSE 100.0 * Flagged / Eligible END;
+    UPDATE #detector
+       SET EmitMode = CASE WHEN Flagged = 0        THEN 'none'
+                           WHEN Eligible <= 5      THEN 'individual'
+                           WHEN FlaggedPct > 20.0  THEN 'aggregate'
+                           ELSE 'individual' END;
+
+    /*  [ADDED 2026-09-10] DETECTOR CONTRACT - fail at source.
+        Flagged and Eligible MUST come from the same population. sql/05 once
+        emitted 120 flagged of 99 eligible (121.2%) because a flag had no
+        Instances > 0 guard; only the .NET layer caught it, three layers
+        downstream. A percentage above 100 reaching a narrative writer is
+        indefensible - the writer cannot tell it is impossible, and rendering
+        it faithfully produces a false statement.
+        Shared code 51040 across all dimensions: same failure class, and the
+        message names the offending detector.                                 */
+    IF EXISTS (SELECT 1 FROM #detector WHERE Flagged > Eligible)
+        THROW 51040, N'DETECTOR CONTRACT VIOLATED - a detector flagged more rows than it declared eligible. Flagged and Eligible must come from the same population. Refusing to emit.', 1;
+
+    SELECT 'detector_policy' AS ResultSet, * FROM #detector;
+
+    /*-- 9. ASSERTIONS ---------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#assert') IS NOT NULL DROP TABLE #assert;
+    CREATE TABLE #assert (
+        AssertionId VARCHAR(20), Metric VARCHAR(60), ScopeLabel NVARCHAR(500),
+        Value DECIMAL(18,2), Rank_ INT NULL, OfN INT NULL,
+        ComparatorValue DECIMAL(18,2) NULL, VsComparatorPP DECIMAL(9,2) NULL,
+        Direction VARCHAR(10) NULL, Caveat NVARCHAR(500) NULL);
+
+    INSERT #assert VALUES ('A-TENANT','overdue_pct',N'tenant',@tenantOverduePct,NULL,NULL,NULL,NULL,NULL,NULL);
+
+    DECLARE @rankable  INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @rankFloor);
+    DECLARE @tiedAtTop INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @rankFloor AND OverdueRank = 1);
+
+    IF @rankable >= 2
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-ACT','overdue_pct',
+           CONCAT(ActName, CASE WHEN State IS NULL THEN N'' ELSE CONCAT(N' (', State, N')') END),
+           OverduePct,OverdueRank,@rankable,
+           @tenantOverduePct, OverduePct - @tenantOverduePct,
+           CASE WHEN OverduePct > @tenantOverduePct THEN 'worse' ELSE 'better' END,
+           NULLIF(CONCAT(
+               CASE WHEN @rankDegraded = 1
+                    THEN CONCAT(N'degraded_ranking_sample: no Act reaches the ', @materialityFloor,
+                                N'-instance materiality floor. ') ELSE N'' END,
+               CASE WHEN @tiedAtTop > 1
+                    THEN CONCAT(N'tied_at_top: ', @tiedAtTop, N' Acts share this rate - not uniquely the highest. ')
+                    ELSE N'' END), N'')
+    FROM #rows WHERE Instances >= @rankFloor ORDER BY OverduePct DESC, Instances DESC;
+
+    /*  [ADDED 2026-09-13] CONSEQUENCE, not rate. See the note in sql/05: on a
+        live pilot the rate-ranked finding put a 69-obligation area with ZERO
+        imprisonment exposure at rank 1. Both assertions are emitted; the
+        composition layer chooses. Emitted only where exposure exists to rank. */
+    IF EXISTS (SELECT 1 FROM #rows WHERE ImprisonmentOverdue > 0)
+    INSERT #assert
+    SELECT TOP 1 'A-WORST-ACT-EXP','imprisonment_overdue_count', ActName, ImprisonmentOverdue, NULL,
+           (SELECT SUM(ImprisonmentOverdue) FROM #rows), NULL, NULL, 'worse',
+           N'ranked by CONSEQUENCE - overdue obligations carrying personal liability - not by rate.'
+    FROM #rows WHERE ImprisonmentOverdue > 0 ORDER BY ImprisonmentOverdue DESC, Overdue DESC;
+
+
+    /*  The state-divergence assertion carries the SPREAD, not a rate, because
+        the finding is that the same law is executed differently - the law is
+        not the variable. */
+    IF (SELECT EmitMode FROM #detector WHERE Detector='act_state_divergence') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-DIV-' + CAST(ROW_NUMBER() OVER (ORDER BY s.Instances DESC) AS VARCHAR(5)),
+               'overdue_spread_pp', s.ActName, s.SpreadPP, NULL, s.StatesCovered,
+               s.MinOverduePct, s.MaxOverduePct - s.MinOverduePct, 'worse',
+               N'act_state_divergence: the same law, executed differently by state - the law is not the variable'
+        FROM #spread s WHERE s.SpreadPP >= 20.0 ORDER BY s.Instances DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='act_state_divergence') = 'aggregate'
+        INSERT #assert
+        SELECT 'A-DIV-AGG','acts_diverging_by_state',N'tenant',
+               Flagged, NULL, Eligible, NULL, FlaggedPct, 'worse',
+               N'aggregate - execution varies by state across many laws, not a handful of exceptions'
+        FROM #detector WHERE Detector='act_state_divergence';
+
+    IF (SELECT EmitMode FROM #detector WHERE Detector='emerging_law_adoption_lag') = 'individual'
+        INSERT #assert
+        SELECT TOP 5 'A-LAG-' + CAST(ROW_NUMBER() OVER (ORDER BY Instances DESC) AS VARCHAR(5)),
+               'overdue_pct', ActName, OverduePct, NULL, NULL,
+               @tenantOverduePct, OverduePct - @tenantOverduePct, 'worse',
+               N'emerging_law_adoption_lag: recency inferred from Act.StartDate, NOT from a confirmed emerging-law list - state as a hypothesis'
+        FROM #rows WHERE Flags LIKE '%emerging_law_adoption_lag%' ORDER BY Instances DESC;
+    ELSE IF (SELECT EmitMode FROM #detector WHERE Detector='emerging_law_adoption_lag') = 'aggregate'
+        INSERT #assert
+        SELECT 'A-LAG-AGG','recent_laws_with_adoption_lag',N'tenant',
+               Flagged, NULL, Eligible, NULL, FlaggedPct, 'worse',
+               N'aggregate - recency inferred from Act.StartDate, not a confirmed emerging-law list'
+        FROM #detector WHERE Detector='emerging_law_adoption_lag';
+
+    IF @topRegulatorShare IS NOT NULL
+    INSERT #assert
+    VALUES ('A-REG','regulator_share_pct',
+            CONCAT(N'regulator ', @topRegulatorId), @topRegulatorShare, NULL, NULL, NULL, NULL, NULL, NULL);
+
+    SELECT 'assertions' AS ResultSet, * FROM #assert;
+
+    /*-- 10. FINDINGS ----------------------------------------------------*/
+    IF OBJECT_ID('tempdb..#find') IS NOT NULL DROP TABLE #find;
+    CREATE TABLE #find (FindingId VARCHAR(20), Severity VARCHAR(10),
+        Headline NVARCHAR(1000), AssertionIds VARCHAR(400), NarrativeGuard NVARCHAR(500) NULL);
+
+    INSERT #find
+    SELECT 'F-WORST-ACT','high',
+           CONCAT(N'', ScopeLabel, N' has the highest overdue rate at ', Value, N'%'),
+           'A-WORST-ACT,A-TENANT', NULL
+    FROM #assert WHERE AssertionId = 'A-WORST-ACT' AND Direction = 'worse';
+
+    INSERT #find
+    SELECT 'F-DIV','high',
+           CONCAT(N'', ScopeLabel, N' varies by ', Value, N' points across ', OfN, N' states'),
+           AssertionId,
+           N'The law is identical in each state - the variation is execution, not regulation. Do not attribute it to the law being harder somewhere.'
+    FROM #assert WHERE AssertionId LIKE 'A-DIV-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-DIV-AGG','medium',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' Acts (', VsComparatorPP,
+                  N'%) are executed materially differently across states'),
+           AssertionId, NULL
+    FROM #assert WHERE AssertionId = 'A-DIV-AGG';
+
+    INSERT #find
+    SELECT 'F-LAG','medium',
+           CONCAT(N'', ScopeLabel, N' runs at ', Value, N'% overdue, above the tenant average'),
+           AssertionId,
+           N'Recency is inferred from Act.StartDate, not a confirmed emerging-law list. Present as a hypothesis to verify, never as an established adoption problem.'
+    FROM #assert WHERE AssertionId LIKE 'A-LAG-[0-9]%';
+
+    INSERT #find
+    SELECT 'F-LAG-AGG','info',
+           CONCAT(N'', CAST(Value AS INT), N' of ', OfN, N' recently-started Acts (', VsComparatorPP,
+                  N'%) run above the tenant overdue rate'),
+           AssertionId,
+           N'Recency inferred from Act.StartDate. Present as a hypothesis, not a conclusion.'
+    FROM #assert WHERE AssertionId = 'A-LAG-AGG';
+
+    SELECT 'findings' AS ResultSet, * FROM #find;
+
+    /*-- 11. DATA QUALITY ------------------------------------------------*/
+    /*  [ADDED 2026-09-10, handoff] AppliesToMetric binds each declaration to the value it
+        constrains, so the narrative layer can look it up instead of inferring it. Some caveats
+        exist ONLY here - attached to no assertion and no finding. */
+    SELECT 'data_quality' AS ResultSet, Issue,
+           CASE Issue
+                   WHEN 'window'                                THEN 'ScopedInstances'
+                   WHEN 'flow_metric_drift'                    THEN 'OverduePct'
+                   WHEN 'emerging_law_proxy'                   THEN 'ActsReported'
+                   WHEN 'acts_without_state'                   THEN 'StatesCovered'
+                   WHEN 'instances_not_linked_to_an_act'       THEN 'UnlinkedPct'
+                   ELSE NULL END AS AppliesToMetric,
+           Detail FROM (
+        SELECT 'window' AS Issue,
+               CONCAT(N'Scoped to obligations with a scheduled occurrence between ',
+                      CONVERT(VARCHAR(10), @WindowStart, 23), N' and ', CONVERT(VARCHAR(10), @WindowEnd, 23),
+                      N'. An obligation with no occurrence in this window is excluded entirely, not just its '
+                    + N'overdue figures - it will not appear in any row here even if it exists cumulatively.') AS Detail
+        UNION ALL
+        SELECT 'flow_metric_drift' AS Issue,
+               N'Overdue is a live figure and moves between runs; stock metrics are stable.' AS Detail
+        UNION ALL
+        SELECT 'emerging_law_proxy',
+               N'"Emerging law" is not a field in the schema. Adoption-lag detection uses Act.StartDate '
+             + N'relative to this tenant''s own Act population as a proxy. Any adoption-lag statement is a '
+             + N'hypothesis to confirm with the BA, not an established finding. (Open item.)'
+        WHERE EXISTS (SELECT 1 FROM #rows WHERE Flags LIKE '%emerging_law_adoption_lag%')
+        UNION ALL
+        SELECT 'acts_without_state',
+               CONCAT(N'', COUNT(*), N' Act(s) in this scope carry no State value, so they are excluded '
+                    + N'from the Act-by-state comparison.')
+        FROM #rows WHERE State IS NULL HAVING COUNT(*) > 0
+        UNION ALL
+        SELECT 'instances_not_linked_to_an_act',
+               CONCAT(N'', @unlinked, N' obligation(s) in this scope are not linked to any Act. They are '
+                    + N'counted in the tenant total but appear in NO Act row, so every per-Act figure '
+                    + N'below excludes them and the rows do not sum to the scoped total. A configuration '
+                    + N'gap, not a defect.')
+        WHERE @unlinked > 0
+    ) q;
+
+    DROP TABLE #inst; DROP TABLE #active; DROP TABLE #ovd; DROP TABLE #act; DROP TABLE #spread;
+    DROP TABLE #rows; DROP TABLE #detector; DROP TABLE #assert; DROP TABLE #find;
+END
+GO
+PRINT 'usp_Insights_Dimension_Act (v2, overdue-window fix 2026-09-30) installed.';
+GO

@@ -1,8 +1,8 @@
 # Report Generation — Risk, freehand (v4, 2026-09-27) (v5, 2026-09-29: no ownership findings)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -185,7 +185,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -344,7 +344,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -411,7 +411,7 @@ The data given to you (`assertions`, `dimension_rows`, `dimension_control_totals
 already-reconciled SQL output. Everything you state must trace to it.
 
 **Every real field on a risk row** (`dimension_rows`, always exactly 4 rows — Critical/High/
-Medium/Low, present even at zero obligations): `RiskType` (raw enum — never state this number or
+Medium/Low, present even at zero compliances): `RiskType` (raw enum — never state this number or
 imply it orders severity), `RiskLabel` (the real name — always use this), `Instances`, `Overdue`,
 `OverduePct`, `Ownerless`, `ImprisonmentInstances`, `ImprisonmentOverdue`, `BranchesCovered`,
 `VsTenantPP`, `Flags`.
@@ -425,7 +425,7 @@ imply it orders severity), `RiskLabel` (the real name — always use this), `Ins
 |---|---|
 | "The Critical tier runs {better/worse} than the tenant average" | **REAL, with a computed direction** — `A-CRIT`'s `Direction` field. Never assume "Critical" means "worst-performing" — state whichever way the real number points. |
 | "Critical items and imprisonment exposure are basically the same thing here" | **REAL** — `A-IMP-OVERLAP`'s `ImprisonmentOnCriticalPct`. State it ONCE as one fact; never present Critical-tier volume and imprisonment exposure as two separate findings when this assertion is present — see its `narrative_guard`. |
-| Any ownership / "ownership gap" claim | **NOT AVAILABLE** — every obligation has an active performer (see the note at the top). Ignore any `A-OWNGAP-*` assertion. |
+| Any ownership / "ownership gap" claim | **NOT AVAILABLE** — every compliance has an active performer (see the note at the top). Ignore any `A-OWNGAP-*` assertion. |
 | "Risk level 3 is the most severe" or any severity claim from the raw `RiskType` number | **NOT AVAILABLE as a numeric ordering** — `RiskType` values are 3=Critical, 0=High, 1=Medium, 2=Low, not severity-ordered. Use `RiskLabel` only, never the raw integer. |
 | A root cause for why a tier is better/worse-managed | **NOT AVAILABLE** — state the pattern, never infer why. |
 | An industry/cross-tenant risk benchmark | **NOT AVAILABLE** — every comparative here is this tenant's own `TenantOverduePct`, nothing external. |
@@ -441,7 +441,7 @@ already written for you — **use it**, do not paraphrase it into something vagu
 `detail` names the actual concrete date range this run was scoped to.
 
 - ❌ "The supplied window data-quality flag applies; no further definition was provided."
-- ✅ "This view covers obligations with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
+- ✅ "This view covers compliances with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
   only — a risk tier's real counts here reflect only that window, not the tenant's all-time risk
   profile." (the real dates come from the `window` entry's own `detail` text, reformatted for
   readability, never invented)
@@ -523,7 +523,7 @@ chart must follow these rules, whatever its shape:
 - (v3) Every `<` inside every `<script>` is immediately followed by a space - never by a letter,
   digit, `=`, `/`, `!` or `?`.
 - Every one of the 4 real risk levels is represented somewhere — none silently dropped, including
-  a level with zero obligations.
+  a level with zero compliances.
 - `RiskLabel` is used throughout; the raw `RiskType` integer never appears as if it meant severity.
 - If `A-IMP-OVERLAP` is present, Critical-tier volume and imprisonment exposure are stated as ONE
   fact, not two separate findings.

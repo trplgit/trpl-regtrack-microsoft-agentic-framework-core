@@ -1,8 +1,8 @@
 # Report Generation — Statutory vs Internal Governance, freehand (v4, 2026-09-27) (v5, 2026-09-29: no ownership findings)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -185,7 +185,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -344,7 +344,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -423,11 +423,11 @@ already-reconciled SQL output. Everything you state must trace to it.
 | Fact | Status |
 |---|---|
 | "{N} branches carry real statutory exposure with no internal governance configured" | **REAL** — `A-GAP-*`/`A-GAP-AGG`, `BranchesWithStatutory` minus `BranchesWithInternal`. |
-| "This tenant has an overall obligation rate of X%" combining statutory and internal | **NOT AVAILABLE** — the two populations are reconciled independently and never blend into one combined rate. |
+| "This tenant has an overall compliance rate of X%" combining statutory and internal | **NOT AVAILABLE** — the two populations are reconciled independently and never blend into one combined rate. |
 | "No internal compliance exists for this tenant" | **REAL, only when `InternalAbsentEntirely` is true** — if so, this is the ENTIRE finding for this dimension; do not also build a coverage-gap ranking on top of zero data. |
 | "Internal figures cover the same scope as statutory figures" | **NOT AVAILABLE as an unqualified claim** — internal is branch-only scoped (no category axis), genuinely wider than statutory. State this wherever both appear together. |
 | A root cause for why a branch/division lacks internal governance | **NOT AVAILABLE** — state the structural pattern, never infer why. |
-| Any ownership / "{X}% ownerless" claim for either population | **NOT AVAILABLE** — every obligation has an active performer (see the note at the top). |
+| Any ownership / "{X}% ownerless" claim for either population | **NOT AVAILABLE** — every compliance has an active performer (see the note at the top). |
 
 ## The `window` data_quality entry — read this before writing the scope line, ADDED 2026-09-25
 
@@ -440,7 +440,7 @@ already written for you — **use it**, do not paraphrase it into something vagu
 `detail` names the actual concrete date range this run was scoped to.
 
 - ❌ "The supplied window data-quality flag applies; no further definition was provided."
-- ✅ "This view covers obligations with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
+- ✅ "This view covers compliances with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
   only — both the statutory and internal figures here reflect only that window, not the tenant's
   all-time governance picture." (the real dates come from the `window` entry's own `detail` text,
   reformatted for readability, never invented)

@@ -15,7 +15,7 @@ You are given the same ~15 pre-aggregated numbers `06_freetier_digest.md`
 uses, PLUS a `SeverityBand`, `Metric`, `Value`, `Denominator` and `Remainder`
 that have ALREADY been chosen and computed for you deterministically.
 `Remainder` is simply `Denominator - Value` - the count left over once the
-`Value` obligations are addressed. **You do not choose the severity, and you
+`Value` compliances are addressed. **You do not choose the severity, and you
 do not compute anything - that is done before you are called.** Your only
 job is to phrase two sentences that make the reader feel the stakes and the
 payoff of acting, using only the numbers you were handed.
@@ -57,14 +57,14 @@ correct fourteen-word one.
 
 Where `Remainder` is given (not null), use it: frame the headline or
 explanation around what closes, clears, or remains once the `Value`
-obligations are handled - a concrete before -> after, not a vague call to
+compliances are handled - a concrete before -> after, not a vague call to
 action.
 
-- Flat: "5 obligations carry personal liability."
+- Flat: "5 compliances carry personal liability."
 - Still weak (correct, but reads like a report, not a hook): "5 of this
-  week's 24 obligations carry personal liability for the responsible
+  week's 24 compliances carry personal liability for the responsible
   officer - addressing them leaves 19 with no such exposure this week."
-- Punchy: "5 of this week's 24 obligations carry personal liability - clear
+- Punchy: "5 of this week's 24 compliances carry personal liability - clear
   them and the other 19 carry none."
 
 When `Remainder` is null, there is no natural "leaves N remaining" framing
@@ -124,8 +124,8 @@ natural it reads.
 
 Input: `SeverityBand=High impact, Metric=ImprisonmentDueNext7, Value=5, Denominator=24, Remainder=19`
 ```
-HEADLINE: 5 of this week's 24 obligations carry personal liability for the responsible officer
-EXPLANATION: Address those 5 first - once cleared, the other 19 obligations due this week carry no personal-liability exposure at all.
+HEADLINE: 5 of this week's 24 compliances carry personal liability for the responsible officer
+EXPLANATION: Address those 5 first - once cleared, the other 19 compliances due this week carry no personal-liability exposure at all.
 ```
 
 Input: `SeverityBand=Medium impact, Metric=LicencesLapsingNext30, Value=2, Denominator=, Remainder=`
@@ -136,14 +136,14 @@ EXPLANATION: A lapsed licence halts the activity it covers outright, not just mi
 
 Input: `SeverityBand=Low impact, Metric=DueNext30, Value=40, Denominator=1893, Remainder=1853`
 ```
-HEADLINE: 40 of the estate's 1,893 active obligations fall due in the next 30 days
+HEADLINE: 40 of the estate's 1,893 active compliances fall due in the next 30 days
 EXPLANATION: None of these land in the next seven days, so there is real time to plan and clear them before the window closes.
 ```
 
 Input: `SeverityBand=Low impact, Metric=CompletedLast7, Value=12, Denominator=, Remainder=`
 ```
 HEADLINE: 12 completions were recorded last week, and nothing is due across the estate this week
-EXPLANATION: With no obligations due in the next seven days, the estate enters this week clear - a good moment to plan ahead rather than react.
+EXPLANATION: With no compliances due in the next seven days, the estate enters this week clear - a good moment to plan ahead rather than react.
 ```
 
 Note what the examples do: lead with the number, a short dash clause for

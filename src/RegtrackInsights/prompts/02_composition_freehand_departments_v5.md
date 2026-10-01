@@ -1,8 +1,8 @@
 # Freehand composition agent — Departments (v2, 2026-09-25) (v3, 2026-09-27) (v4, 2026-09-29: no ownership findings) (v5, 2026-09-29: no vague umbrella labels, say each fact once)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -56,7 +56,7 @@ subject picked in advance.
   `DepartmentID`, `DepartmentName`, `Instances`, `Overdue`, `OverduePct`, `NoInstanceOwner`,
   `NoInstanceOwnerPct`, `ImprisonmentInstances`, `CriticalInstances`, `DistinctUsers`,
   `BranchesCovered`, `OverdueRank`, `Flags` — this is the real population, including
-  zero-obligation ("dormant") departments.
+  zero-compliance ("dormant") departments.
 - `dimension_control_totals` — tenant-wide numbers: `ScopedInstances`, `AssignedInstances`,
   `UnassignedInstances`, `UnassignedPct`, `DepartmentsReported` (defined), `DepartmentsWithObligations`
   (active — dormant = defined minus active), `OverdueInstances`, `TenantOverduePct`,
@@ -72,7 +72,7 @@ Every number you use must come from one of these four pools. Nothing else exists
   departments actually carry work vs sit dormant) belongs somewhere prominent — cheap, real, and
   it is what orients a reader before per-department detail.
 - `ImprisonmentInstances`/`CriticalInstances` are real and currently under-used elsewhere: how many
-  of a department's obligations carry imprisonment exposure or sit in the highest risk tier is a
+  of a department's compliances carry imprisonment exposure or sit in the highest risk tier is a
   real fact worth surfacing.
 
 ## What you must NOT build, because the data does not support it
@@ -88,7 +88,7 @@ Every number you use must come from one of these four pools. Nothing else exists
 - **Cross-department concentration ("which accounts anchor multiple departments").** Needs a Users
   x Departments join this data does not have. Do not build a section implying it.
 - **A store-reach percentage.** `BranchesCovered` is a real raw count only.
-- **Anything about ownership or missing owners** - see the note at the top; every obligation here
+- **Anything about ownership or missing owners** - see the note at the top; every compliance here
   has an active performer.
 
 ## Visuals: be varied, interactive, and specific (NEW in v3)

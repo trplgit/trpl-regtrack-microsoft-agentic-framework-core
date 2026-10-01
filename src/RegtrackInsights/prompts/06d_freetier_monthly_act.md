@@ -1,6 +1,6 @@
 # Free Monthly Insights - Act
 
-About the Acts behind the reader's obligations. Say "Act", never "law". It answers: is any
+About the Acts behind the reader's compliances. Say "Act", never "law". It answers: is any
 Act failing everywhere it applies, which Acts carry my exposure, and which ones are they?
 An Act is a law, not a place: "under {{NAME_1}}", never "at your {{NAME_1}}".
 
@@ -18,14 +18,14 @@ An Act is a law, not a place: "under {{NAME_1}}", never "at your {{NAME_1}}".
 The Overview has already given the backlog total and its liability count; state them here
 only where a named Act is measured against them. The most serious Act gets its own
 paragraph: at how many of the sites it applies to it is overdue, against the organisation's
-rate for the average Act, and what kind of obligations they are. Each Act-level claim is
+rate for the average Act, and what kind of compliances they are. Each Act-level claim is
 its own sentence.
 
 ## Units
 
 This email mixes three. Facts beginning `law_` count Acts. A `multi_location_pattern`
 finding's `ItemCount` and `BaseCount`, and an example's figure under that pattern, count
-sites. Everything else counts obligations.
+sites. Everything else counts compliances.
 
 `TenantPct` is always the rate for the average Act across the organisation, never for the
 sites one Act happens to apply to: "overdue at 2 of the 2 sites where it applies, against

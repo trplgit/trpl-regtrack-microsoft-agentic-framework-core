@@ -10,7 +10,7 @@ and the reader should know whose desk it is on. State it and stop.
   normal share is not.
 - Present - where ownership has broken and who is carrying too much: work held by someone
   no longer active, work nobody owns or reviews, one person doing and approving the same
-  obligation, or the backlog concentrated on two or three people. This is the heart of the
+  compliance, or the backlog concentrated on two or three people. This is the heart of the
   email and where most of the names go. The largest holder gets a paragraph of their own:
   how much of the organisation's overdue work is on their desk, what kind of work it is,
   and whether anyone else is assigned to it.
@@ -23,9 +23,9 @@ how much of the work each of them holds.
 
 ## Units
 
-This email mixes people and obligations; the label says which. A finding's `BaseCount` is
-that person's total ("192 of their 1,041 obligations") except under `overdue_concentration`
-("holds 4,655 of the 5,178 overdue obligations across your organisation").
+This email mixes people and compliances; the label says which. A finding's `BaseCount` is
+that person's total ("192 of their 1,041 compliances") except under `overdue_concentration`
+("holds 4,655 of the 5,178 overdue compliances across your organisation").
 
 If `u_open_items` is 0, say in one sentence that there is no open work for them, and stop.
 

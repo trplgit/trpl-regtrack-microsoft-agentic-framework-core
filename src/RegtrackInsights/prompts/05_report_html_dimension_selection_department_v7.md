@@ -15,8 +15,8 @@
 
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -121,7 +121,7 @@ short plain-English summary:
 - 2–4 sentences. No jargon, no acronyms, no platform-specific terms (`overdue`, `ownerless`,
   `instance-level`, etc.) without immediately explaining what they mean in plain words.
 - Near-zero raw numbers — a single anchoring figure is fine if it is the one fact the reader most
-  needs ("most department obligations aren't tracked back to a department"), but this is NOT where
+  needs ("most department compliances aren't tracked back to a department"), but this is NOT where
   the report cites `83.4%`, `3,115`, or any other precise value. Precision belongs in the
   hero/sections below, which this summary sets up, not repeats.
   - Answers, in order: what did we look at, what is the one thing most worth knowing, why does it
@@ -218,7 +218,7 @@ showing how it is worked out. Reference: a real product screenshot showing exact
 an underlined percentage in a sentence, hover reveals a card with a title, one plain sentence, and
 a "HOW IT IS CALCULATED" fraction box with the real numbers on it.
 
-**Scope - percentages only, never counts.** This dimension has three real percentage shapes: a department's own overdue rate, the tenant-wide overdue rate, and the tenant-wide unassigned rate. Never wrap a plain count ("6 departments, 210 obligations")
+**Scope - percentages only, never counts.** This dimension has three real percentage shapes: a department's own overdue rate, the tenant-wide overdue rate, and the tenant-wide unassigned rate. Never wrap a plain count ("6 departments, 210 compliances")
 - only a number that is itself a percentage figure, and only one of the fields below. If you never
 write one of these percentages in your prose this run, this section produces nothing - never invent
 one to have something to wrap.
@@ -242,13 +242,13 @@ renders sanely as flat text but the popup can never open.
   <span class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
     <label for="pf-{unique}" class="hr-close" aria-label="Close">&times;</label>
     <span class="hr-title pf-title">Overdue percentage - 9.5%</span>
-    <span class="hr-intro pf-intro">The percentage of Finance's obligations counted this period that are overdue.</span>
+    <span class="hr-intro pf-intro">The percentage of Finance's compliances counted this period that are overdue.</span>
     <span class="pf-formula">
       <span class="pf-formula-label">HOW IT IS CALCULATED</span>
       <span class="pf-frac">
         <span class="pf-frac-stack">
-          <span class="pf-num"><span class="pf-num-value">4</span><span class="pf-num-label">Overdue obligations (this department)</span></span>
-          <span class="pf-den"><span class="pf-den-value">42</span><span class="pf-den-label">Obligations counted (this department)</span></span>
+          <span class="pf-num"><span class="pf-num-value">4</span><span class="pf-num-label">Overdue compliances (this department)</span></span>
+          <span class="pf-den"><span class="pf-den-value">42</span><span class="pf-den-label">Compliances counted (this department)</span></span>
         </span>
         <span class="pf-times">&times; 100</span>
       </span>
@@ -309,9 +309,9 @@ percentage or a new formula:**
 
 | Field(s) | Title | Description (real scope substituted in) | Numerator label | Denominator label |
 |---|---|---|---|---|
-| `OverduePct` (a department row) | Overdue percentage | "The percentage of {DepartmentName}'s obligations counted this period that are overdue." | Overdue obligations (this department) | Obligations counted (this department) |
-| `TenantOverduePct` | Overdue percentage | "The percentage of all obligations counted this period that are overdue." | Overdue obligations (across all departments) | Obligations counted (across all departments) |
-| `UnassignedPct` | Unassigned percentage | "The percentage of all obligations counted this period that have no department tag." | Unassigned obligations | Obligations counted (across all departments) |
+| `OverduePct` (a department row) | Overdue percentage | "The percentage of {DepartmentName}'s compliances counted this period that are overdue." | Overdue compliances (this department) | Compliances counted (this department) |
+| `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across all departments) | Compliances counted (across all departments) |
+| `UnassignedPct` | Unassigned percentage | "The percentage of all compliances counted this period that have no department tag." | Unassigned compliances | Compliances counted (across all departments) |
 
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
@@ -393,7 +393,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -552,7 +552,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -632,12 +632,12 @@ already-reconciled SQL output. Everything you state must trace to it.
 | Fact | Status |
 |---|---|
 | A synthetic "UNASSIGNED" department row with its own overdue breakdown | **NOT real** — never invent one. The untagged slice's own overdue rate IS derivable by subtraction (below), but it has no store-count of its own. |
-| "{Department} is N% of all tagged obligations" | **REAL** — that row's `Instances` / `AssignedInstances`. |
+| "{Department} is N% of all tagged compliances" | **REAL** — that row's `Instances` / `AssignedInstances`. |
 | Per-department "store reach %" | **NOT AVAILABLE as a %** — `BranchesCovered` is a real raw count only. Show the raw count, or a bar scaled to the largest `BranchesCovered` among real rows. |
 | Per-department "top-owner load %" | **NOT AVAILABLE** — `DistinctUsers == 1` is the real, checkable substitute: "this is a single-person department," never a load percentage. |
 | Concentration (which accounts anchor multiple departments) | **NOT AVAILABLE** — needs a Users x Departments cross-reference this data does not have. |
 | Closure-status breakdown | **NOT AVAILABLE from this dimension** — different grain entirely. |
-| Ownership figures | **NOT AVAILABLE** — every obligation has an active performer (see the note at the top). Never show an ownership figure, chart or claim. |
+| Ownership figures | **NOT AVAILABLE** — every compliance has an active performer (see the note at the top). Never show an ownership figure, chart or claim. |
 
 **One legitimate derivation, always shown as arithmetic, never as if it came from its own field:**
 the untagged slice's own overdue rate = `(dimension_control_totals.OverdueInstances - SUM(row.Overdue
@@ -655,8 +655,8 @@ already written for you — **use it**, do not paraphrase it into something vagu
 `detail` names the actual concrete date range this run was scoped to.
 
 - ❌ "The supplied window data-quality flag applies; no further definition was provided."
-- ✅ "This view covers obligations with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
-  only — a department's real counts here reflect only that window, not its all-time obligation
+- ✅ "This view covers compliances with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
+  only — a department's real counts here reflect only that window, not its all-time compliance
   load." (the real dates come from the `window` entry's own `detail` text, reformatted for
   readability, never invented)
 

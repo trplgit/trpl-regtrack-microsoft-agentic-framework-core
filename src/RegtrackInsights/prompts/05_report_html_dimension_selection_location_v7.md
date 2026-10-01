@@ -15,8 +15,8 @@
 
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -191,7 +191,7 @@ showing how it is worked out. Reference: a real product screenshot showing exact
 an underlined percentage in a sentence, hover reveals a card with a title, one plain sentence, and
 a "HOW IT IS CALCULATED" fraction box with the real numbers on it.
 
-**Scope - percentages only, never counts.** This dimension has five real percentage shapes: a branch's own overdue rate, the tenant-wide overdue rate, the tenant-wide on-time rate, the leaf-branch share of all reported branches, and the single-person-dependency share of branches with obligations. Never wrap a plain count ("12 branches, 340 obligations")
+**Scope - percentages only, never counts.** This dimension has five real percentage shapes: a branch's own overdue rate, the tenant-wide overdue rate, the tenant-wide on-time rate, the leaf-branch share of all reported branches, and the single-person-dependency share of branches with compliances. Never wrap a plain count ("12 branches, 340 compliances")
 - only a number that is itself a percentage figure, and only one of the fields below. If you never
 write one of these percentages in your prose this run, this section produces nothing - never invent
 one to have something to wrap.
@@ -215,13 +215,13 @@ renders sanely as flat text but the popup can never open.
   <span class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
     <label for="pf-{unique}" class="hr-close" aria-label="Close">&times;</label>
     <span class="hr-title pf-title">Overdue percentage - 12.3%</span>
-    <span class="hr-intro pf-intro">The percentage of Mumbai Warehouse's obligations counted this period that are overdue.</span>
+    <span class="hr-intro pf-intro">The percentage of Mumbai Warehouse's compliances counted this period that are overdue.</span>
     <span class="pf-formula">
       <span class="pf-formula-label">HOW IT IS CALCULATED</span>
       <span class="pf-frac">
         <span class="pf-frac-stack">
-          <span class="pf-num"><span class="pf-num-value">8</span><span class="pf-num-label">Overdue obligations (this branch)</span></span>
-          <span class="pf-den"><span class="pf-den-value">65</span><span class="pf-den-label">Obligations counted (this branch)</span></span>
+          <span class="pf-num"><span class="pf-num-value">8</span><span class="pf-num-label">Overdue compliances (this branch)</span></span>
+          <span class="pf-den"><span class="pf-den-value">65</span><span class="pf-den-label">Compliances counted (this branch)</span></span>
         </span>
         <span class="pf-times">&times; 100</span>
       </span>
@@ -282,11 +282,11 @@ percentage or a new formula:**
 
 | Field(s) | Title | Description (real scope substituted in) | Numerator label | Denominator label |
 |---|---|---|---|---|
-| `OverduePct` (a branch row) | Overdue percentage | "The percentage of {BranchName}'s obligations counted this period that are overdue." | Overdue obligations (this branch) | Obligations counted (this branch) |
-| `TenantOverduePct` | Overdue percentage | "The percentage of all obligations counted this period that are overdue." | Overdue obligations (across all branches) | Obligations counted (across all branches) |
+| `OverduePct` (a branch row) | Overdue percentage | "The percentage of {BranchName}'s compliances counted this period that are overdue." | Overdue compliances (this branch) | Compliances counted (this branch) |
+| `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across all branches) | Compliances counted (across all branches) |
 | `TenantOnTimePct` | On-time percentage | "The percentage of completed events across all branches that finished on time." | Completed on time (across all branches) | Completed events (across all branches) |
-| `GhostEntities` / `BranchesReported` (count the `no_obligations_configured`-flagged leaf rows yourself if you state this share - both numbers are real, already in `dimension_rows`/`dimension_control_totals`) | Leaf-branch share | "The percentage of all reported branches that are leaf branches with no obligations in this period." | Leaf branches with no obligations | Branches reported |
-| Count of rows flagged `single_point_of_failure` with `Instances > 0`, over count of rows with `Instances > 0` (both counted from `dimension_rows` - never invented) | Single-person dependency share | "The percentage of branches with obligations in this period that depend on exactly one performer or exactly one reviewer." | Branches depending on one performer or reviewer | Branches with obligations in this period |
+| `GhostEntities` / `BranchesReported` (count the `no_obligations_configured`-flagged leaf rows yourself if you state this share - both numbers are real, already in `dimension_rows`/`dimension_control_totals`) | Leaf-branch share | "The percentage of all reported branches that are leaf branches with no compliances in this period." | Leaf branches with no compliances | Branches reported |
+| Count of rows flagged `single_point_of_failure` with `Instances > 0`, over count of rows with `Instances > 0` (both counted from `dimension_rows` - never invented) | Single-person dependency share | "The percentage of branches with compliances in this period that depend on exactly one performer or exactly one reviewer." | Branches depending on one performer or reviewer | Branches with compliances in this period |
 
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
@@ -369,7 +369,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -528,7 +528,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -631,7 +631,7 @@ already written for you — **use it**, do not paraphrase it into something vagu
 - ❌ "The supplied window data-quality flag applies; no further definition was provided."
 - ✅ "This view covers branches with a scheduled compliance occurrence between 26 Aug 2026 and
   25 Sep 2026 only — a branch with no occurrence in that window does not appear as active here at
-  all, even if it has obligations cumulatively." (the real dates come from the `window` entry's own
+  all, even if it has compliances cumulatively." (the real dates come from the `window` entry's own
   `detail` text, reformatted for readability, never invented)
 
 State this near the top of the page (it changes what every other number here means, including

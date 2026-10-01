@@ -120,7 +120,7 @@ checkbox MUST sit inside `.hr` (the element the `:has()` selector targets), neve
       <p class="hr-intro">This chart shows ... (one or two plain sentences: what it shows and what question it answers)</p>
       <div class="hr-row">
         <div class="hr-ico"><!-- small inline SVG icon or colour swatch --></div>
-        <div class="hr-txt"><strong>Each bar = one event type</strong><span>The length of each bar shows how many obligations that event type has triggered. Longer bars mean more event-triggered work.</span></div>
+        <div class="hr-txt"><strong>Each bar = one event type</strong><span>The length of each bar shows how many compliances that event type has triggered. Longer bars mean more event-triggered work.</span></div>
         <div class="hr-viz"><!-- optional mini inline-SVG illustration --></div>
       </div>
       <!-- one .hr-row per component -->
@@ -187,7 +187,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -346,7 +346,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,

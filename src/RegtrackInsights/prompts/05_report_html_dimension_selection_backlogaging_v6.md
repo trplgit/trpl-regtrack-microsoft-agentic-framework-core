@@ -309,7 +309,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -468,7 +468,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -547,7 +547,7 @@ already-reconciled SQL output. Everything you state must trace to it.
 | "Oldest item was due on {date}, {N} years ago" | **REAL** — `OldestDueDate` on the relevant row(s); years-past figure is `AsOfUtc - OldestDueDate` in whole years, shown as arithmetic. |
 | "≈X are workable, ≈Y need a leadership decision" | **REAL** — workable = `current_fy` `OverdueCount`; needs-a-decision = `previous_fy` + `older` `OverdueCount`. State both raw numbers, never a fake precision. |
 | "Older than 3 years: N items" | **NOT AVAILABLE** — only the 3 fixed buckets exist; never state a sub-bucket count. |
-| A late RATE (percentage of all obligations) | **NOT AVAILABLE** — this dimension carries a count split only, no total-obligation denominator. Never quote or derive a tenant-wide late rate here. |
+| A late RATE (percentage of all compliances) | **NOT AVAILABLE** — this dimension carries a count split only, no total-compliance denominator. Never quote or derive a tenant-wide late rate here. |
 | Per-branch or per-owner age breakdown | **NOT AVAILABLE** — rows are age buckets, not members. |
 
 ## 14. The top of the page - company name, headline, period (v4, REVISED 2026-09-27)

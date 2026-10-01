@@ -55,7 +55,7 @@ Every number you use must come from one of these four pools. Nothing else exists
 
 ## What you must NOT build, because the data does not support it
 
-- **A late RATE.** This dimension carries an overdue **count** split only — no total obligation
+- **A late RATE.** This dimension carries an overdue **count** split only — no total compliance
   count exists here to divide by (that lives on other dimensions). Never quote or derive a
   tenant-wide late percentage from these rows.
 - **A sub-3-years age breakdown.** Only 3 fixed buckets exist. Never invent a finer age cut.

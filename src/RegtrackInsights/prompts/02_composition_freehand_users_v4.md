@@ -73,7 +73,7 @@ Every number you use must come from one of these four pools. Nothing else exists
 
 **`SumOfPerUserInstances` is NOT the estate size.** An instance can have both a performer AND a
 reviewer, so this figure legitimately exceeds `ScopedInstances` (the real estate count). Never
-present `SumOfPerUserInstances` as "the number of obligations" — it is a sum of per-user
+present `SumOfPerUserInstances` as "the number of compliances" — it is a sum of per-user
 assignments, a different, larger quantity by design. State it as what it is: total assigned load
 across all role-holdings.
 

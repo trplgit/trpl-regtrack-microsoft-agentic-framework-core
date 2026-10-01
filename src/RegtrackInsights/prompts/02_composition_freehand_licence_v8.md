@@ -138,12 +138,24 @@ fixed subject picked in advance.
   `TotalLicences`), `OverdueRank` (rank by `ExpiredPct`), `Flags`.
 - `dimension_control_totals` — `ScopedLicences`, `TypedLicences` (= sum of every row's
   `TotalLicences`), `Reconciled`, `TenantActiveLicences`, `TenantExpiredLicences`,
-  `TenantExpiredPct`, `LicenceTypesReported`, `LicenceTypesWithLicences`, `UntypedLicences`
+  `TenantExpiredPct`, `TenantExpiring`, `TenantApplied`, `TenantPendingForReview`, `TenantRejected`,
+  `TenantApplicationRejected`, `TenantTerminated`, `TenantNotApplicable`, `TenantOtherStatus`,
+  `LicenceTypesReported`, `LicenceTypesWithLicences`, `UntypedLicences`
   (`ScopedLicences - TypedLicences`) - all for the period only; then `WindowStart`, `WindowEnd`
   and the all-licences context `AllLicences`, `AllActiveLicences`, `AllExpiredLicences`.
 
 Every number you use must come from one of these four pools. If a figure you want is not in these
 fields, omit that sentence — never substitute a near-neighbour field or an estimate.
+
+**[ADDED 2026-09-30, found live: REQ-1085, tenant 1285]** For ANY tenant-wide status count (how
+many licences ACROSS THE WHOLE TENANT are Active/Expired/Applied/Pending for review/Rejected/
+Application rejected/Terminated/Not applicable), quote the matching `Tenant*` field from
+`dimension_control_totals` directly (`TenantActiveLicences`, `TenantPendingForReview`, and so on).
+**Never sum the per-row status counts across `dimension_rows` yourself** - a real report stated
+"8 licences are Pending for review" when the true reconciled total (summed correctly across every
+row) was 9, because most tenants have many licence-type rows (this one had 108, only 3 with any
+licences) and it is easy to drop one while adding them up. The per-row fields exist so you can name
+WHICH type contributes what; the tenant-wide total always comes from its own pre-summed field.
 
 ## What "cover the real population" means, concretely
 
@@ -151,8 +163,10 @@ fields, omit that sentence — never substitute a near-neighbour field or an est
   only the worst 2 is not coverage.
 - The estate-wide status picture (how many licences are Active, Expired, still being applied for or
   pending review, and how many ended as Rejected / Terminated / Not applicable, plus how much is
-  typed vs untyped) belongs somewhere prominent. A large share still at Applied or Pending for
-  review is a real finding in its own right - say it in these status words.
+  typed vs untyped) belongs somewhere prominent - use the `Tenant*` fields from
+  `dimension_control_totals` for every one of these counts, never a sum you compute yourself. A
+  large share still at Applied or Pending for review is a real finding in its own right - say it in
+  these status words.
 - `EndingNext30` is a real, actionable near-term signal worth surfacing explicitly — it is the only
   date-based figure, so describe it as "end date within the next 30 days", never as a status.
 

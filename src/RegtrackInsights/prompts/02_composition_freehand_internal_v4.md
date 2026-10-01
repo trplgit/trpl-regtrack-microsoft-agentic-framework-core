@@ -1,8 +1,8 @@
 # Freehand composition agent — Statutory vs Internal Governance (v2, 2026-09-25) (v3, 2026-09-27) (v4, 2026-09-29: no ownership findings)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -57,7 +57,7 @@ Every number you use must come from one of these four pools. Nothing else exists
 ## The trap this dimension exists to surface — read this before building anything
 
 **Statutory and internal are TWO separate populations, reconciled independently — never sum or
-average them together, and never imply one total "obligations" figure that blends both.** A
+average them together, and never imply one total "compliances" figure that blends both.** A
 branch's `StatutoryInstances` and `InternalInstances` are different counts of different things.
 
 **No overdue RATE exists for a whole branch across both populations** — only per-population
@@ -88,7 +88,7 @@ internal tracking is not the same finding.
 - **A root-cause or "why" explanation** for why a division lacks internal governance — state the
   structural pattern, never invent a cause (understaffing, priority, etc.).
 - **Anything about ownership or missing owners** (including `A-STAT-OWN` / `A-INT-OWN` if present) -
-  see the note at the top; every obligation here has an active performer.
+  see the note at the top; every compliance here has an active performer.
 
 If you find yourself wanting any of these, you are reaching past what you were given — stop and
 build from what's real instead.

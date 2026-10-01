@@ -10,7 +10,7 @@ carries it, rather than eight things a clause each.
 
 1. The worst thing, now. The headline fact or finding and what it exposes them to, in the
    first sentence after the greeting. When the headline is a part of a larger figure, state
-   the whole first and the part inside it: "590 of the 1,915 obligations that fell due in
+   the whole first and the part inside it: "590 of the 1,915 compliances that fell due in
    {{PREV_MONTH}} remain open, and 180 of those carry personal criminal liability". If the
    input names where it sits, say so in the same paragraph.
 2. Past - what {{PREV_MONTH}} left behind. If `signals.last_month_closing` is present, this
@@ -18,7 +18,7 @@ carries it, rather than eight things a clause each.
    what fell due closed on time, and this is what did not" tells the reader their process
    works and the exception is what to look at.
 3. Present - this month so far, then the standing backlog. **Whenever `tm_due_so_far` is
-   given, state how many of the obligations that have fallen due so far in {{CURR_MONTH}}
+   given, state how many of the compliances that have fallen due so far in {{CURR_MONTH}}
    are already past due, as "N of the M that have fallen due so far", with the
    liability-bearing part where given.** If `signals.month_trend` says this month is falling
    behind faster than the last, that contrast leads the paragraph; if it says the month is

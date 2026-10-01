@@ -32,7 +32,7 @@ finding's placeholder), what it counts, and its period ("As on {{AS_AT}}", "In {
 restates it; every sentence adds something the headline did not say.
 
 1. Clarify the headline figure: what it covers that the reader could misread (for a figure whose
-   `period` covers everything overdue, that it includes obligations from earlier months).
+   `period` covers everything overdue, that it includes compliances from earlier months).
 2. Where it sits: the named finding with its figures, what each percentage is a share of, and the
    organisation-wide comparison when given.
 3. Optionally, one other finding or fact from the input, in its own complete sentence, starting
@@ -45,24 +45,24 @@ show; never warn, judge or blame. Complete sentences of at most about 30 words, 
 plain business English.
 
 - Name things explicitly every time. Never use a vague reference such as "of this type", "these",
-  "such obligations", "this issue" or "the above"; write "obligations that carry personal
-  liability", "overdue obligations at {{NAME_1}}".
+  "such compliances", "this issue" or "the above"; write "compliances that carry personal
+  liability", "overdue compliances at {{NAME_1}}".
 - Say each thing once across headline and narrative, and do not echo `title`.
 - Give each fact once, in one form. A count with its whole ("2,526 of the 3,095") and its
   percentage ("81%") are the same fact; write one, never both. Prefer the percentage when a
-  comparison follows it ("81% of its overdue obligations carry personal liability, compared with
+  comparison follows it ("81% of its overdue compliances carry personal liability, compared with
   20% across your organisation"); otherwise the count with its whole. Every percentage names its
   whole.
 - Name each site, person or Act once per sentence.
-- Plain terms, never label or system wording: "obligations that carry personal liability for the
+- Plain terms, never label or system wording: "compliances that carry personal liability for the
   responsible officer" (not "can be held liable", not "standing backlog"); "activities with no
-  valid licence on record"; "obligations that remain open" or "assigned to a single person". Never
+  valid licence on record"; "compliances that remain open" or "assigned to a single person". Never
   write "operational continuity" or "licence continuity".
-- Say "obligations", "licences", "sites", "people", "Acts", "your organisation"; never "tasks",
+- Say "compliances", "licences", "sites", "people", "Acts", "your organisation"; never "tasks",
   "items", "stores", "accounts", "estate", "scope", "finding", "pattern", "position".
 - The headline carries the date; the narrative does not repeat it. Say "overdue" for all overdue
   work and "overdue for more than 90 days" for its oldest part.
-- A site with no obligations mapped "has no compliance obligations mapped to it". State no other
+- A site with no compliances mapped "has no compliance mapped to it". State no other
   absence or zero.
 
 ## Rules checked by code (a breach discards the whole text)
@@ -82,9 +82,9 @@ plain business English.
 
 ## Example
 
-Input (short): headline fact = 6 sites with overdue obligations that carry personal liability,
-period = all obligations overdue as on {{AS_AT}}, including those from earlier months.
-{{NAME_1}}: item_count 13, base_count 16, metric_pct 81 (share of its own overdue obligations),
+Input (short): headline fact = 6 sites with overdue compliances that carry personal liability,
+period = all compliances overdue as on {{AS_AT}}, including those from earlier months.
+{{NAME_1}}: item_count 13, base_count 16, metric_pct 81 (share of its own overdue compliances),
 tenant_pct 20. {{NAME_2}}: ghost_location.
 
-{"headline": "As on {{AS_AT}}, 6 of your sites have overdue obligations that carry personal liability for the responsible officer", "narrative": "The count includes obligations that fell due in earlier months and remain open. At {{NAME_1}}, 81% of its overdue obligations carry personal liability, compared with 20% across your organisation. In addition, {{NAME_2}} is set up as a site in RegTrack but has no compliance obligations mapped to it."}
+{"headline": "As on {{AS_AT}}, 6 of your sites have overdue compliances that carry personal liability for the responsible officer", "narrative": "The count includes compliances that fell due in earlier months and remain open. At {{NAME_1}}, 81% of its overdue compliances carry personal liability, compared with 20% across your organisation. In addition, {{NAME_2}} is set up as a site in RegTrack but has no compliance mapped to it."}

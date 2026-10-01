@@ -167,7 +167,7 @@ showing how it is worked out. Reference: a real product screenshot showing exact
 an underlined percentage in a sentence, hover reveals a card with a title, one plain sentence, and
 a "HOW IT IS CALCULATED" fraction box with the real numbers on it.
 
-**Scope - percentages only, never counts.** This dimension has four real percentage shapes: a law's own overdue rate, the tenant-wide overdue rate, the tenant-wide unlinked rate, and the largest single regulator's share of all obligations. Never wrap a plain count ("40 laws, 900 obligations")
+**Scope - percentages only, never counts.** This dimension has four real percentage shapes: a law's own overdue rate, the tenant-wide overdue rate, the tenant-wide unlinked rate, and the largest single regulator's share of all compliances. Never wrap a plain count ("40 laws, 900 compliances")
 - only a number that is itself a percentage figure, and only one of the fields below. If you never
 write one of these percentages in your prose this run, this section produces nothing - never invent
 one to have something to wrap.
@@ -191,13 +191,13 @@ renders sanely as flat text but the popup can never open.
   <span class="hr-panel pf-panel" role="dialog" aria-label="How this percentage is worked out">
     <label for="pf-{unique}" class="hr-close" aria-label="Close">&times;</label>
     <span class="hr-title pf-title">Overdue percentage - 14.2%</span>
-    <span class="hr-intro pf-intro">The percentage of the Factories Act's obligations counted this period that are overdue.</span>
+    <span class="hr-intro pf-intro">The percentage of the Factories Act's compliances counted this period that are overdue.</span>
     <span class="pf-formula">
       <span class="pf-formula-label">HOW IT IS CALCULATED</span>
       <span class="pf-frac">
         <span class="pf-frac-stack">
-          <span class="pf-num"><span class="pf-num-value">17</span><span class="pf-num-label">Overdue obligations (this law)</span></span>
-          <span class="pf-den"><span class="pf-den-value">120</span><span class="pf-den-label">Obligations counted (this law)</span></span>
+          <span class="pf-num"><span class="pf-num-value">17</span><span class="pf-num-label">Overdue compliances (this law)</span></span>
+          <span class="pf-den"><span class="pf-den-value">120</span><span class="pf-den-label">Compliances counted (this law)</span></span>
         </span>
         <span class="pf-times">&times; 100</span>
       </span>
@@ -258,10 +258,10 @@ percentage or a new formula:**
 
 | Field(s) | Title | Description (real scope substituted in) | Numerator label | Denominator label |
 |---|---|---|---|---|
-| `OverduePct` (an act row) | Overdue percentage | "The percentage of {ActName}'s obligations counted this period that are overdue." | Overdue obligations (this law) | Obligations counted (this law) |
-| `TenantOverduePct` | Overdue percentage | "The percentage of all obligations counted this period that are overdue." | Overdue obligations (across all laws) | Obligations counted (across all laws) |
-| `UnlinkedPct` | Unlinked percentage | "The percentage of all obligations counted this period that are not correctly linked to their law." | Unlinked obligations | Obligations counted (across all laws) |
-| `LargestRegulatorSharePct` (numerator = `LargestRegulatorSharePct` / 100 x `ScopedInstances`, rounded to a whole number - compute it, never invent it; dividing it back by `ScopedInstances` and multiplying by 100 must reproduce `LargestRegulatorSharePct`) | Largest single-regulator share | "The percentage of all obligations counted this period that fall under the single largest regulator (Regulator ID {LargestRegulatorId})." | Obligations under the largest regulator (Regulator ID {LargestRegulatorId}) | Obligations counted (across all laws) |
+| `OverduePct` (an act row) | Overdue percentage | "The percentage of {ActName}'s compliances counted this period that are overdue." | Overdue compliances (this law) | Compliances counted (this law) |
+| `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across all laws) | Compliances counted (across all laws) |
+| `UnlinkedPct` | Unlinked percentage | "The percentage of all compliances counted this period that are not correctly linked to their law." | Unlinked compliances | Compliances counted (across all laws) |
+| `LargestRegulatorSharePct` (numerator = `LargestRegulatorSharePct` / 100 x `ScopedInstances`, rounded to a whole number - compute it, never invent it; dividing it back by `ScopedInstances` and multiplying by 100 must reproduce `LargestRegulatorSharePct`) | Largest single-regulator share | "The percentage of all compliances counted this period that fall under the single largest regulator (Regulator ID {LargestRegulatorId})." | Compliances under the largest regulator (Regulator ID {LargestRegulatorId}) | Compliances counted (across all laws) |
 
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
@@ -343,7 +343,7 @@ any component it missed so that EVERY visible part of the chart is explained. Re
 Write from the reader's point of view, plain words, short sentences. Every number in the panel
 must already be in the data - the panel explains, it never adds a new figure. **Never show a raw
 field or column name in a panel** (`TimingSampleSize`, `ImprisonmentInstances`, `OnTimePct`,
-`EngagementBand`...) - say what it means instead ("number of completed events", "obligations
+`EngagementBand`...) - say what it means instead ("number of completed events", "compliances
 that carry a possible prison term", "share completed on time", "how often the user logs in").
 The same applies to chart titles, legends and tooltips anywhere a reader sees them.
 
@@ -502,7 +502,7 @@ insight points per section (one per line, separated by `\n`).
 - **Plain words in everything you write yourself** - titles, subtitles, labels, legends, notes,
   tooltips, panel text. Titles say what the reader learns ("Which laws are most overdue?" or
   "Most overdue work sits in three laws"), not what the chart is ("Overdue composition").
-- Use the reader's words: "obligations" or "compliance tasks" (never "instances"), "in this report"
+- Use the reader's words: "compliances" or "compliance tasks" (never "instances"), "in this report"
   or "in the selected period" (never "scoped"), "all your compliance work" (never "estate"),
   "points above the average" (never "pp"), "people / locations / laws / departments" (never
   "members", "rows", "population", "dimension"). Never show: assertion, finding, data quality flag,
@@ -598,7 +598,7 @@ paraphrase it into something vaguer. This one's `detail` names the actual concre
 run was scoped to.
 
 - ❌ "The supplied window data-quality flag applies; no further definition was provided."
-- ✅ "This view covers obligations with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
+- ✅ "This view covers compliances with a scheduled occurrence between 26 Aug 2026 and 25 Sep 2026
   only — an Act with no occurrence in that window does not appear here at all, even if it exists
   cumulatively." (the real dates come from the `window` entry's own `detail` text, reformatted for
   readability, never invented)

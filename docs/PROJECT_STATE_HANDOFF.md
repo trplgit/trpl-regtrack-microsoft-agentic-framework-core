@@ -31,12 +31,15 @@ Read in this order:
 - **Latest commit:** `0fab3cc` - "Report orphaned runs as failed instead of running forever" -
   pushed. **NOT yet redeployed to the real UAT pod as of this writing** - confirm with the user
   before assuming the safety net (section 1a below) is actually live.
-- **Orchestrator version:** `InsightsReportOrchestrator.Version = "4.4"` (bumped from 4.3 same day
-  as the incident in section 1a - see that class's own history doc comment for the full
-  bump-by-bump log, the authoritative changelog for orchestrator call-sequence changes).
+- **Orchestrator version:** `InsightsReportOrchestrator.Version = "4.5"` (bumped from 4.4 on
+  2026-10-01 - the reasoning-trace explainer now also runs for fixed_holistic/Entity, not just
+  freehand dimensions; 4.4 frozen verbatim to `Orchestration/Archived/InsightsReportOrchestratorV4_4.cs`
+  and registered under its own version string, per the multi-version dispatch process this was the
+  FIRST real use of - see that class's own history doc comment for the full bump-by-bump log, the
+  authoritative changelog for orchestrator call-sequence changes).
 - **Build:** `dotnet build src/RegtrackInsights/RegtrackInsights.csproj` green, 0 errors (1 stale
   pre-existing nullable warning in `RunEndpoints.cs:104`, unrelated, not this session's doing).
-- **Tests:** full `Insights.UnitTests` suite green, 1036/1036.
+- **Tests:** full `Insights.UnitTests` suite green, 1057/1057.
 - **UAT reachable and healthy this session** (contradicts the "unreachable" note further down from
   2026-09-27 - that was a temporary condition, not a standing fact; always re-check reachability
   yourself, don't trust either claim blindly). Confirmed via many real orchestrator runs today plus

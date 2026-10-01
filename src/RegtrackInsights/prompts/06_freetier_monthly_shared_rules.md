@@ -50,7 +50,7 @@ One JSON message:
 - Tokens to place verbatim: `{{PREV_MONTH}}`, `{{CURR_MONTH}}`, `{{AS_AT}}`, `{{DATE_n}}`,
   and every placeholder in `named_findings` and `examples`.
 
-Lead with `personal_liability` and `licence_continuity`, then obligations that remain
+Lead with `personal_liability` and `licence_continuity`, then compliances that remain
 outstanding, then the named findings in their given order. Leave `volume` out unless it is
 the denominator for something you are already saying. Anything not given does not exist
 for this email, and its absence tells you nothing.
@@ -64,13 +64,13 @@ kind of meaning, and you find the words, different each time:
   the company; the point is who bears it and how much of the exposure it is.
 - `licence_continuity` - an activity is running without the licence it needs, for as long
   as nothing is filed.
-- `operational_continuity` - obligations not closed at all, as distinct from closed late.
+- `operational_continuity` - compliances not closed at all, as distinct from closed late.
   Where nobody is assigned or nothing is recorded, no one is currently working on them.
 - `performance` - completed after the due date; timeliness, not exposure.
 - `volume` - background only; a denominator, never a point.
 
 Fold the meaning into the sentence that carries the figure, never as a separate verdict
-afterwards: "Of the 47 obligations that fell due in {{PREV_MONTH}} and remain open, the 12
+afterwards: "Of the 47 compliances that fell due in {{PREV_MONTH}} and remain open, the 12
 that carry personal criminal liability for the responsible officer are the part of last
 month's work whose consequences reach beyond the company." A stock phrase standing alone
 after a figure is a verdict the reader did not need, and twice it is filler.
@@ -78,7 +78,7 @@ after a figure is a verdict the reader did not need, and twice it is filler.
 **Trace every figure to where it lives.** A whole-organisation figure starts a sentence and
 does not end one: follow it down to the named place or person carrying the largest part,
 say what kind of work that is, and who bears the consequence. "Across your organisation
-1,209 obligations are overdue" is a dashboard line; "of the 1,209 obligations overdue
+1,209 compliances are overdue" is a dashboard line; "of the 1,209 compliances overdue
 across your organisation, 419 sit at your {{NAME_1}} site and carry personal criminal
 liability for the officer responsible there" is a briefing. Whole first, then the named
 part inside it, in one place.
@@ -115,7 +115,7 @@ paragraph is data: give it its meaning or cut it.
 
 Past, present, future, in that order; drop a section the input cannot support rather than
 pad it. Open with `Good morning,` on its own line, then the most important thing in the
-first sentence, oriented in that sentence ("Of the 46 obligations that fell due in
+first sentence, oriented in that sentence ("Of the 46 compliances that fell due in
 {{PREV_MONTH}}, 41 are still open"). End on what can still be acted on this month. No
 summary, no sign-off; the system adds the closing lines.
 
@@ -133,7 +133,7 @@ Give the size of the standing backlog once, in its first paragraph. Later paragr
 
 The reader cannot ask. In the sentence that carries a figure:
 
-- **What** - the noun from the label: obligations, licences, sites, people, Acts. Never
+- **What** - the noun from the label: compliances, licences, sites, people, Acts. Never
   "items".
 - **When** - which of four periods, in plain words: due in {{PREV_MONTH}} and still open;
   due so far in {{CURR_MONTH}}; the standing backlog (overdue whatever the due date); due
@@ -144,12 +144,12 @@ The reader cannot ask. In the sentence that carries a figure:
 - **Where** - one named thing, or the whole organisation. "At your {{NAME_1}} site, 14 of
   its 179" and "Across your organisation, 587" are different claims.
 
-In "N of M", say whose N and whose M when they differ: "Of the 2,853 obligations overdue
+In "N of M", say whose N and whose M when they differ: "Of the 2,853 compliances overdue
 across your whole organisation, 375 fall under {{NAME_1}}", never "{{NAME_1}} holds 375 of
 the 2,853", which reads as if the Act had 2,853 of its own. Two counts of the same thing
 over different periods are nested, not rival: "5 licences are currently expired, 3 of them
 since {{CURR_MONTH}} began", never two sentences that read as a contradiction. Never put
-two units (sites and obligations, people and obligations) in one clause as if comparable.
+two units (sites and compliances, people and compliances) in one clause as if comparable.
 
 ## 6. Naming
 
@@ -169,7 +169,7 @@ your {{NAME_1}} site"); an Act, person or licence names itself, never prefixed w
 is.
 
 **A pattern fact that arrives with examples is stated with its examples named in the same
-sentence:** "Across your organisation, 18 of the 24 sites with overdue work hold obligations
+sentence:** "Across your organisation, 18 of the 24 sites with overdue work hold compliances
 overdue for more than 90 days, including your {{EG_1}}, {{EG_2}} and {{EG_3}} sites."
 Each example is named once, may carry its own figure in a short clause ("{{EG_1}} with 210
 of its 300"), and never a percentage, a comparison, "the most" or "the worst", or a second

@@ -1,8 +1,8 @@
 # Freehand composition agent — Location (v2, 2026-09-25) (v3, 2026-09-27) (v4, 2026-09-29: no ownership findings) (v5, 2026-09-29: no vague umbrella labels, say each fact once)
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
-> RegTrack's own reports count, and RegTrack only lists obligations that have an active performer.
-> So every obligation in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
+> RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
+> So every compliance in this data has an owner: the ownership fields (`Ownerless`, `OwnerlessPct`,
 > `NoInstanceOwner`, `NoInstanceOwnerPct`, `NoOwnerAnywhere`, `OwnerClass`, and their Statutory/
 > Internal/Tenant variants), the `high_ownerless` flag, any ownership assertion and the
 > `ownership_has_two_mechanisms` note are always 0 or absent. Never build a section, chart, card,
@@ -81,7 +81,7 @@ whichever the real data already gives you, never re-derive a different threshold
 - **True ghost leaves** (`GhostEntities`) vs **every zero-instance row**
   (`BranchesWithNoObligations`) - `GhostEntities` is a strict SUBSET (zero instances AND zero
   children; a zero-instance row with real children below it is a legitimate "grouping/holding"
-  node, not a ghost). Cite `BranchesWithNoObligations` for a general "no obligations configured"
+  node, not a ghost). Cite `BranchesWithNoObligations` for a general "no compliances configured"
   claim; cite `GhostEntities` only when specifically calling out true ghost leaves.
 
 The real bug this trips: citing the SAME quantity inconsistently in two places (e.g. one number in
@@ -100,7 +100,7 @@ DIFFERENT, both-real quantities that happen to differ in size is fine and expect
 
 - Every real branch belongs somewhere the reader can see it - a table/list covering all of
   `dimension_rows`, not just the worst few.
-- A tenant-wide orientation (overdue rate, single-dependency share, no-obligations share) belongs
+- A tenant-wide orientation (overdue rate, single-dependency share, no-compliances share) belongs
   near the top - cheap, real, orients the reader before per-branch detail.
 - State peer-rate comparisons, when real peer data exists for at least one state, are a genuinely
   useful real signal - use them if the data supports it.

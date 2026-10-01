@@ -550,6 +550,20 @@ public sealed record LicenceControlTotals
     public int TenantActiveLicences { get; init; }
     public int TenantExpiredLicences { get; init; }
     public decimal TenantExpiredPct { get; init; }
+    // [ADDED sql/v2/26, 2026-09-30] Pre-summed tenant-wide totals for every OTHER status column -
+    // found live (REQ-1085, tenant 1285): without these, the render/narrate agent had to sum
+    // PendingForReview (or any other status) across every LicenseTypeID row itself for a tenant-
+    // wide headline number, and dropped one row out of 108 (mostly zero) doing it in its head -
+    // reported 8 when the real reconciled total was 9. Same fix class as TenantActiveLicences/
+    // TenantExpiredLicences above: compute it once in SQL, never ask the model to sum rows.
+    public int TenantExpiring { get; init; }
+    public int TenantApplied { get; init; }
+    public int TenantPendingForReview { get; init; }
+    public int TenantRejected { get; init; }
+    public int TenantApplicationRejected { get; init; }
+    public int TenantTerminated { get; init; }
+    public int TenantNotApplicable { get; init; }
+    public int TenantOtherStatus { get; init; }
     public int LicenceTypesReported { get; init; }
     public int LicenceTypesWithLicences { get; init; }
     public int UntypedLicences { get; init; }
