@@ -21,7 +21,7 @@ public class VisionQaActivityTests
         visionAgent.Setup(a => a.ReviewAsync(screenshots, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentCallResult<VisionQaResult>(new VisionQaResult(false, null), 800));
 
-        var activity = new VisionQaActivity(qaRunner.Object, visionAgent.Object);
+        var activity = new VisionQaActivity(qaRunner.Object, visionAgent.Object, Microsoft.Extensions.Logging.Abstractions.NullLogger<VisionQaActivity>.Instance);
         var result = await activity.RunAsync(new VisionQaInput("<html></html>"));
 
         Assert.False(result.HasVisualDefect);
@@ -42,7 +42,7 @@ public class VisionQaActivityTests
             .ReturnsAsync(new AgentCallResult<VisionQaResult>(
                 new VisionQaResult(true, "The KPI tile row overlaps the finding cards below it."), 900));
 
-        var activity = new VisionQaActivity(qaRunner.Object, visionAgent.Object);
+        var activity = new VisionQaActivity(qaRunner.Object, visionAgent.Object, Microsoft.Extensions.Logging.Abstractions.NullLogger<VisionQaActivity>.Instance);
         var result = await activity.RunAsync(new VisionQaInput("<html></html>"));
 
         Assert.True(result.HasVisualDefect);

@@ -9,7 +9,8 @@ would notice at a glance, nothing else.
 - **Overlap.** Any two elements visually covering each other — text on top of a card, a chip
   running into another chip, a table row colliding with the one above/below it.
 - **Content escaping its container.** Text or a number spilling outside its card/box/cell, a table
-  column running off the visible page, a chart or grid clipped so part of it is cut off.
+  column running off the edge of the page itself, a chart or grid clipped so part of it is cut off
+  with no way to scroll to it (see the scrollable-table exception below).
 - **Obviously broken/collapsed structure.** A section that looks empty when it clearly shouldn't
   be, a grid that rendered as a single vertical stack of unstyled text, a component that looks
   structurally malformed rather than merely plain.
@@ -25,6 +26,11 @@ would notice at a glance, nothing else.
   correctly, not re-litigating what it chose to show.
 - Minor visual imperfection that does not actually break readability (e.g., a shadow that looks
   slightly different than you'd expect, a gradient, an animation frame).
+- **A wide table, register or chart that ends at the edge of its own bordered box.** Wide tables
+  sit inside a deliberately scrollable box (the reader scrolls sideways to see the rest), and a
+  screenshot only shows the part that is scrolled into view - so the right-most column(s) being
+  cut off AT THAT BOX'S OWN EDGE is intended, not a defect. Only flag a table when it runs past the
+  edge of the PAGE itself, or when text is clipped inside a single cell so it cannot be read.
 
 If nothing in your two "checking for" categories is actually present, the report passes — even if
 you personally would have designed it differently.
