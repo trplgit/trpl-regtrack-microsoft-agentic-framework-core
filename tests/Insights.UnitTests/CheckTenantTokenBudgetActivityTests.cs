@@ -93,6 +93,23 @@ public sealed class CheckTenantTokenBudgetActivityTests
         Assert.Empty(logger.Messages);
     }
 
+    /// <summary>
+    /// [ADDED 2026-10-02] Budget:PerRunTokenCeiling reaches the orchestrator only through this
+    /// output - it used to be a hardcoded 250,000 there, so raising the config value did nothing.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ReturnsTheConfiguredPerRunCeiling()
+    {
+        var repository = new Mock<ITenantTokenBudgetRepository>();
+        repository.Setup(r => r.GetTokensSinceAsync(TenantId, StartOfMonth, It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        var settings = new TenantTokenBudgetSettings { MonthlyCeiling = 1_000_000, AlertAtPercent = 80, PerRunCeiling = 600_000 };
+        var activity = new CheckTenantTokenBudgetActivity(repository.Object, settings, new CapturingLogger());
+
+        var result = await activity.RunAsync(new CheckTenantTokenBudgetInput(TenantId, AsOf));
+
+        Assert.Equal(600_000, result.PerRunTokenCeiling);
+    }
+
     /// <summary>The check must scope to the CALENDAR month, not a rolling 30 days - a 2026-08-21 check reads usage since 2026-08-01, not 2026-07-22.</summary>
     [Fact]
     public async Task RunAsync_ScopesToCalendarMonth_NotARollingWindow()

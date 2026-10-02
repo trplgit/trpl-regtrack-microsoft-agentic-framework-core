@@ -61,6 +61,7 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
             // TenantTokenBudgetRegistration's doc comment. Matches appsettings.json's defaults.
             ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
             ["Budget:AlertAtPercentOfCeiling"] = "80",
+            ["Budget:PerRunTokenCeiling"] = "250000",
 
             // OTel -> LangFuse (build order item 17 / O-4). Genuinely optional here, unlike every
             // RequireEnv above - ObservabilityRegistration itself skips wiring cleanly when
@@ -165,6 +166,7 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
                 ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
                 ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
                 ["Budget:AlertAtPercentOfCeiling"] = "80",
+                ["Budget:PerRunTokenCeiling"] = "250000",
             })
             .Build();
 
@@ -250,6 +252,7 @@ public sealed class InsightsReportOrchestratorManualRunTests(ITestOutputHelper o
                 ["Reports:LocalFallbackDirectory"] = @"D:\trpl-reginsights-dev\local-report-fallback",
                 ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
                 ["Budget:AlertAtPercentOfCeiling"] = "80",
+                ["Budget:PerRunTokenCeiling"] = "250000",
             })
             .Build();
 
