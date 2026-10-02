@@ -234,6 +234,28 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
     }
 
+    /// <summary>
+    /// [ADDED 2026-10-02] Same rule as the layout gate: a vision defect is cosmetic, so attempts 1-2
+    /// still re-render with the issue named, but on the last attempt the report ships instead of
+    /// being refused (found live: two prod Location runs with zero untraced numbers were refused
+    /// over a sideways-scrolling table the vision model read as "cut off").
+    /// </summary>
+    [Fact]
+    public async Task RunTask_VisionDefectOnEveryAttempt_ShipsOnTheLastAttempt()
+    {
+        var (context, capturedRenderInputs) = SetupRenderChain(new RenderHtmlOutput("<html></html>", 1000, []));
+        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new VisionQaOutput(true, "The rightmost column is cut off.", 500));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object,
+            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38));
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
+        Assert.Equal(3, capturedRenderInputs.Count);
+        Assert.Equal("The rightmost column is cut off.", capturedRenderInputs[2].PreviousVisualIssue);
+        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+    }
+
     private static (Mock<OrchestrationContext> Context, List<RenderHtmlInput> RenderInputs) SetupRenderChain(params RenderHtmlOutput[] renders)
     {
         var context = new Mock<OrchestrationContext>();

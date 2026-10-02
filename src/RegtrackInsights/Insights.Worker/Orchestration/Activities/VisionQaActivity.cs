@@ -1,6 +1,7 @@
 using DurableTask.Core;
 using Insights.Agents;
 using Insights.Presentation;
+using Microsoft.Extensions.Logging;
 
 namespace Insights.Worker.Orchestration.Activities;
 
@@ -21,7 +22,7 @@ public sealed record VisionQaOutput(bool HasVisualDefect, string? Issue, long To
 /// completely independent of the advisory one, so nothing about tightening this check can ever
 /// change PlaywrightQaActivity's own long-standing "never blocks" contract.
 /// </summary>
-public sealed class VisionQaActivity(IReportQaRunner qaRunner, IVisionQaAgent visionAgent)
+public sealed class VisionQaActivity(IReportQaRunner qaRunner, IVisionQaAgent visionAgent, ILogger<VisionQaActivity> logger)
     : AsyncTaskActivity<VisionQaInput, VisionQaOutput>
 {
     protected override Task<VisionQaOutput> ExecuteAsync(TaskContext context, VisionQaInput input) => RunAsync(input);
@@ -30,6 +31,13 @@ public sealed class VisionQaActivity(IReportQaRunner qaRunner, IVisionQaAgent vi
     {
         var qaResult = await qaRunner.RunAsync(input.Html, CancellationToken.None);
         var result = await visionAgent.ReviewAsync(qaResult.Screenshots, CancellationToken.None);
+
+        // [ADDED 2026-10-02] On the LAST render attempt the orchestrator now ships a report despite
+        // a visual defect (cosmetic, like the layout gate) - this line is what keeps that defect
+        // visible in the logs, since no refusal is raised for it any more.
+        if (result.Value.HasVisualDefect)
+            logger.LogWarning("Vision QA flagged a visual defect: {Issue}", result.Value.Issue);
+
         return new VisionQaOutput(result.Value.HasVisualDefect, result.Value.Issue, result.TotalTokens);
     }
 }

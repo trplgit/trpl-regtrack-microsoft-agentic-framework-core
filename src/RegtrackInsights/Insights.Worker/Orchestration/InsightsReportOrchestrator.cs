@@ -1248,7 +1248,17 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                             typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
                         ChargeAndCheck(visionResult.TotalTokens);
 
-                        if (visionResult.HasVisualDefect)
+                        // [CHANGED 2026-10-02] `&& renderAttempt < maxRenderAttempts` - same rule the
+                        // layout gate above already follows: a visual defect is cosmetic, so on the
+                        // LAST attempt the report ships (the defect is still logged by
+                        // VisionQaActivity) instead of refusing a report whose numbers all passed
+                        // the untraceable-number gate. Found live: two prod Location runs (tenants
+                        // 1008 and 1300) with zero untraced numbers were refused only because the
+                        // vision model read a deliberately sideways-scrolling table as "cut off".
+                        // The number gate above still refuses on every attempt, the last included.
+                        // Read from the activity OUTPUT, so replay takes the same path; a run that
+                        // already refused here has terminated and is never replayed.
+                        if (visionResult.HasVisualDefect && renderAttempt < maxRenderAttempts)
                         {
                             // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
                             // see this loop's own doc comment on why that matters for replay safety.
