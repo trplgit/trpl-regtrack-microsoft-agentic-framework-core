@@ -5,7 +5,14 @@ using Microsoft.Extensions.Logging;
 namespace Insights.Worker.Orchestration.Activities;
 
 public sealed record CheckTenantTokenBudgetInput(int CustomerId, DateTime AsOfUtc);
-public sealed record CheckTenantTokenBudgetOutput(long MonthToDateTokens);
+/// <param name="PerRunTokenCeiling">
+/// Budget:PerRunTokenCeiling, read from configuration HERE because the orchestrator body cannot
+/// read it (CLAUDE.md 6 - replay must be deterministic; an activity output is recorded in history,
+/// so a replay sees the same value even if configuration changed since). Null on outputs recorded
+/// before this field existed - the orchestrator then keeps the old hardcoded 250,000 those runs
+/// started with, so no orchestrator version bump.
+/// </param>
+public sealed record CheckTenantTokenBudgetOutput(long MonthToDateTokens, long? PerRunTokenCeiling = null);
 
 /// <summary>
 /// Node 0 - design doc Sec.12.3's per-tenant monthly circuit breaker and its 80%-alert sibling.
@@ -54,6 +61,6 @@ public sealed class CheckTenantTokenBudgetActivity(
                 input.CustomerId, pct, monthToDate, settings.MonthlyCeiling);
         }
 
-        return new CheckTenantTokenBudgetOutput(monthToDate);
+        return new CheckTenantTokenBudgetOutput(monthToDate, settings.PerRunCeiling);
     }
 }

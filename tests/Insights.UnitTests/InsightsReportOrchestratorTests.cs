@@ -517,6 +517,39 @@ public class InsightsReportOrchestratorTests
     }
 
     /// <summary>
+    /// [ADDED 2026-10-02] The per-run ceiling is the one CheckTenantTokenBudgetActivity returns
+    /// (Budget:PerRunTokenCeiling), not the old hardcoded 250,000: 200,000 tokens is under the old
+    /// value, so this only refuses if the configured 150,000 is the one actually enforced.
+    /// </summary>
+    [Fact]
+    public async Task RunTask_PerRunTokenBudget_UsesTheCeilingFromTheBudgetCheckOutput()
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(DateTime.UtcNow);
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0, 150_000));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
+        context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ComputeScoreOutput(new OverallHealth(null, "Needs Attention", "flat", "test", []), [], "{}"));
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 200_000));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+
+        var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
+
+        Assert.Equal("BUDGET_EXCEEDED", ex.ReasonCode);
+        Assert.Contains(ex.InternalDiagnostics, d => d.Contains("ceiling is 150000"));
+    }
+
+    /// <summary>
     /// Render's RetryOptions.Handle must retry a transient/malformed-render failure but NEVER a
     /// deliberate deterministic refusal (Normalize/Sanitize/Structure/PublishGate) - same input
     /// always fails those the same way, so retrying would only burn real LLM tokens chasing a

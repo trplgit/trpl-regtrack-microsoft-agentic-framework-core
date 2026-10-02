@@ -40,6 +40,8 @@ public static class TenantTokenBudgetRegistration
                 ?? throw new InvalidOperationException("Budget:PerTenantMonthlyTokenCeiling is not configured."),
             AlertAtPercent = configuration.GetValue<int?>("Budget:AlertAtPercentOfCeiling")
                 ?? throw new InvalidOperationException("Budget:AlertAtPercentOfCeiling is not configured."),
+            PerRunCeiling = configuration.GetValue<long?>("Budget:PerRunTokenCeiling")
+                ?? throw new InvalidOperationException("Budget:PerRunTokenCeiling is not configured."),
         };
         services.AddSingleton(settings);
 
