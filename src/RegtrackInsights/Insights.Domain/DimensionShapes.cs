@@ -760,3 +760,51 @@ public sealed record ForwardRiskRow
     public int? CleanAtRiskRank { get; init; }
     public string? Flags { get; init; }
 }
+
+// ── Coverage gaps (sql/27) ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Peer-comparison review candidates, not violations - a branch is flagged when its labour
+/// obligation count sits well below its peer group's median (peer key = state x establishment
+/// class). Grain is the leaf branch. Deployed proc, live in prod - never modified from here.
+/// </summary>
+public sealed record CoverageGapsControlTotals
+{
+    public int LeafBranchesInScope { get; init; }
+    public int PeerSetBranches { get; init; }
+    public int PeerGroupsQualifying { get; init; }
+    public int PeerGroupsTooSmall { get; init; }
+    public int NearUniversalObligations { get; init; }
+    public int Gaps { get; init; }
+    public int SumOfRowGaps { get; init; }
+    public bool Reconciled { get; init; }
+    public int GapsFullConfidence { get; init; }
+    public int GapsReducedConfidence { get; init; }
+    public int BranchesWithGaps { get; init; }
+    public int UnderConfiguredBranches { get; init; }
+    public int UnknownNodeType { get; init; }
+    public int ThresholdObligationsExcluded { get; init; }
+    public decimal CoverageThreshold { get; init; }
+    public int MinPeers { get; init; }
+    public string? Method { get; init; }
+}
+
+public sealed record CoverageGapsRow
+{
+    public int BranchID { get; init; }
+    public string? BranchName { get; init; }
+    public int? StateID { get; init; }
+    public int? NodeTypeId { get; init; }
+    public string? Class { get; init; }
+    public bool InPeerSet { get; init; }
+    public int? PeerSetSize { get; init; }
+    public int LabourObligations { get; init; }
+    public decimal? PeerMedianObligations { get; init; }
+    public decimal? PctOfPeerMedian { get; init; }
+    public int Gaps { get; init; }
+    public int GapsFullConfidence { get; init; }
+    public int GapsReducedConfidence { get; init; }
+    public bool UnderConfigured { get; init; }
+    public int? GapRank { get; init; }
+    public string? Flags { get; init; }
+}
