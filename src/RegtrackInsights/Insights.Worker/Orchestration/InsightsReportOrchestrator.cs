@@ -505,11 +505,15 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         const int maxReflectionIterations = 2; // matches Agents:MaxReflectionIterations' documented default.
 
         // Item 17's per-run token budget (design doc Sec.12.3): "a single report exceeding its
-        // expected envelope aborts to the gate-refusal path rather than running away." A HARDCODED
-        // constant, not read from IConfiguration - the orchestrator body must stay deterministic
-        // across replay (CLAUDE.md 6), same treatment maxReflectionIterations above already gets.
-        // Matches Budget:PerRunTokenCeiling's documented default.
-        const long perRunTokenCeiling = 250_000;
+        // expected envelope aborts to the gate-refusal path rather than running away."
+        // [CHANGED 2026-10-02] Was a hardcoded 250,000 that ignored Budget:PerRunTokenCeiling
+        // entirely - raising it in deployed appsettings had no effect (found live: tenant 1008
+        // Users runs refused at 337,647 tokens on the 2nd render attempt). Now set from
+        // CheckTenantTokenBudgetActivity's OUTPUT below (it reads the config; the orchestrator body
+        // cannot, CLAUDE.md 6). The default only applies to runs recorded before that output field
+        // existed, which replay with the value they started with.
+        const long legacyPerRunTokenCeiling = 250_000;
+        var perRunTokenCeiling = legacyPerRunTokenCeiling;
         var runTotalTokens = 0L;
 
         void ChargeAndCheck(long tokens)
@@ -527,8 +531,9 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         // precedent) - a tenant already over its monthly ceiling costs nothing further, not even a
         // scope lookup, and (since nothing has been charged yet at this point) there is nothing
         // for RecordTenantTokenUsageActivity to record on this path either.
-        await context.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0",
+        var budgetCheck = await context.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0",
             new CheckTenantTokenBudgetInput(input.TenantId, context.CurrentUtcDateTime));
+        perRunTokenCeiling = budgetCheck.PerRunTokenCeiling ?? legacyPerRunTokenCeiling;
 
         try
         {
@@ -1243,7 +1248,17 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                             typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
                         ChargeAndCheck(visionResult.TotalTokens);
 
-                        if (visionResult.HasVisualDefect)
+                        // [CHANGED 2026-10-02] `&& renderAttempt < maxRenderAttempts` - same rule the
+                        // layout gate above already follows: a visual defect is cosmetic, so on the
+                        // LAST attempt the report ships (the defect is still logged by
+                        // VisionQaActivity) instead of refusing a report whose numbers all passed
+                        // the untraceable-number gate. Found live: two prod Location runs (tenants
+                        // 1008 and 1300) with zero untraced numbers were refused only because the
+                        // vision model read a deliberately sideways-scrolling table as "cut off".
+                        // The number gate above still refuses on every attempt, the last included.
+                        // Read from the activity OUTPUT, so replay takes the same path; a run that
+                        // already refused here has terminated and is never replayed.
+                        if (visionResult.HasVisualDefect && renderAttempt < maxRenderAttempts)
                         {
                             // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
                             // see this loop's own doc comment on why that matters for replay safety.

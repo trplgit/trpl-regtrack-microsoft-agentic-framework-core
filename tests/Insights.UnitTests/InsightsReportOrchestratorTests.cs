@@ -234,6 +234,28 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
     }
 
+    /// <summary>
+    /// [ADDED 2026-10-02] Same rule as the layout gate: a vision defect is cosmetic, so attempts 1-2
+    /// still re-render with the issue named, but on the last attempt the report ships instead of
+    /// being refused (found live: two prod Location runs with zero untraced numbers were refused
+    /// over a sideways-scrolling table the vision model read as "cut off").
+    /// </summary>
+    [Fact]
+    public async Task RunTask_VisionDefectOnEveryAttempt_ShipsOnTheLastAttempt()
+    {
+        var (context, capturedRenderInputs) = SetupRenderChain(new RenderHtmlOutput("<html></html>", 1000, []));
+        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new VisionQaOutput(true, "The rightmost column is cut off.", 500));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object,
+            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38));
+
+        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
+        Assert.Equal(3, capturedRenderInputs.Count);
+        Assert.Equal("The rightmost column is cut off.", capturedRenderInputs[2].PreviousVisualIssue);
+        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+    }
+
     private static (Mock<OrchestrationContext> Context, List<RenderHtmlInput> RenderInputs) SetupRenderChain(params RenderHtmlOutput[] renders)
     {
         var context = new Mock<OrchestrationContext>();
@@ -514,6 +536,39 @@ public class InsightsReportOrchestratorTests
         Assert.DoesNotContain("300000", ex.Message); // internal number never in the user-safe message
         Assert.Contains(ex.InternalDiagnostics, d => d.Contains("300000"));
         context.Verify(c => c.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+    }
+
+    /// <summary>
+    /// [ADDED 2026-10-02] The per-run ceiling is the one CheckTenantTokenBudgetActivity returns
+    /// (Budget:PerRunTokenCeiling), not the old hardcoded 250,000: 200,000 tokens is under the old
+    /// value, so this only refuses if the configured 150,000 is the one actually enforced.
+    /// </summary>
+    [Fact]
+    public async Task RunTask_PerRunTokenBudget_UsesTheCeilingFromTheBudgetCheckOutput()
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(DateTime.UtcNow);
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0, 150_000));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
+        context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ComputeScoreOutput(new OverallHealth(null, "Needs Attention", "flat", "test", []), [], "{}"));
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(new NarrativeResult([]), 200_000));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+
+        var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
+
+        Assert.Equal("BUDGET_EXCEEDED", ex.ReasonCode);
+        Assert.Contains(ex.InternalDiagnostics, d => d.Contains("ceiling is 150000"));
     }
 
     /// <summary>

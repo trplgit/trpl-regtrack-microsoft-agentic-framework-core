@@ -41,6 +41,7 @@ public class OrchestrationRegistrationTests
             ["Agents:PromptDirectory"] = "./prompts",
             ["Budget:PerTenantMonthlyTokenCeiling"] = "5000000",
             ["Budget:AlertAtPercentOfCeiling"] = "80",
+            ["Budget:PerRunTokenCeiling"] = "250000",
         };
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
