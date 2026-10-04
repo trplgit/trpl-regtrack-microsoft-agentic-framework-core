@@ -21,5 +21,8 @@ namespace Insights.Domain;
 /// </summary>
 public static class FreehandDimensions
 {
-    public static readonly IReadOnlySet<string> Names = new HashSet<string>(["Act", "BacklogAging", "Departments", "Licence", "Location", "Risk", "Nature", "Internal", "Event", "Users"]);
+    public static readonly IReadOnlySet<string> Names = new HashSet<string>([
+        "Act", "BacklogAging", "Departments", "Licence", "Location", "Risk", "Nature", "Internal", "Event", "Users",
+        "TimelinessFY", "ForwardPipeline", "EvidenceIntegrity", "ForwardRisk", "CoverageGaps",
+    ]);
 }

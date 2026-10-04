@@ -219,6 +219,15 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-27] v3 - same "How to read" / interactive-chart change as Act.
                 // Lab-verified on real Minda data.
                 ["Users"] = Build("Users", "02_composition_freehand_users_v4.md"),
+                // [ADDED 2026-10-04] Five new standalone freehand dimensions - see
+                // docs/superpowers/specs/2026-10-04-five-dimensions-freehand-design.md. SQL audit
+                // confirmed zero proc changes needed (all 5 already RegTrack-parity via shared
+                // infra; ForwardPipeline/ForwardRisk already occurrence-split by original design).
+                ["TimelinessFY"] = Build("TimelinessFY", "02_composition_freehand_timelinessfy.md"),
+                ["ForwardPipeline"] = Build("ForwardPipeline", "02_composition_freehand_forwardpipeline.md"),
+                ["EvidenceIntegrity"] = Build("EvidenceIntegrity", "02_composition_freehand_evidenceintegrity.md"),
+                ["ForwardRisk"] = Build("ForwardRisk", "02_composition_freehand_forwardrisk.md"),
+                ["CoverageGaps"] = Build("CoverageGaps", "02_composition_freehand_coveragegaps.md"),
             };
         });
 
@@ -436,6 +445,23 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
                     "05_report_html_dimension_selection_event_v4.md", freehandModel),
+                // [ADDED 2026-10-04] Five new standalone freehand dimensions - see
+                // docs/superpowers/specs/2026-10-04-five-dimensions-freehand-design.md.
+                ["dimension_selection:TimelinessFY"] = Build(
+                    "DimensionSelectionTimelinessFYReportHtmlAgent", "Renders a freehand-composed TimelinessFY insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_timelinessfy.md", freehandModel),
+                ["dimension_selection:ForwardPipeline"] = Build(
+                    "DimensionSelectionForwardPipelineReportHtmlAgent", "Renders a freehand-composed ForwardPipeline insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_forwardpipeline.md", freehandModel),
+                ["dimension_selection:EvidenceIntegrity"] = Build(
+                    "DimensionSelectionEvidenceIntegrityReportHtmlAgent", "Renders a freehand-composed EvidenceIntegrity insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_evidenceintegrity.md", freehandModel),
+                ["dimension_selection:ForwardRisk"] = Build(
+                    "DimensionSelectionForwardRiskReportHtmlAgent", "Renders a freehand-composed ForwardRisk insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_forwardrisk.md", freehandModel),
+                ["dimension_selection:CoverageGaps"] = Build(
+                    "DimensionSelectionCoverageGapsReportHtmlAgent", "Renders a freehand-composed CoverageGaps insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_coveragegaps.md", freehandModel),
             };
         });
 
