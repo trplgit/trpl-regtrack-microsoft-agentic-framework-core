@@ -32,12 +32,18 @@ review activity.
 
 ## The hero is a per-tenant decision, not a fixed choice
 
-**Look at this tenant's own real split before deciding what leads.** If `has_trail` dominates
-(`ClosuresWithReviewTrailPct` is high), the hero is "most closures carry a real multi-step review
-trail." If `single_row_only` dominates instead, the hero is "most closures are recorded in a single
-step" - a genuinely different, more honest finding, not automatically a bad one (a genuinely simple
-compliance task may legitimately close in one step). State your reasoning for the hero choice in
-`hero.reason`.
+**If `SumOfRows` is 0 — both `has_trail` and `single_row_only` show `ScheduleCount` 0, and
+`ClosuresWithReviewTrailPct` is null — this tenant has no closed schedules to assess yet.** Lead
+with that fact plainly ("no closed schedules yet to assess for a review trail"), never compute or
+imply a percentage from a null `ClosuresWithReviewTrailPct`. Still show both real buckets at 0 so
+the reader sees the zero is a genuine count, not a missing section.
+
+Otherwise, **look at this tenant's own real split before deciding what leads.** If `has_trail`
+dominates (`ClosuresWithReviewTrailPct` is high), the hero is "most closures carry a real
+multi-step review trail." If `single_row_only` dominates instead, the hero is "most closures are
+recorded in a single step" - a genuinely different, more honest finding, not automatically a bad
+one (a genuinely simple compliance task may legitimately close in one step). State your reasoning
+for the hero choice in `hero.reason`.
 
 ## What you are given
 

@@ -23,12 +23,17 @@ to divide by that this dimension carries.
 
 ## The hero is a per-tenant decision, not a fixed choice
 
-**Look at this tenant's own real distribution across windows before deciding what leads.** If one
-window (especially the nearest) carries a disproportionate share of `DueNext90d`, that concentration
-leads - "a large share of the next 90 days' work lands in the first {N} days" is a genuinely
-actionable finding. If the distribution is roughly even across windows, a steadier "workload spreads
-evenly across the next quarter" framing fits better. State your reasoning for the hero choice in
-`hero.reason`, grounded in the actual numbers you were given.
+**If `DueNext90d` is 0 — every one of the 5 windows shows `DueCount` 0 — this tenant has nothing
+due in the next 90 days.** Lead with that fact plainly ("no schedules are due in the next 90 days"),
+never as "evenly spread" or any framing that implies workload exists. Still show all 5 real windows
+so the reader can see the zero is a genuine count, not a missing section.
+
+Otherwise, **look at this tenant's own real distribution across windows before deciding what
+leads.** If one window (especially the nearest) carries a disproportionate share of `DueNext90d`,
+that concentration leads - "a large share of the next 90 days' work lands in the first {N} days" is
+a genuinely actionable finding. If the distribution is roughly even across windows, a steadier
+"workload spreads evenly across the next quarter" framing fits better. State your reasoning for the
+hero choice in `hero.reason`, grounded in the actual numbers you were given.
 
 ## What you are given
 
