@@ -61,8 +61,10 @@ Every number you use must come from one of these two pools. Nothing else exists.
 
 ## Visuals: be varied, interactive, and specific
 
-Plan **at least two distinct visuals** when the data supports them, and **no two sections may use
-the same chart form**. Forms that fit this dimension's real shape:
+Plan **at least three distinct visuals** when the data supports them (all 5 windows real and
+populated almost always supports three - use all three forms below rather than stopping at the
+floor), and **no two sections may use the same chart form**. Forms that fit this dimension's real
+shape:
 
 - **Stepped bar chart across windows** - one bar per `WindowLabel`, ordered by `MinDaysOut`, height
   = `DueCount`, labelled with the real day range.

@@ -54,9 +54,10 @@ Every number you use must come from one of these four pools. Nothing else exists
 
 ## Visuals: be varied, interactive, and specific
 
-Given only 2 rows, plan **at least one real visual** and keep the rest of the emphasis on honest,
-well-framed numbers rather than padding with thin charts. Forms that fit this dimension's real
-shape:
+Given only 2 rows, plan **at least two real visuals from two genuinely different angles** - the
+on-time rate comparison AND the closure-volume context behind it are two different real stories,
+not one chart repeated. Never pad with a third thin chart just to hit a number. Forms that fit this
+dimension's real shape:
 
 - **Year-over-year comparison bars** - two bars, current FY and previous FY, by `OnTimePct`, with
   the real point-change (`YoyChangePP`) labelled between them.

@@ -74,8 +74,9 @@ Every number you use must come from one of these four pools. Nothing else exists
 
 ## Visuals: be varied, interactive, and specific
 
-Given only 2 rows, plan **at least one real visual** and keep the rest of the emphasis on honest,
-well-framed numbers. Forms that fit this dimension's real shape:
+Given only 2 rows, plan **both of the two real visuals below** - the share split and the
+proportion-with-context are two different real angles on the same split, not one chart repeated.
+Forms that fit this dimension's real shape:
 
 - **Two-segment share bar** - `has_trail` vs `single_row_only` as a 100% bar by `ScheduleCount`.
 - **Big-number cards with proportion** - `ClosuresWithReviewTrailPct` as a large figure, with the

@@ -267,6 +267,9 @@ Rules:
   (`TrailBucket`, `ScheduleCount` ...), proc/SQL/table names, "data_quality", or any statement about
   the report's own accuracy.
 - Short sentences - aim under 20 words. Counts are whole numbers; percentages one decimal.
+- **Vary your wording - never repeat a long compound phrase.** Say a precise description once, in
+  full. Every time after that, use a short plain stand-in - never the same multi-word technical
+  phrase three or more times on one page.
 
 **13. The data is already on the page - never type rows yourself.** After you return, the system
 inserts the real rows and totals into your page as:
