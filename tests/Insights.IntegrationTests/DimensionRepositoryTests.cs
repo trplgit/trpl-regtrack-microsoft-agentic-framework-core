@@ -154,6 +154,15 @@ public sealed class DimensionRepositoryTests
         Assert.True(result.ControlTotals.Reconciled);
     }
 
+    [Theory]
+    [MemberData(nameof(ValidatedTenants))]
+    public async Task GetCoverageGapsAsync_ReturnsWellFormedResult(int userId, int customerId)
+    {
+        var result = await Repository.GetCoverageGapsAsync(userId, customerId);
+        AssertWellFormed(result, "CoverageGaps");
+        Assert.True(result.ControlTotals.Reconciled);
+    }
+
     /// <summary>
     /// [TRAP] Licence's grain is licence TYPE, not branch - ScopedLicences counts
     /// Lic_tbl_LicenseInstance rows, a different population from every other dimension's
