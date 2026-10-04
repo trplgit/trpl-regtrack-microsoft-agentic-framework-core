@@ -25,6 +25,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
     private const int InternalErrorBase    = 51110;
     private const int EventErrorBase       = 51120;
     private const int LicenceErrorBase     = 51160;
+    private const int CoverageGapsErrorBase = 51200;
 
     /*  Measured: 30s on a large tenant, and the largest tenant in the estate carries ~1.49M
         past-due schedules and has not been timed. The default 30s command timeout would fail
@@ -291,6 +292,20 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             "ForwardRisk", "dbo.usp_Insights_Dimension_ForwardRisk",
             scopeDeniedCode: 51190,
             reconciliationCodes: [51191],
+            dictionaryGapCodes: [],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
+    /*  sql/27 owns block 51200-51209: 51200 SCOPE DENIED, 51201/51202 RECONCILIATION FAILED
+        (per-branch gap counts not tying to the gap set; rows not covering every leaf branch). No
+        dictionary-gap code of its own - EXEC dbo.usp_Insights_AssertStatusCoverage (sql/01) covers
+        that path, same as every other dimension. Deployed and live in production; never modified
+        from this repo.                                                                            */
+    public Task<DimensionResult<CoverageGapsControlTotals, CoverageGapsRow>> GetCoverageGapsAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<CoverageGapsControlTotals, CoverageGapsRow>(
+            "CoverageGaps", "dbo.usp_Insights_Dimension_CoverageGaps",
+            scopeDeniedCode: CoverageGapsErrorBase,
+            reconciliationCodes: [CoverageGapsErrorBase + 1, CoverageGapsErrorBase + 2],
             dictionaryGapCodes: [],
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 

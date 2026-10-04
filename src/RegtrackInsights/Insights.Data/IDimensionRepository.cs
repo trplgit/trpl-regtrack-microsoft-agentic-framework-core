@@ -163,4 +163,12 @@ public interface IDimensionRepository
     /// <summary>Forward risk. The 90-day window split into carried_forward / clean_at_risk / healthy segments - a count of present facts, never a forecast. Deployed proc (sql/26).</summary>
     Task<DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>> GetForwardRiskAsync(
         int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Peer-comparison review candidates (sql/27) - a branch's labour obligation count against
+    /// its peer group's median. No window parameter: this is a point-in-time configuration
+    /// comparison, not a schedule/occurrence metric, same reasoning as ForwardRisk/BacklogAging.
+    /// </summary>
+    Task<DimensionResult<CoverageGapsControlTotals, CoverageGapsRow>> GetCoverageGapsAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default);
 }

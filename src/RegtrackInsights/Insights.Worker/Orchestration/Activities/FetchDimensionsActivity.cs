@@ -272,6 +272,7 @@ public sealed class FetchDimensionsActivity(
         await TryFetchAsync("ForwardPipeline", () => dimensionRepository.GetForwardPipelineAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
         await TryFetchAsync("EvidenceIntegrity", () => dimensionRepository.GetEvidenceIntegrityAsync(input.UserId, input.CustomerId, windowStart, windowEnd, cancellationToken: CancellationToken.None));
         await TryFetchAsync("ForwardRisk", () => dimensionRepository.GetForwardRiskAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
+        await TryFetchAsync("CoverageGaps", () => dimensionRepository.GetCoverageGapsAsync(input.UserId, input.CustomerId, cancellationToken: CancellationToken.None));
 
         // All fifteen failing is not "partial" - there is nothing left to compose or narrate from,
         // and a report that is nothing but fifteen placeholders is not the "correct, individually
