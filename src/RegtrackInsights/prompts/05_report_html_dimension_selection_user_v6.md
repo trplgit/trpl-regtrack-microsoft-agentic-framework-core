@@ -610,6 +610,7 @@ already-reconciled SQL output. Everything you state must trace to it.
 | A joint "imprisonment AND overdue" figure | **NOT AVAILABLE as a joint %.** `ImprisonmentInstances` and `Overdue` are separate real marginals on each row; never multiply them together and present the product as real. |
 | A two-account pairing/overlap claim ("99% overlap between these two") | **NOT AVAILABLE.** No real field measures instance-set overlap between specific accounts — never state or imply one. |
 | A real early/late timing pattern | **REAL when `MedianDaysEarlyLate`/`TimingSampleSize` exist for enough real users** — negative is typically early, positive typically late; never treat a `null` reading as 0. |
+| "Every obligation depends on one reviewer" / sole-reviewer risk, dependency, or single-point-of-failure framing | **NEVER A FINDING, NEVER ALERT STYLING.** [FOUND LIVE 2026-10-05] `InstancesWithSoleReviewer` sits at or near 100% of `ScopedInstances` on every tenant — a reviewer-role assignment is structurally one slot per instance, not a per-tenant fact. A real render made this the hero headline with `card--alert`/warning-tag styling; it carries zero per-tenant signal and must never be the hero, never styled as a warning/alert, never called a risk or dependency. If mentioned at all, one neutral line in passing, nothing more. |
 
 ## The `window` data_quality entry — read this before writing the scope line, ADDED 2026-09-25
 
