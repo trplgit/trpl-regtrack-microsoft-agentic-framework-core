@@ -49,8 +49,18 @@ itself is the only honest hero — do not build a coverage-gap narrative on top 
   `InternalNoInstanceOwnerPct`, `Flags`.
 - `dimension_control_totals`: `ScopedInstances`, `SumOfRows`, `Reconciled`, `InternalInstances`,
   `SumOfInternalRows`, `StatutoryOverdueInstances`, `InternalOverdueInstances`,
-  `StatutoryNoInstanceOwnerPct`, `InternalNoInstanceOwnerPct`, `BranchesWithStatutory`, `BranchesWithInternal`,
+  `StatutoryNoInstanceOwnerInstances`, `StatutoryNoInstanceOwnerPct`,
+  `InternalNoInstanceOwnerInstances`, `InternalNoInstanceOwnerPct`,
+  `BranchesWithStatutory`, `BranchesWithInternal`,
   `InternalAbsentEntirely`, `InternalUnmappedStatusRows`.
+
+**[FOUND LIVE 2026-10-06] If you build a tenant-wide number/formula breakdown for either
+`StatutoryNoInstanceOwnerPct` or `InternalNoInstanceOwnerPct` (the control-totals versions, not a
+single row's own), the numerators are `StatutoryNoInstanceOwnerInstances`/
+`InternalNoInstanceOwnerInstances` - cite them verbatim, never compute them yourself from the
+percentage and a total.** The same mistake on Act's `LargestRegulatorSharePct` got a real report
+refused by the untraceable-number gate - a derived number is not a value from any real field,
+however arithmetically correct.
 
 Every number you use must come from one of these four pools. Nothing else exists.
 

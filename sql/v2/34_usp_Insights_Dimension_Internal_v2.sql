@@ -15,6 +15,14 @@
   found and fixed on Location/Entity/Risk/Nature/Departments/Act/Users, sql/v2/27-33).
   Both overdue joins now also require the occurrence's own date to fall inside
   [@WindowStart, @WindowEnd).
+
+  [FOUND LIVE 2026-10-05] #rows.BranchName NVARCHAR(300)/ApexName NVARCHAR(400)
+  too narrow for the real source: CustomerBranch.Name is varchar(500), and one
+  real branch in production is already 319 chars. Same bug class as the
+  2026-09-23 Caveat truncation (CLAUDE.md Sec.5) - widened both to
+  NVARCHAR(600) defensively. Same fix applied the same day to
+  Location/Entity/CoverageGaps (same source), Act (ActName), Licence
+  (LicenseTypeName).
 ===========================================================================*/
 SET NOCOUNT ON;
 GO
@@ -183,8 +191,8 @@ BEGIN
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         BranchID            INT            NOT NULL PRIMARY KEY,
-        BranchName          NVARCHAR(300)  NULL,
-        ApexName            NVARCHAR(400)  NULL,
+        BranchName          NVARCHAR(600)  NULL,
+        ApexName            NVARCHAR(600)  NULL,
         StatutoryInstances  INT            NOT NULL,
         StatutoryOverdue    INT            NOT NULL,
         StatutoryNoInstanceOwner  INT            NOT NULL,
@@ -244,12 +252,17 @@ BEGIN
                                      ELSE 100.0 * InternalNoInstanceOwner  / InternalInstances  END;
 
     /*-- 4. DETECTIONS ---------------------------------------------------*/
+    -- [FOUND LIVE 2026-10-06, same class as Act's LargestRegulatorInstances fix] Real counts behind
+    -- these two percentages, exposed below so the render agent cites them directly instead of
+    -- deriving them from the percentage and the relevant total - a derived number is not a value
+    -- from any real field and gets the whole report refused by the untraceable-number gate
+    -- (CLAUDE.md non-negotiable #5).
+    DECLARE @statOwnInstances INT = (SELECT ISNULL(SUM(StatutoryNoInstanceOwner),0) FROM #rows);
+    DECLARE @intOwnInstances  INT = (SELECT ISNULL(SUM(InternalNoInstanceOwner),0) FROM #rows);
     DECLARE @statOwnPct DECIMAL(5,1) =
-        CASE WHEN @statTotal = 0 THEN NULL
-             ELSE 100.0 * (SELECT ISNULL(SUM(StatutoryNoInstanceOwner),0) FROM #rows) / @statTotal END;
+        CASE WHEN @statTotal = 0 THEN NULL ELSE 100.0 * @statOwnInstances / @statTotal END;
     DECLARE @intOwnPct DECIMAL(5,1) =
-        CASE WHEN @intTotal = 0 THEN NULL
-             ELSE 100.0 * (SELECT ISNULL(SUM(InternalNoInstanceOwner),0) FROM #rows) / @intTotal END;
+        CASE WHEN @intTotal = 0 THEN NULL ELSE 100.0 * @intOwnInstances / @intTotal END;
 
     UPDATE #rows SET Flags =
         STUFF(
@@ -273,7 +286,9 @@ BEGIN
         @intRowSum                      AS SumOfInternalRows,
         (SELECT COUNT(*) FROM #statOvd) AS StatutoryOverdueInstances,
         (SELECT COUNT(*) FROM #intOvd)  AS InternalOverdueInstances,
+        @statOwnInstances               AS StatutoryNoInstanceOwnerInstances,
         @statOwnPct                     AS StatutoryNoInstanceOwnerPct,
+        @intOwnInstances                AS InternalNoInstanceOwnerInstances,
         @intOwnPct                      AS InternalNoInstanceOwnerPct,
         (SELECT COUNT(*) FROM #rows WHERE StatutoryInstances > 0) AS BranchesWithStatutory,
         (SELECT COUNT(*) FROM #rows WHERE InternalInstances  > 0) AS BranchesWithInternal,

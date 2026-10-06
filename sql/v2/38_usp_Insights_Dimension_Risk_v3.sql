@@ -180,6 +180,11 @@ BEGIN
         VsTenantPP = CASE WHEN Instances = 0 THEN NULL ELSE OverduePct - @tenantOverduePct END;
 
     DECLARE @impTotal INT = (SELECT COUNT(*) FROM #inst WHERE Imprisonment = 1);
+    -- [FOUND LIVE 2026-10-06, same class as Act's LargestRegulatorInstances fix] @impOnCritical was
+    -- already computed here but never exposed - the render agent had no way to cite the real
+    -- numerator for ImprisonmentOnCriticalPct and could only derive it from the percentage and
+    -- @impTotal, an unverifiable number that gets the whole report refused (CLAUDE.md non-negotiable
+    -- #5). Now returned as ImprisonmentOnCriticalInstances.
     DECLARE @impOnCritical INT = (SELECT COUNT(*) FROM #inst WHERE Imprisonment = 1 AND RiskType = @criticalRisk);
     DECLARE @impOverlapPct DECIMAL(5,1) =
         CASE WHEN @impTotal = 0 THEN NULL ELSE 100.0 * @impOnCritical / @impTotal END;
@@ -195,6 +200,7 @@ BEGIN
         (SELECT COUNT(*) FROM #rows WHERE Instances > 0) AS RiskLevelsWithObligations,
         @criticalRisk                     AS CriticalRiskType,
         @impTotal                         AS ImprisonmentInstances,
+        @impOnCritical                    AS ImprisonmentOnCriticalInstances,
         @impOverlapPct                    AS ImprisonmentOnCriticalPct;
 
     SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;

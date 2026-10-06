@@ -607,7 +607,12 @@ already-reconciled SQL output. Everything you state must trace to it.
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`,
 `AssignedInstances`, `UnassignedInstances`, `UnassignedPct`, `DepartmentsReported` (defined),
 `DepartmentsWithObligations` (active — dormant = defined minus active), `OverdueInstances`,
-`TenantOverduePct`, `TenantNoInstanceOwnerPct`.
+`TenantOverduePct`, `TenantNoInstanceOwnerInstances`, `TenantNoInstanceOwnerPct`.
+
+**[FOUND LIVE 2026-10-06]** If you build a number-formula breakdown for `TenantNoInstanceOwnerPct`,
+the numerator is `TenantNoInstanceOwnerInstances` cited verbatim — never multiply the percentage
+by `ScopedInstances` yourself; that produced an unverifiable number and got a real report (Act)
+refused by the untraceable-number gate.
 
 | Fact | Status |
 |---|---|

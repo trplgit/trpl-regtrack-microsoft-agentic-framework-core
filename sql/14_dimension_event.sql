@@ -36,6 +36,13 @@
   cut; corrected the same day once it was confirmed FY-only scoping is specific
   to TimelinessFY, not a default for every dimension. See the window-gate note
   at #ei's build, below, for the full mechanism.
+
+  [FOUND LIVE 2026-10-05] #rows.EventName NVARCHAR(500) matches its real
+  source (Event.Name varchar(500)) exactly, zero margin. Not yet breached
+  (current real max seen: 365 chars) but widened defensively to NVARCHAR(1000)
+  while auditing the same bug class elsewhere (CLAUDE.md Sec.5, the 2026-09-23
+  Caveat truncation) - see Act (ActName), Location/Internal/Entity/CoverageGaps
+  (BranchName/ApexName), Licence (LicenseTypeName), all fixed the same day.
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -122,7 +129,7 @@ BEGIN
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         EventID              BIGINT         NOT NULL PRIMARY KEY,
-        EventName            NVARCHAR(500)  NULL,
+        EventName            NVARCHAR(1000) NULL,
         InstanceCount        INT            NOT NULL,
         BranchesCovered      INT            NOT NULL,
         EarliestStart        DATETIME       NULL,

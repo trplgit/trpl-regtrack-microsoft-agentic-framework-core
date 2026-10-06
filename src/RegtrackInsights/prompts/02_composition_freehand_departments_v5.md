@@ -60,9 +60,15 @@ subject picked in advance.
 - `dimension_control_totals` — tenant-wide numbers: `ScopedInstances`, `AssignedInstances`,
   `UnassignedInstances`, `UnassignedPct`, `DepartmentsReported` (defined), `DepartmentsWithObligations`
   (active — dormant = defined minus active), `OverdueInstances`, `TenantOverduePct`,
-  `TenantNoInstanceOwnerPct`.
+  `TenantNoInstanceOwnerInstances`, `TenantNoInstanceOwnerPct`.
 
 Every number you use must come from one of these four pools. Nothing else exists.
+
+**[FOUND LIVE 2026-10-06] If you build a number/formula breakdown for `TenantNoInstanceOwnerPct`,
+the numerator is `TenantNoInstanceOwnerInstances` - cite it verbatim, never compute it yourself
+from the percentage and `ScopedInstances`.** The same mistake on Act's `LargestRegulatorSharePct`
+got a real report refused by the untraceable-number gate - a derived number is not a value from
+any real field, however arithmetically correct.
 
 ## What "cover the real population" means, concretely
 

@@ -40,7 +40,15 @@ grounded in the actual numbers you were given — never a fixed subject picked i
 - `dimension_control_totals` — tenant-wide numbers: `ScopedInstances`, `SumOfRows`, `Reconciled`,
   `OverdueInstances`, `TenantOverduePct`, `ActsReported`, `DistinctActNames`, `StatesCovered`,
   `ActsSpanningMultipleStates`, `UnlinkedInstances`, `UnlinkedPct`, `LargestRegulatorId`,
-  `LargestRegulatorSharePct`.
+  `LargestRegulatorInstances`, `LargestRegulatorSharePct`.
+
+**[FOUND LIVE 2026-10-06] If you build a number/formula breakdown for `LargestRegulatorSharePct`
+(an "X of Y" or "X/Y x 100" style figure), the numerator is `LargestRegulatorInstances` -
+cite it verbatim, never compute it yourself from the percentage and a total.** A real render
+derived the numerator by multiplying `LargestRegulatorSharePct` x `ScopedInstances`, producing an
+arithmetically-correct number that still was not a value from any real field - the untraceable-
+number gate correctly refused the whole report over it. `LargestRegulatorInstances` exists
+specifically so this never has to be computed.
 
 Every number you use must come from one of these four pools. Nothing else exists.
 
@@ -94,8 +102,11 @@ menu, not a list you must use - invent your own if something fits better):
   `State` is populated for enough rows; central acts shown separately).
 - **Jail-risk lollipop** - acts with `ImprisonmentInstances > 0`, ranked.
 - **Linkage waffle / proportion bar** - `UnlinkedInstances` of `SumOfRows` (`UnlinkedPct`) - [FIXED
-  2026-10-01] not `ScopedInstances`, which is the distinct-obligation count; `UnlinkedPct` is
-  computed against the scoped occurrence total (`SumOfRows`), and the two differ on a real tenant.
+  2026-10-01] not `ScopedInstances`. Think of a monthly return due three times in the period:
+  `SumOfRows` counts that three times (every real due-date - how much work actually happened);
+  `ScopedInstances` counts the same obligation once (how many different obligations exist).
+  `UnlinkedPct` is computed against the due-date count (`SumOfRows`), and the two numbers differ on
+  a real tenant.
 
 Every visual must be **interactive**: hover (or focus) on a mark shows that mark's real values
 (act name + the real fields that place it). Where useful add a sort toggle, a filter chip (e.g.

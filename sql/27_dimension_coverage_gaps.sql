@@ -57,6 +57,13 @@
   narrative_guard on every finding says so.
 
   IDEMPOTENT. Target: SQL Server (vitComplianceSystem)
+
+  [FOUND LIVE 2026-10-05] Two BranchName NVARCHAR(300) columns too narrow for
+  the real source: CustomerBranch.Name is varchar(500), and one real branch in
+  production is already 319 chars. Same bug class as the 2026-09-23 Caveat
+  truncation (CLAUDE.md Sec.5) - both widened to NVARCHAR(600) defensively.
+  Same fix applied the same day to Location/Internal/Entity (same source),
+  Act (ActName), Licence (LicenseTypeName).
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -102,7 +109,7 @@ BEGIN
     IF OBJECT_ID('tempdb..#branch') IS NOT NULL DROP TABLE #branch;
     CREATE TABLE #branch (
         BranchID    INT           NOT NULL PRIMARY KEY,
-        BranchName  NVARCHAR(300) NULL,
+        BranchName  NVARCHAR(600) NULL,
         StateID     INT           NULL,
         NodeTypeId  INT           NULL,
         Class       VARCHAR(20)   NOT NULL,
@@ -211,7 +218,7 @@ BEGIN
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         BranchID              INT           NOT NULL PRIMARY KEY,
-        BranchName            NVARCHAR(300) NULL,
+        BranchName            NVARCHAR(600) NULL,
         StateID               INT           NULL,
         NodeTypeId            INT           NULL,
         Class                 VARCHAR(20)   NOT NULL,

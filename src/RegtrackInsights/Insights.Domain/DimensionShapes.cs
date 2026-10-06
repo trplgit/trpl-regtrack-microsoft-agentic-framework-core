@@ -97,7 +97,7 @@ public sealed record EntityControlTotals(
     int ScopedInstances, int SumOfRows, bool Reconciled,
     int OverdueInstances, decimal TenantOverduePct,
     int NodesReported, int ActiveBranchesInTenant, int ApexEntityCount,
-    EntityCountShape TenantShape, decimal LargestApexSharePct,
+    EntityCountShape TenantShape, int? LargestApexInstances, decimal LargestApexSharePct,
     ComparisonGrain ComparisonGrain, string GrainReason);
 
 /// <summary>
@@ -139,6 +139,7 @@ public sealed record RiskControlTotals
     public int RiskLevelsWithObligations { get; init; }
     public int CriticalRiskType { get; init; }
     public int ImprisonmentInstances { get; init; }
+    public int? ImprisonmentOnCriticalInstances { get; init; }
     public decimal? ImprisonmentOnCriticalPct { get; init; }
 }
 
@@ -189,6 +190,7 @@ public sealed record NatureControlTotals
     public bool Reconciled { get; init; }
     public int OverdueInstances { get; init; }
     public decimal TenantOverduePct { get; init; }
+    public int TenantImprisonmentInstances { get; init; }
     public decimal TenantImprisonmentSharePct { get; init; }
     public int NaturesReported { get; init; }
     public int NaturesWithObligations { get; init; }
@@ -267,6 +269,7 @@ public sealed record DepartmentsControlTotals
     /// prompt or other C# code, so no report ever visibly showed a wrong number from it, but it
     /// would have been a landmine the moment anything started reading it).
     /// </summary>
+    public int TenantNoInstanceOwnerInstances { get; init; }
     public decimal TenantNoInstanceOwnerPct { get; init; }
 }
 
@@ -312,6 +315,7 @@ public sealed record ActControlTotals
     public int UnlinkedInstances { get; init; }
     public decimal UnlinkedPct { get; init; }
     public int? LargestRegulatorId { get; init; }
+    public int? LargestRegulatorInstances { get; init; }
     public decimal? LargestRegulatorSharePct { get; init; }
 }
 
@@ -474,7 +478,9 @@ public sealed record InternalControlTotals
     /// agent has been reading dead branch-level ownership data on every row, every run, since this
     /// dimension shipped.
     /// </summary>
+    public int? StatutoryNoInstanceOwnerInstances { get; init; }
     public decimal? StatutoryNoInstanceOwnerPct { get; init; }
+    public int? InternalNoInstanceOwnerInstances { get; init; }
     public decimal? InternalNoInstanceOwnerPct { get; init; }
     public int BranchesWithStatutory { get; init; }
     public int BranchesWithInternal { get; init; }
