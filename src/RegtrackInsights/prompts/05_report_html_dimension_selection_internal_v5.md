@@ -416,9 +416,16 @@ already-reconciled SQL output. Everything you state must trace to it.
 
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `SumOfRows`,
 `Reconciled`, `InternalInstances`, `SumOfInternalRows`, `StatutoryOverdueInstances`,
-`InternalOverdueInstances`, `StatutoryNoInstanceOwnerPct`, `InternalNoInstanceOwnerPct`,
+`InternalOverdueInstances`, `StatutoryNoInstanceOwnerInstances`, `StatutoryNoInstanceOwnerPct`,
+`InternalNoInstanceOwnerInstances`, `InternalNoInstanceOwnerPct`,
 `BranchesWithStatutory`, `BranchesWithInternal`, `InternalAbsentEntirely`,
 `InternalUnmappedStatusRows`.
+
+**[FOUND LIVE 2026-10-06]** If you build a tenant-wide number-formula breakdown for either
+`StatutoryNoInstanceOwnerPct` or `InternalNoInstanceOwnerPct` (the control-totals versions), the
+numerators are `StatutoryNoInstanceOwnerInstances`/`InternalNoInstanceOwnerInstances` cited
+verbatim — never multiply the percentage by a total yourself; that produced an unverifiable number
+and got a real report (Act) refused by the untraceable-number gate.
 
 | Fact | Status |
 |---|---|

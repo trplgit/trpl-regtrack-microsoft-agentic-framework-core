@@ -49,7 +49,7 @@ public sealed class FetchDimensionsActivityTests
             .ReturnsAsync(new DimensionResult<LocationControlTotals, LocationRow>("Location", new LocationControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetEntityAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EntityControlTotals, EntityRow>("Entity",
-                new EntityControlTotals(0, 0, true, 0, 0, 0, 0, 0, EntityCountShape.SingleEntity, 0, ComparisonGrain.Locations, ""), [], [], [], [], []));
+                new EntityControlTotals(0, 0, true, 0, 0, 0, 0, 0, EntityCountShape.SingleEntity, null, 0, ComparisonGrain.Locations, ""), [], [], [], [], []));
         repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<RiskControlTotals, RiskRow>("Risk", new RiskControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetNatureAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))

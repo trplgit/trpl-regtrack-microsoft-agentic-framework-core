@@ -52,9 +52,15 @@ grounded in the actual numbers you were given.
 - `dimension_control_totals`: `ScopedInstances`, `SumOfRows`, `Reconciled`, `OverdueInstances`,
   `TenantOverduePct`, `RiskLevelsReported`, `RiskLevelsWithObligations`, `CriticalRiskType` (which
   raw `RiskType` value means Critical THIS run — never hardcode a number), `ImprisonmentInstances`,
-  `ImprisonmentOnCriticalPct`.
+  `ImprisonmentOnCriticalInstances`, `ImprisonmentOnCriticalPct`.
 
 Every number you use must come from one of these four pools. Nothing else exists.
+
+**[FOUND LIVE 2026-10-06] If you build a number/formula breakdown for `ImprisonmentOnCriticalPct`
+(an "X of Y" or "X/Y x 100" style figure), the numerator is `ImprisonmentOnCriticalInstances` -
+cite it verbatim, never compute it yourself from the percentage and `ImprisonmentInstances`.** The
+same mistake on Act's `LargestRegulatorSharePct` got a real report refused by the untraceable-
+number gate - a derived number is not a value from any real field, however arithmetically correct.
 
 ## The trap this dimension exists to surface — read this before building anything
 

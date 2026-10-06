@@ -442,7 +442,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         return new EntityControlTotals(
             r.ScopedInstances, r.SumOfRows, r.Reconciled, r.OverdueInstances, r.TenantOverduePct,
             r.NodesReported, r.ActiveBranchesInTenant, r.ApexEntityCount,
-            ParseShape(r.TenantShape), r.LargestApexSharePct,
+            ParseShape(r.TenantShape), r.LargestApexInstances, r.LargestApexSharePct,
             ParseGrain(r.ComparisonGrain), r.GrainReason);
     }
 
@@ -561,6 +561,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         public int ActiveBranchesInTenant { get; init; }
         public int ApexEntityCount { get; init; }
         public string TenantShape { get; init; } = string.Empty;
+        public int? LargestApexInstances { get; init; }
         public decimal LargestApexSharePct { get; init; }
         public string ComparisonGrain { get; init; } = string.Empty;
         public string GrainReason { get; init; } = string.Empty;

@@ -419,9 +419,15 @@ already-reconciled SQL output. Everything you state must trace to it.
 always present — see below.
 
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `CategorisedInstances`,
-`Reconciled`, `OverdueInstances`, `TenantOverduePct`, `TenantImprisonmentSharePct`,
+`Reconciled`, `OverdueInstances`, `TenantOverduePct`, `TenantImprisonmentInstances`,
+`TenantImprisonmentSharePct`,
 `NaturesReported`, `NaturesWithObligations`, `RetiredNaturesStillInUse`, `OthersBucketInstances`,
 `UntaggedInstances`, `UncategorisedInstances`, `UncategorisedPct`.
+
+**[FOUND LIVE 2026-10-06] If you build a number-formula breakdown for `TenantImprisonmentSharePct`,
+the numerator is `TenantImprisonmentInstances` cited verbatim** — never multiply the percentage by
+`ScopedInstances` yourself; that produced an unverifiable number and got a real report (Act)
+refused by the untraceable-number gate.
 
 | Fact | Status |
 |---|---|

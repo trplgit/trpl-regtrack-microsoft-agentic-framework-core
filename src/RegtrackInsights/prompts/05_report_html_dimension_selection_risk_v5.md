@@ -419,12 +419,12 @@ imply it orders severity), `RiskLabel` (the real name — always use this), `Ins
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `SumOfRows`,
 `Reconciled`, `OverdueInstances`, `TenantOverduePct`, `RiskLevelsReported`,
 `RiskLevelsWithObligations`, `CriticalRiskType`, `ImprisonmentInstances`,
-`ImprisonmentOnCriticalPct`.
+`ImprisonmentOnCriticalInstances`, `ImprisonmentOnCriticalPct`.
 
 | Fact | Status |
 |---|---|
 | "The Critical tier runs {better/worse} than the tenant average" | **REAL, with a computed direction** — `A-CRIT`'s `Direction` field. Never assume "Critical" means "worst-performing" — state whichever way the real number points. |
-| "Critical items and imprisonment exposure are basically the same thing here" | **REAL** — `A-IMP-OVERLAP`'s `ImprisonmentOnCriticalPct`. State it ONCE as one fact; never present Critical-tier volume and imprisonment exposure as two separate findings when this assertion is present — see its `narrative_guard`. |
+| "Critical items and imprisonment exposure are basically the same thing here" | **REAL** — `A-IMP-OVERLAP`'s `ImprisonmentOnCriticalPct`. State it ONCE as one fact; never present Critical-tier volume and imprisonment exposure as two separate findings when this assertion is present — see its `narrative_guard`. **If you build a number-formula breakdown for it, the numerator is `ImprisonmentOnCriticalInstances` cited verbatim — [FOUND LIVE 2026-10-06] never multiply the percentage by `ImprisonmentInstances` yourself; that produced an unverifiable number and got a real report (Act) refused.** |
 | Any ownership / "ownership gap" claim | **NOT AVAILABLE** — every compliance has an active performer (see the note at the top). Ignore any `A-OWNGAP-*` assertion. |
 | "Risk level 3 is the most severe" or any severity claim from the raw `RiskType` number | **NOT AVAILABLE as a numeric ordering** — `RiskType` values are 3=Critical, 0=High, 1=Medium, 2=Low, not severity-ordered. Use `RiskLabel` only, never the raw integer. |
 | A root cause for why a tier is better/worse-managed | **NOT AVAILABLE** — state the pattern, never infer why. |

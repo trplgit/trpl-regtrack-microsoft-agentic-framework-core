@@ -69,12 +69,37 @@ BEGIN
     DELETE i FROM #inst i
     WHERE NOT EXISTS (SELECT 1 FROM #occ o WHERE o.ComplianceInstanceID = i.ComplianceInstanceID);
 
+    -- [OPTIMIZED 2026-10-06, same fix as Act's sql/v2/41 - found live via a real
+    -- execution-plan review there] tvfInsightsOverdueSchedules re-derives scope
+    -- (branch+category) and active-performer membership for the WHOLE TENANT, before
+    -- being filtered down to #occ's already-scoped rows here - #occ already guarantees
+    -- both, inherited from #inst (tvfInsightsScopedInstances). Replaced with the latest
+    -- transaction per in-scope schedule, fetched once per INSTANCE from #inst directly
+    -- instead of re-deriving scope inside a shared function. Semantics unchanged: a
+    -- schedule with NO transaction ever is NOT counted as overdue, same as the TVF's
+    -- own inner join to vInsightsStatusCurrent did before.
+    IF OBJECT_ID('tempdb..#lt') IS NOT NULL DROP TABLE #lt;
+    SELECT x.ComplianceScheduleOnID, x.StatusId, x.ID
+    INTO #lt
+    FROM (
+        SELECT t.ComplianceScheduleOnID, t.StatusId, t.ID,
+               ROW_NUMBER() OVER (PARTITION BY t.ComplianceScheduleOnID
+                                  ORDER BY t.Dated DESC, t.ID DESC) AS rn
+        FROM #inst i
+        JOIN dbo.ComplianceTransaction t
+              ON t.ComplianceInstanceId = i.ComplianceInstanceID
+    ) x
+    WHERE x.rn = 1;
+    CREATE CLUSTERED INDEX IX_lt ON #lt (ComplianceScheduleOnID);
+
     IF OBJECT_ID('tempdb..#ovdocc') IS NOT NULL DROP TABLE #ovdocc;
-    SELECT o.ComplianceScheduleOnID
+    SELECT o.ScheduleOnID AS ComplianceScheduleOnID
     INTO #ovdocc
-    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
-    JOIN #occ x ON x.ScheduleOnID = o.ComplianceScheduleOnID
-    WHERE o.ScheduleOn >= @WindowStart AND o.ScheduleOn < @WindowEnd;
+    FROM #occ o
+    JOIN #lt lt                       ON lt.ComplianceScheduleOnID = o.ScheduleOnID
+    JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = lt.StatusId
+    WHERE d.OverdueEligible = 1
+      AND o.ScheduleOn < CAST(@AsOf AS DATE);
     CREATE CLUSTERED INDEX IX_ovdocc ON #ovdocc (ComplianceScheduleOnID);
 
     IF OBJECT_ID('tempdb..#ownership') IS NOT NULL DROP TABLE #ownership;
@@ -172,9 +197,15 @@ BEGIN
         OverduePct   = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * Overdue   / Instances END,
         NoInstanceOwnerPct = CASE WHEN Instances = 0 THEN 0 ELSE 100.0 * NoInstanceOwner / Instances END;
 
+    -- [FOUND LIVE 2026-10-06, same class as Act's LargestRegulatorInstances fix] Real count behind
+    -- TenantNoInstanceOwnerPct, exposed below so the render agent cites it directly instead of
+    -- deriving it from the percentage and @scopedTotal - a derived number is not a value from any
+    -- real field and gets the whole report refused by the untraceable-number gate (CLAUDE.md
+    -- non-negotiable #5).
+    DECLARE @tenantNoInstanceOwnerInstances INT = (SELECT ISNULL(SUM(NoInstanceOwner),0) FROM #rows);
     DECLARE @tenantNoInstanceOwnerPct DECIMAL(5,1) =
         CASE WHEN @scopedTotal = 0 THEN 0
-             ELSE 100.0 * (SELECT ISNULL(SUM(NoInstanceOwner),0) FROM #rows) / @scopedTotal END;
+             ELSE 100.0 * @tenantNoInstanceOwnerInstances / @scopedTotal END;
 
     DECLARE @materialityFloor INT = 50;
     DECLARE @materialMembers  INT = (SELECT COUNT(*) FROM #rows WHERE Instances >= @materialityFloor);
@@ -206,6 +237,7 @@ BEGIN
         @unassigned                  AS UnassignedInstances,
         CAST(CASE WHEN @scopedTotal = 0 THEN 0
                   ELSE 100.0 * @unassigned / @scopedTotal END AS DECIMAL(5,1)) AS UnassignedPct,
+        @tenantNoInstanceOwnerInstances    AS TenantNoInstanceOwnerInstances,
         @tenantNoInstanceOwnerPct          AS TenantNoInstanceOwnerPct;
 
     SELECT 'rows' AS ResultSet, * FROM #rows ORDER BY Instances DESC;
@@ -388,7 +420,7 @@ BEGIN
         FROM #rows WHERE Instances = 0 HAVING COUNT(*) > 0
     ) q;
 
-    DROP TABLE #inst; DROP TABLE #occ; DROP TABLE #ovdocc; DROP TABLE #owned; DROP TABLE #ownership; DROP TABLE #people;
+    DROP TABLE #inst; DROP TABLE #occ; DROP TABLE #lt; DROP TABLE #ovdocc; DROP TABLE #owned; DROP TABLE #ownership; DROP TABLE #people;
     DROP TABLE #dept; DROP TABLE #rows; DROP TABLE #detector;
     DROP TABLE #assert; DROP TABLE #find;
 END
