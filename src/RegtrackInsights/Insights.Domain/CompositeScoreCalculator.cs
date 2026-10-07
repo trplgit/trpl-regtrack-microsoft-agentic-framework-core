@@ -105,16 +105,31 @@ public static class CompositeScoreCalculator
     /// (median Instances per StateID peer group, not median OverduePct) - out of scope for this
     /// pass. Flagged here rather than silently invented from data that does not exist yet.
     /// </summary>
+    /// <summary>
+    /// [CHANGED 2026-10-07, BUG FOUND LIVE] Was dividing by `totals.BranchesReported`, which counts
+    /// EVERY row sql/37's own #rows carries - real leaf branches AND intermediate/grouping
+    /// entity-tree nodes (state-level nodes like "Warehouse_Maharashtra", not physical locations).
+    /// An intermediate node can structurally never be flagged `no_obligations_configured` (that flag
+    /// requires ActiveChildren = 0; a grouping node has children by definition), so it always counted
+    /// as "healthy" regardless of its real children's state - Coverage was structurally biased toward
+    /// a higher score the more intermediate nodes a tenant's entity tree has, independent of real
+    /// coverage. Found live: Motul tenant 1926 - 25 real leaf branches (24 healthy, 1 ghost) plus 24
+    /// intermediate nodes; old formula scored 98.0 (denominator 49, all rows), leaf-only is 96.0
+    /// (denominator 25). Now filters to real leaf branches only - `NodeType` is a real, always-
+    /// populated column from sql/37's own INSERT; null (hand-built test data only, never real SQL
+    /// output) is treated as leaf rather than excluded, for backward compatibility.
+    /// </summary>
     private static decimal? ComputeCoverageScore(LocationControlTotals totals, IReadOnlyList<LocationRow> rows)
     {
-        if (totals.BranchesReported == 0)
+        var leafRows = rows.Where(r => r.NodeType != EntityNodeType.Intermediate).ToList();
+        if (leafRows.Count == 0)
             return null;
 
-        var ghost = rows.Count(r => (r.Flags ?? "").Contains("no_obligations_configured"));
-        var highOwnerless = rows.Count(r => (r.Flags ?? "").Contains("high_ownerless") && !(r.Flags ?? "").Contains("no_obligations_configured"));
-        var healthy = totals.BranchesReported - ghost - highOwnerless;
+        var ghost = leafRows.Count(r => (r.Flags ?? "").Contains("no_obligations_configured"));
+        var highOwnerless = leafRows.Count(r => (r.Flags ?? "").Contains("high_ownerless") && !(r.Flags ?? "").Contains("no_obligations_configured"));
+        var healthy = leafRows.Count - ghost - highOwnerless;
 
-        return Clamp(100m * (healthy + 0.5m * highOwnerless) / totals.BranchesReported);
+        return Clamp(100m * (healthy + 0.5m * highOwnerless) / leafRows.Count);
     }
 
     /// <summary>
