@@ -1,41 +1,37 @@
 using System.Drawing;
 using Insights.Presentation;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 using Xunit;
-using Image = SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>;
 
 namespace Insights.UnitTests;
 
 public class PixelDiffTests
 {
-    private static readonly Rgba32 White = new(255, 255, 255);
-    private static readonly Rgba32 Red = new(255, 0, 0);
+    private static readonly SKColor White = new(255, 255, 255);
+    private static readonly SKColor Red = new(255, 0, 0);
 
-    private static byte[] MakePng(int width, int height, Action<Image>? paint = null)
+    private static byte[] MakePng(int width, int height, Action<SKBitmap>? paint = null)
     {
-        using var image = new Image(width, height);
-        Fill(image, White);
-        paint?.Invoke(image);
-        using var ms = new MemoryStream();
-        // Called as a static method (not instance-extension syntax) to avoid pulling in
-        // `using SixLabors.ImageSharp;` namespace-wide, which would reintroduce the same
-        // Rectangle-ambiguity this file's Image/Color aliases above exist to avoid.
-        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, ms);
-        return ms.ToArray();
+        using var bitmap = new SKBitmap(width, height);
+        Fill(bitmap, White);
+        paint?.Invoke(bitmap);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
 
-    private static void Fill(Image image, Rgba32 color)
+    private static void Fill(SKBitmap bitmap, SKColor color)
     {
-        for (var y = 0; y < image.Height; y++)
-            for (var x = 0; x < image.Width; x++)
-                image[x, y] = color;
+        for (var y = 0; y < bitmap.Height; y++)
+            for (var x = 0; x < bitmap.Width; x++)
+                bitmap.SetPixel(x, y, color);
     }
 
-    private static void PaintSquare(Image image, int x0, int y0, int size, Rgba32 color)
+    private static void PaintSquare(SKBitmap bitmap, int x0, int y0, int size, SKColor color)
     {
-        for (var y = y0; y < Math.Min(y0 + size, image.Height); y++)
-            for (var x = x0; x < Math.Min(x0 + size, image.Width); x++)
-                image[x, y] = color;
+        for (var y = y0; y < Math.Min(y0 + size, bitmap.Height); y++)
+            for (var x = x0; x < Math.Min(x0 + size, bitmap.Width); x++)
+                bitmap.SetPixel(x, y, color);
     }
 
     [Fact]

@@ -1,6 +1,5 @@
 using System.Drawing;
-using SixLabors.ImageSharp.PixelFormats;
-using Image = SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>;
+using SkiaSharp;
 
 namespace Insights.Presentation;
 
@@ -10,6 +9,12 @@ namespace Insights.Presentation;
 /// own tile at all, and (b) whether anything OUTSIDE that tile visibly changed. A small per-channel
 /// tolerance absorbs anti-aliasing/font-rendering jitter between two otherwise-identical renders,
 /// same class of noise LayoutCollisionChecker's own `area(...) &lt; 4` guard exists for.
+///
+/// [REPLACED SixLabors.ImageSharp 2026-10-07, SAME DAY] ImageSharp's own build target enforces its
+/// commercial license as a hard ERROR under `dotnet publish -c Release` (only a warning under
+/// plain `dotnet build`) - broke the real production Docker build the moment it shipped. SkiaSharp
+/// is genuinely MIT-licensed, no license gate at any build configuration - see
+/// Directory.Packages.props's own note on this swap for the full real incident.
 /// </summary>
 public static class PixelDiff
 {
@@ -17,12 +22,12 @@ public static class PixelDiff
 
     public static double RegionChangeRatio(byte[] beforePng, byte[] afterPng, Rectangle region)
     {
-        using var before = SixLabors.ImageSharp.Image.Load<Rgba32>(beforePng);
-        using var after = SixLabors.ImageSharp.Image.Load<Rgba32>(afterPng);
+        using var before = SKBitmap.Decode(beforePng);
+        using var after = SKBitmap.Decode(afterPng);
         return RegionChangeRatio(before, after, region);
     }
 
-    private static double RegionChangeRatio(Image before, Image after, Rectangle region)
+    private static double RegionChangeRatio(SKBitmap before, SKBitmap after, Rectangle region)
     {
         var width = Math.Min(before.Width, after.Width);
         var height = Math.Min(before.Height, after.Height);
@@ -36,9 +41,9 @@ public static class PixelDiff
         {
             for (var x = clamped.Left; x < clamped.Right; x++)
             {
-                var a = before[x, y];
-                var b = after[x, y];
-                if (Math.Abs(a.R - b.R) > ChannelTolerance || Math.Abs(a.G - b.G) > ChannelTolerance || Math.Abs(a.B - b.B) > ChannelTolerance)
+                var a = before.GetPixel(x, y);
+                var b = after.GetPixel(x, y);
+                if (Math.Abs(a.Red - b.Red) > ChannelTolerance || Math.Abs(a.Green - b.Green) > ChannelTolerance || Math.Abs(a.Blue - b.Blue) > ChannelTolerance)
                     differing++;
             }
         }
@@ -48,8 +53,8 @@ public static class PixelDiff
     public static IReadOnlyList<Rectangle> FindChangedBlocksOutside(
         byte[] beforePng, byte[] afterPng, Rectangle excluded, int blockSize, double blockChangeThreshold)
     {
-        using var before = SixLabors.ImageSharp.Image.Load<Rgba32>(beforePng);
-        using var after = SixLabors.ImageSharp.Image.Load<Rgba32>(afterPng);
+        using var before = SKBitmap.Decode(beforePng);
+        using var after = SKBitmap.Decode(afterPng);
         var width = Math.Min(before.Width, after.Width);
         var height = Math.Min(before.Height, after.Height);
 
