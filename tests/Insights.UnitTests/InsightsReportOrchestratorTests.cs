@@ -72,8 +72,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -88,91 +86,6 @@ public class InsightsReportOrchestratorTests
 
         Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
         context.Verify(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
-    }
-
-    /// <summary>
-    /// [ADDED 2026-09-14] A real visual defect on the first render attempt must retry the WHOLE
-    /// render-through-validate chain (same mechanism the structure gate already proved), and the
-    /// SECOND attempt must actually see the vision model's own concrete issue text - not just
-    /// retry blind. Proves both halves: the retry happens, and the feedback travels.
-    /// </summary>
-    [Fact]
-    public async Task RunTask_VisionQaFindsRealDefect_RetriesRenderWithTheIssueTextAttached()
-    {
-        var context = new Mock<OrchestrationContext>();
-        context.SetupGet(c => c.CurrentUtcDateTime).Returns(new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc));
-
-        var narrative = new NarrativeResult([]);
-
-        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0));
-        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new RecordTenantTokenUsageOutput());
-        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
-        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
-        context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ComputeScoreOutput(new OverallHealth(null, "Needs Attention", "flat", "test", []), [], "{}"));
-        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new NarrateOutput(narrative, 1000));
-        context.Setup(c => c.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ReflectOnNarrativeOutput(new NarrativeReflectionResult(ReflectionVerdict.Approve, []), 1000));
-        context.Setup(c => c.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new PublishGateOutput(true));
-
-        var capturedRenderInputs = new List<RenderHtmlInput>();
-        context.Setup(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
-            .Callback<string, string, RetryOptions, object[]>((_, _, _, args) => capturedRenderInputs.Add((RenderHtmlInput)args[0]))
-            .ReturnsAsync(new RenderHtmlOutput("<html></html>", 1000));
-        context.Setup(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectFontOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectCoverageGridOutput>(typeof(InjectCoverageGridActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectCoverageGridOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectCoverageCssOutput>(typeof(InjectCoverageCssActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new NormalizeOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new SanitizeOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-
-        // First attempt: a real defect. Second attempt: clean.
-        context.SetupSequence(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(true, "The KPI tile row overlaps the finding cards below it.", 500))
-            .ReturnsAsync(new VisionQaOutput(false, null, 500));
-
-        context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
-        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new InteractiveTileQaOutput([]));
-        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new PersistOutput("33333333-3333-3333-3333-333333333333"));
-
-        var orchestrator = new InsightsReportOrchestrator();
-        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
-
-        var result = await orchestrator.RunTask(context.Object, input);
-
-        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
-        context.Verify(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()), Times.Exactly(2));
-
-        Assert.Equal(2, capturedRenderInputs.Count);
-        Assert.Null(capturedRenderInputs[0].PreviousVisualIssue);
-        Assert.Equal("The KPI tile row overlaps the finding cards below it.", capturedRenderInputs[1].PreviousVisualIssue);
     }
 
     [Fact]
@@ -239,28 +152,6 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
     }
 
-    /// <summary>
-    /// [ADDED 2026-10-02] Same rule as the layout gate: a vision defect is cosmetic, so attempts 1-2
-    /// still re-render with the issue named, but on the last attempt the report ships instead of
-    /// being refused (found live: two prod Location runs with zero untraced numbers were refused
-    /// over a sideways-scrolling table the vision model read as "cut off").
-    /// </summary>
-    [Fact]
-    public async Task RunTask_VisionDefectOnEveryAttempt_ShipsOnTheLastAttempt()
-    {
-        var (context, capturedRenderInputs) = SetupRenderChain(new RenderHtmlOutput("<html></html>", 1000, []));
-        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(true, "The rightmost column is cut off.", 500));
-
-        var result = await new InsightsReportOrchestrator().RunTask(context.Object,
-            new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38));
-
-        Assert.Equal("33333333-3333-3333-3333-333333333333", result.ReportId);
-        Assert.Equal(3, capturedRenderInputs.Count);
-        Assert.Equal("The rightmost column is cut off.", capturedRenderInputs[2].PreviousVisualIssue);
-        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
-    }
-
     private static (Mock<OrchestrationContext> Context, List<RenderHtmlInput> RenderInputs) SetupRenderChain(params RenderHtmlOutput[] renders)
     {
         var context = new Mock<OrchestrationContext>();
@@ -313,8 +204,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -641,8 +530,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -736,8 +623,6 @@ public class InsightsReportOrchestratorTests
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .Callback<string, string, object[]>((_, _, args) => capturedStructureInput = (ValidateFixedHolisticStructureInput)args[0])
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
@@ -952,8 +837,6 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new SanitizeOutput("<html></html>"));
         context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
-        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
-            .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
         context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
