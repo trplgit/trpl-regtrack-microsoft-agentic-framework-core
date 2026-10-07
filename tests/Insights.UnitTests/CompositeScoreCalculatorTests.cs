@@ -126,4 +126,34 @@ public sealed class CompositeScoreCalculatorTests
         // (2 healthy + 0.5*1 ownerless) / 4 * 100 = 62.5
         Assert.Equal(62.5m, result.Components.Single(c => c.DomainKpi == "coverage").Score);
     }
+
+    /// <summary>
+    /// [ADDED 2026-10-07, BUG FOUND LIVE] Location's own #rows includes BOTH real leaf branches
+    /// AND intermediate/grouping tree nodes (state-level entity-hierarchy nodes, not physical
+    /// locations) - BranchesReported counts both. An intermediate node can structurally never be
+    /// flagged `no_obligations_configured` (that flag requires ActiveChildren = 0; a grouping node
+    /// by definition has children), so it always counts as "healthy" regardless of its real
+    /// children's state - Coverage was structurally biased toward a higher score the more
+    /// intermediate nodes a tenant's entity tree has. Found live: Motul tenant 1926, 25 real leaf
+    /// branches (24 healthy, 1 ghost) plus 24 intermediate nodes - old formula scored 98.0
+    /// (denominator 49), the real leaf-only answer is 96.0 (denominator 25).
+    /// </summary>
+    [Fact]
+    public void Compute_CoverageScore_ExcludesIntermediateNodesFromDenominator()
+    {
+        var location = LocationWith(4, 0m,
+            new LocationRow { BranchID = 1, Flags = "", NodeType = EntityNodeType.Leaf },                              // healthy leaf
+            new LocationRow { BranchID = 2, Flags = "no_obligations_configured", NodeType = EntityNodeType.Leaf },      // ghost leaf
+            new LocationRow { BranchID = 3, Flags = "", NodeType = EntityNodeType.Intermediate },                       // grouping node - must not count
+            new LocationRow { BranchID = 4, Flags = "", NodeType = EntityNodeType.Intermediate });                      // grouping node - must not count
+        var licence = new LicenceControlTotals { TenantExpiredPct = 0m };
+
+        var result = CompositeScoreCalculator.Compute(risk: null, location, usersRows: null, licence, tenantOnTimePct: null, evidenceReviewTrailPct: null);
+
+        // Leaf-only: 1 healthy, 1 ghost, denominator 2 -> (1 + 0) / 2 * 100 = 50.0.
+        // The old (wrong) behaviour would have scored (3 healthy + 0) / 4 * 100 = 75.0, since
+        // both intermediate rows (Flags = "") would have counted as healthy against a denominator
+        // of 4 (BranchesReported, all #rows) instead of 2 (real leaf branches only).
+        Assert.Equal(50.0m, result.Components.Single(c => c.DomainKpi == "coverage").Score);
+    }
 }
