@@ -284,6 +284,13 @@ public static class PaidReportAgentsRegistration
             visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
             LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
+        // [ADDED 2026-10-07] Stage 2 of InteractiveTileChecker's cross-tile glitch detection - same
+        // Llm:VisionQa:* deployment as IVisionQaAgent above, different prompt/call shape (two small
+        // crops, not a whole-page screenshot set) - see ITileGlitchReviewAgent's own doc comment.
+        services.AddSingleton<ITileGlitchReviewAgent>(sp => new MafTileGlitchReviewAgent(MafAgentFactory.CreateJsonAgent(
+            visionQaEndpoint, visionQaModel, visionQaApiKey, "TileGlitchReviewAgent", "Judges whether a flagged before/after region of a report looks broken or legitimate.",
+            LoadPromptSync(sp, "07_tile_glitch_review.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+
         // [ADDED 2026-09-26] Reasoning-trace explainer, same Llm:Maf endpoint/apikey as the other
         // non-freehand agents in this file.
         // [CHANGED 2026-09-27] gpt-4o-mini -> the standard Llm:Maf model (user decision). Side-by-side

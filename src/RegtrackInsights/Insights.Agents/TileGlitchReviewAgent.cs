@@ -1,4 +1,7 @@
+using System.Text.Json;
 using Insights.Domain;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
 namespace Insights.Agents;
 
@@ -14,4 +17,36 @@ namespace Insights.Agents;
 public interface ITileGlitchReviewAgent
 {
     Task<AgentCallResult<TileGlitchReviewResult>> ReviewAsync(byte[] beforeCrop, byte[] afterCrop, CancellationToken cancellationToken = default);
+}
+
+/// <inheritdoc cref="ITileGlitchReviewAgent"/>
+public sealed class MafTileGlitchReviewAgent(AIAgent agent) : ITileGlitchReviewAgent
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
+    };
+
+    public async Task<AgentCallResult<TileGlitchReviewResult>> ReviewAsync(byte[] beforeCrop, byte[] afterCrop, CancellationToken cancellationToken = default)
+    {
+        var contents = new List<AIContent>
+        {
+            new TextContent("Here are the \"before\" and \"after\" crops of one region. Respond as JSON."),
+            new DataContent(beforeCrop, "image/png"),
+            new DataContent(afterCrop, "image/png"),
+        };
+        var message = new ChatMessage(ChatRole.User, contents);
+
+        var response = await agent.RunAsync(message, cancellationToken: cancellationToken);
+        var text = response.Text;
+        if (string.IsNullOrWhiteSpace(text))
+            throw new InvalidOperationException("Tile glitch review agent returned no text.");
+
+        var result = JsonSerializer.Deserialize<TileGlitchReviewResult>(text, JsonOptions)
+            ?? throw new InvalidOperationException($"Tile glitch review agent returned unparsable JSON: {text}");
+
+        var totalTokens = (response.Usage?.InputTokenCount ?? 0) + (response.Usage?.OutputTokenCount ?? 0);
+        return new AgentCallResult<TileGlitchReviewResult>(result, totalTokens);
+    }
 }
