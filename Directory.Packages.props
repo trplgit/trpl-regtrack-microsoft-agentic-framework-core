@@ -15,12 +15,25 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.23" />
   </ItemGroup>
   <!--
-    [ADDED 2026-10-07] Decodes two PNG screenshots to compare pixel-by-pixel (PixelDiff) -
-    InteractiveTileChecker's own cross-tile glitch detection. No other package here does PNG
-    decoding, so this is a new dependency, not a version alignment with anything else.
+    [ADDED 2026-10-07, REPLACED SAME DAY] Decodes two PNG screenshots to compare pixel-by-pixel
+    (PixelDiff) - InteractiveTileChecker's own cross-tile glitch detection. No other package here
+    does PNG decoding, so this is a new dependency, not a version alignment with anything else.
+
+    [REPLACED SixLabors.ImageSharp 2026-10-07, SAME DAY] ImageSharp's own MSBuild target
+    (SixLabors.ImageSharp.targets) enforces its commercial Split License as a build ERROR under
+    `dotnet publish -c Release` (silently only a WARNING under plain `dotnet build`/Debug) - broke
+    the real production Docker build the moment this shipped (deploy.production.yml, `dotnet
+    publish ... -c Release`, confirmed live in the real failed GitHub Actions run). SkiaSharp is
+    genuinely MIT-licensed, no license-gate at any build configuration - verified by reproducing
+    the same `dotnet publish -c Release` locally, which failed identically before this swap and
+    passed clean after it. SkiaSharp.NativeAssets.Linux is required explicitly (not transitively
+    resolved) because the real target is a Linux container
+    (mcr.microsoft.com/dotnet/aspnet:8.0-noble) - the native libSkiaSharp.so does not get pulled in
+    by a plain `dotnet publish` without it.
   -->
   <ItemGroup Label="Presentation - PNG pixel comparison (interactive tile QA)">
-    <PackageVersion Include="SixLabors.ImageSharp" Version="4.1.2" />
+    <PackageVersion Include="SkiaSharp" Version="4.153.1" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="4.153.1" />
   </ItemGroup>
   <ItemGroup Label="Azure - versions matched to the RegTrack API">
     <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.8.0" />
@@ -134,11 +147,10 @@
     OpenAI - no separate package for that half). These two are the SDK side: collect the spans/
     metrics this process emits and ship them to LangFuse's OTLP endpoint over HTTP.
   -->
-  <ItemGroup Label="Observability - OpenTelemetry -> LangFuse (build order item 17)">
+  <ItemGroup Label="Observability - OpenTelemetry -&gt; LangFuse (build order item 17)">
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
   </ItemGroup>
-
   <!--
     Phase 1d additions, still not pinned:
       The Anthropic MAF provider   (real compose / narrate provider)

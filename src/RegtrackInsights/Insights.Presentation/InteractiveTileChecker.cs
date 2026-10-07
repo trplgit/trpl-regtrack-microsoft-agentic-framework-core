@@ -2,7 +2,7 @@ using System.Drawing;
 using Insights.Agents;
 using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace Insights.Presentation;
 
@@ -227,15 +227,18 @@ public sealed class InteractiveTileChecker(
 
     private static byte[] CropPng(byte[] png, Rectangle region)
     {
-        using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgba32>(png);
+        using var image = SKBitmap.Decode(png);
         var clamped = Rectangle.Intersect(region, new Rectangle(0, 0, image.Width, image.Height));
         if (clamped.Width <= 0 || clamped.Height <= 0) clamped = new Rectangle(0, 0, image.Width, image.Height);
-        image.Mutate(ctx => ctx.Crop(new SixLabors.ImageSharp.Rectangle(clamped.X, clamped.Y, clamped.Width, clamped.Height)));
-        using var ms = new MemoryStream();
-        // Static call, not instance-extension syntax - see PixelDiffTests.cs's own note on why
-        // (avoids reopening the Rectangle ambiguity via a namespace-wide `using SixLabors.ImageSharp;`).
-        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, ms);
-        return ms.ToArray();
+        using var cropped = new SKBitmap(clamped.Width, clamped.Height);
+        using (var canvas = new SKCanvas(cropped))
+        {
+            canvas.DrawBitmap(image, new SKRect(clamped.X, clamped.Y, clamped.Right, clamped.Bottom),
+                new SKRect(0, 0, clamped.Width, clamped.Height), new SKSamplingOptions());
+        }
+        using var skImage = SKImage.FromBitmap(cropped);
+        using var data = skImage.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
 
     private string SaveScreenshot(byte[] png)
