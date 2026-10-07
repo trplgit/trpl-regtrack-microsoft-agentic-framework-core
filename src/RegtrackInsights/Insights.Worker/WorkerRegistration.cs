@@ -39,6 +39,13 @@ public static class WorkerRegistration
     internal static readonly IReadOnlyList<(string Name, string Version, Type Type)> OrchestrationRegistrations =
     [
         (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+        // [FROZEN 2026-10-07] Superseded by 4.7 (VisionQaActivity removed from the pipeline,
+        // superseded by InteractiveTileQaActivity). Retire via tools/DrainCheck once it reports
+        // zero in-flight "4.6" instances.
+        (InsightsReportOrchestrator.Name, "4.6", typeof(InsightsReportOrchestratorV4_6)),
+        // [FROZEN 2026-10-07] Superseded by 4.6 (InteractiveTileQaActivity + patch loop). Retire
+        // via tools/DrainCheck once it reports zero in-flight "4.5" instances.
+        (InsightsReportOrchestrator.Name, "4.5", typeof(InsightsReportOrchestratorV4_5)),
         // [FROZEN 2026-10-01] Superseded by 4.5 (Entity/fixed_holistic reasoning-trace explainer -
         // see InsightsReportOrchestrator's own changelog). Retire via tools/DrainCheck once it
         // reports zero in-flight "4.4" instances.
@@ -173,6 +180,8 @@ public static class WorkerRegistration
             sp.GetService<Insights.Presentation.ILayoutChecker>()));
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
+        services.AddTransient<InteractiveTileQaActivity>();
+        services.AddTransient<PatchRenderActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
         // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
         // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
@@ -259,7 +268,8 @@ public static class WorkerRegistration
                 ActivityCreator<InjectNumberFormulaActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
-                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
+                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp),
+                ActivityCreator<InteractiveTileQaActivity>(sp), ActivityCreator<PatchRenderActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<BuildReasoningTraceActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),

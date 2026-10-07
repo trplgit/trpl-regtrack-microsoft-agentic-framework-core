@@ -14,6 +14,14 @@
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.0.2" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.23" />
   </ItemGroup>
+  <!--
+    [ADDED 2026-10-07] Decodes two PNG screenshots to compare pixel-by-pixel (PixelDiff) -
+    InteractiveTileChecker's own cross-tile glitch detection. No other package here does PNG
+    decoding, so this is a new dependency, not a version alignment with anything else.
+  -->
+  <ItemGroup Label="Presentation - PNG pixel comparison (interactive tile QA)">
+    <PackageVersion Include="SixLabors.ImageSharp" Version="4.1.2" />
+  </ItemGroup>
   <ItemGroup Label="Azure - versions matched to the RegTrack API">
     <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.8.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />

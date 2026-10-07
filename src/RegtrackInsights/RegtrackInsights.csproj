@@ -68,6 +68,7 @@
     <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="SixLabors.ImageSharp" />
     <PackageReference Include="System.Threading.RateLimiting" />
   </ItemGroup>
 
