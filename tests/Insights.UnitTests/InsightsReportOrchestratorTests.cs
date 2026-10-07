@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DurableTask.Core;
 using Insights.Domain;
+using Insights.Presentation;
 using Insights.Worker.Orchestration;
 using Insights.Worker.Orchestration.Activities;
 using Moq;
@@ -75,6 +76,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PersistOutput("22222222-2222-2222-2222-222222222222"));
 
@@ -154,6 +157,8 @@ public class InsightsReportOrchestratorTests
 
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PersistOutput("33333333-3333-3333-3333-333333333333"));
 
@@ -312,6 +317,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PersistOutput("33333333-3333-3333-3333-333333333333"));
 
@@ -638,6 +645,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PersistOutput("11111111-1111-1111-1111-111111111111"));
 
@@ -731,6 +740,8 @@ public class InsightsReportOrchestratorTests
             .ReturnsAsync(new VisionQaOutput(false, null, 0));
         context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
         context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
             .ReturnsAsync(new PersistOutput("33333333-3333-3333-3333-333333333333"));
 
@@ -793,5 +804,162 @@ public class InsightsReportOrchestratorTests
         Assert.Equal("BUDGET_EXCEEDED", ex.ReasonCode);
         context.Verify(c => c.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
         context.Verify(c => c.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+    }
+
+    /// <summary>[ADDED 2026-10-07] Zero interactive-tile findings on the final page must never
+    /// schedule PatchRenderActivity at all - the loop body only runs when there is something to fix.</summary>
+    [Fact]
+    public async Task RunTask_NoInteractiveTileFindings_NeverSchedulesPatchRender()
+    {
+        var context = BuildHappyPathContext();
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+    }
+
+    /// <summary>[ADDED 2026-10-07] A real finding that the FIRST patch attempt clears must not burn
+    /// further patch attempts (Review Focus: patch-succeeds-on-attempt-1).</summary>
+    [Fact]
+    public async Task RunTask_InteractiveTileFinding_PatchSucceedsOnFirstAttempt_DoesNotRetryFurther()
+    {
+        var context = BuildHappyPathContext();
+        var finding = new TileFinding("section.card[data-tile-qa-index=\"0\"]", "Title", "click", TileFindingSeverity.Functional, "does nothing", "b.png", "a.png");
+        context.SetupSequence(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([finding]))
+            .ReturnsAsync(new InteractiveTileQaOutput([])); // re-verification after the patch: clean
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched</html>", 500));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html>patched</html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html>patched</html>"));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+        context.Verify(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()), Times.Exactly(2));
+    }
+
+    /// <summary>[ADDED 2026-10-07] A Functional finding that survives every patch attempt refuses the
+    /// run under the new INTERACTIVE_ELEMENT_BROKEN reason code.</summary>
+    [Fact]
+    public async Task RunTask_FunctionalFindingSurvivesAllPatchAttempts_Refuses()
+    {
+        var context = BuildHappyPathContext();
+        var finding = new TileFinding("section.card[data-tile-qa-index=\"0\"]", "Title", "click", TileFindingSeverity.Functional, "does nothing", "b.png", "a.png");
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([finding]));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>still broken</html>", 500));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html>still broken</html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html>still broken</html>"));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+
+        var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
+        Assert.Equal("INTERACTIVE_ELEMENT_BROKEN", ex.ReasonCode);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Exactly(3));
+        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+    }
+
+    /// <summary>[ADDED 2026-10-07] A Cosmetic-only finding that survives every patch attempt ships
+    /// anyway (same posture as LAYOUT_OVERLAP's own last-attempt exception), using the LAST patched
+    /// HTML, not the original.</summary>
+    [Fact]
+    public async Task RunTask_CosmeticOnlyFindingSurvivesAllPatchAttempts_ShipsWithLastPatchedHtml()
+    {
+        var context = BuildHappyPathContext();
+        var finding = new TileFinding("section.card[data-tile-qa-index=\"1\"]", "Other Title", "click", TileFindingSeverity.Cosmetic, "cross-tile bleed", "b.png", "a.png");
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([finding]));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>last patch attempt</html>", 500));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html>last patch attempt</html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html>last patch attempt</html>"));
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.Is<object[]>(args => ((PersistInput)args[0]).Html == "<html>last patch attempt</html>")))
+            .ReturnsAsync(new PersistOutput("22222222-2222-2222-2222-222222222222"));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Exactly(3));
+    }
+
+    /// <summary>Builds the shared happy-path context every test above starts from (identical to
+    /// RunTask_FixedHolisticReportType_SkipsComposeAndReflection_ReachesPersistOutput's own setup),
+    /// factored out so each new test only overrides what it needs to.</summary>
+    private static Mock<OrchestrationContext> BuildHappyPathContext()
+    {
+        var context = new Mock<OrchestrationContext>();
+        context.SetupGet(c => c.CurrentUtcDateTime).Returns(new DateTime(2026, 8, 21, 0, 0, 0, DateTimeKind.Utc));
+        var narrative = new NarrativeResult([]);
+
+        context.Setup(c => c.ScheduleTask<CheckTenantTokenBudgetOutput>(typeof(CheckTenantTokenBudgetActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new CheckTenantTokenBudgetOutput(0));
+        context.Setup(c => c.ScheduleTask<RecordTenantTokenUsageOutput>(typeof(RecordTenantTokenUsageActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new RecordTenantTokenUsageOutput());
+        context.Setup(c => c.ScheduleTask<GatherScopeOutput>(typeof(GatherScopeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new GatherScopeOutput([new ScopePair(100, 1)], "multi_entity", "Acme Holdings"));
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string>(), [], []));
+        context.Setup(c => c.ScheduleTask<ComputeScoreOutput>(typeof(ComputeScoreActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ComputeScoreOutput(new OverallHealth(null, "Needs Attention", "flat", "test", []), [], "{}"));
+        context.Setup(c => c.ScheduleTask<NarrateOutput>(typeof(NarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NarrateOutput(narrative, 1000));
+        context.Setup(c => c.ScheduleTask<ReflectOnNarrativeOutput>(typeof(ReflectOnNarrativeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ReflectOnNarrativeOutput(new NarrativeReflectionResult(ReflectionVerdict.Approve, []), 1000));
+        context.Setup(c => c.ScheduleTask<PublishGateOutput>(typeof(PublishGateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PublishGateOutput(true));
+        context.Setup(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
+            .ReturnsAsync(new RenderHtmlOutput("<html></html>", 1000));
+        context.Setup(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectFontOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageGridOutput>(typeof(InjectCoverageGridActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageGridOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageCssOutput>(typeof(InjectCoverageCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectCoverageScriptOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectBacklogAgeBarCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectForwardLookCssOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InjectNumberFormulaOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput("<html></html>"));
+        context.Setup(c => c.ScheduleTask<VisionQaOutput>(typeof(VisionQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new VisionQaOutput(false, null, 0));
+        context.Setup(c => c.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PlaywrightQaOutput(new ReportQaResult(false, [], false, [])));
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PersistOutput("22222222-2222-2222-2222-222222222222"));
+        return context;
     }
 }
