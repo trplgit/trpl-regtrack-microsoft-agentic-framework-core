@@ -390,6 +390,24 @@ public sealed record UsersControlTotals
     public int PerformerUserCount { get; init; }
     /// <summary>[ADDED 2026-09-15] See <see cref="PerformerUserCount"/>.</summary>
     public int ReviewerUserCount { get; init; }
+    /// <summary>
+    /// [ADDED 2026-10-07, BUG FOUND LIVE] sql/43's own A-CONC assertion already gives a real,
+    /// SQL-computed percentage (top10_share_of_assigned_pct - "the top ten users by load touch
+    /// X% of all assigned obligations") - but the RAW COUNT behind that percentage was never
+    /// exposed as its own field, only buried inside the assertion's Value/OfN pair. A real render
+    /// (Motul tenant 1926, Users run insights-1926-D6FB04C2F0D4C4DAB49C27383555F8DB039A628D203
+    /// 73F0EB52F1E3FDDEA88A2, 2026-10-07) wrote "10 users touch 92.2% of 1,122 distinct assigned
+    /// obligations" - the 92.2% and 1,122 are both real/traceable, but the implied headcount of
+    /// obligations touched (percentage x denominator) is not a value that appears anywhere in the
+    /// typed data, so ReportNumberTracer correctly refused it (UNTRACEABLE_NUMBERS). Cite this
+    /// field verbatim for that number instead of deriving it - same bug class, same fix pattern,
+    /// as Act/Entity/Nature/Risk/Departments/Internal's own LargestXInstances-style fields.
+    /// </summary>
+    public int Top10ConcentrationInstances { get; init; }
+    /// <summary>[ADDED 2026-10-07] The real headcount behind "the top ten users" - 10 unless fewer
+    /// than 10 users have any assignment at all (a small tenant). See
+    /// <see cref="Top10ConcentrationInstances"/> - cite this instead of the prompt hardcoding "10".</summary>
+    public int Top10ConcentrationUserCount { get; init; }
 }
 
 /// <summary>

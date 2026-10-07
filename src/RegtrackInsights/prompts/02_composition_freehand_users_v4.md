@@ -45,6 +45,14 @@ it alert/warning styling, never call it a risk, dependency, or single point of f
 norm, state it only in passing if at all (e.g. as one line inside an orientation section), and only
 when it adds color, never as a finding.
 
+**[FOUND LIVE 2026-10-07, BUG]** If the top-10-concentration finding (`A-CONC`,
+`top10_share_of_assigned_pct`) is the hero or a major block, state the obligation count from
+`Top10ConcentrationInstances` and the headcount from `Top10ConcentrationUserCount` - both real,
+verbatim fields now (see `control_totals`). Never have the narrate/render step multiply the
+percentage by `AssignedInstancesDistinct` to get a count itself - a real render did exactly that
+("10 users touch 92.2% of 1,122 distinct assigned obligations") and the implied obligation count
+was refused by the fail-closed number check because it traced to nothing real.
+
 ## What you are given
 
 - `assertions` — typed comparative facts (rank, comparator value, percentage-point gap). Capped to
