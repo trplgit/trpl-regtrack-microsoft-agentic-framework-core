@@ -173,6 +173,7 @@ public static class WorkerRegistration
             sp.GetService<Insights.Presentation.ILayoutChecker>()));
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
+        services.AddTransient<InteractiveTileQaActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
         // unset/empty means completely unchanged behaviour. Revert (delete this override, restore
         // the plain services.AddTransient<PersistActivity>() line) once Key Vault access is fixed.
@@ -259,7 +260,8 @@ public static class WorkerRegistration
                 ActivityCreator<InjectNumberFormulaActivity>(sp),
                 ActivityCreator<NormalizeActivity>(sp), ActivityCreator<SanitizeActivity>(sp),
                 ActivityCreator<ValidateFixedHolisticStructureActivity>(sp),
-                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
+                ActivityCreator<PlaywrightQaActivity>(sp), ActivityCreator<VisionQaActivity>(sp),
+                ActivityCreator<InteractiveTileQaActivity>(sp), ActivityCreator<PersistActivity>(sp),
                 ActivityCreator<BuildReasoningTraceActivity>(sp),
                 ActivityCreator<ResolveDigestRecipientsActivity>(sp), ActivityCreator<ComposeDigestActivity>(sp),
                 ActivityCreator<ClaimDigestArtifactActivity>(sp), ActivityCreator<PersistDigestArtifactActivity>(sp),

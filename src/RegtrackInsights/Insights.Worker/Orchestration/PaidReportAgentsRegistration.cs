@@ -485,6 +485,14 @@ public static class PaidReportAgentsRegistration
         // [ADDED 2026-09-28] Layout gate on the final page - see LayoutCollisionChecker.
         services.AddSingleton<ILayoutChecker>(sp => new LayoutCollisionChecker(sp.GetRequiredService<IBrowser>()));
 
+        // [ADDED 2026-10-07] Screenshots saved to disk, not kept in memory/serialized through DTFx -
+        // see InteractiveTileChecker's own doc comment on TileFinding's *Path fields.
+        services.AddSingleton<IInteractiveTileChecker>(sp => new InteractiveTileChecker(
+            sp.GetRequiredService<IBrowser>(),
+            sp.GetRequiredService<ITileGlitchReviewAgent>(),
+            Path.Combine(Path.GetTempPath(), "insights-tile-qa"),
+            sp.GetRequiredService<ILogger<InteractiveTileChecker>>()));
+
         return services;
     }
 
