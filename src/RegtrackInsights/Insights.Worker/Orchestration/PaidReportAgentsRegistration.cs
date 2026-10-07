@@ -308,6 +308,13 @@ public static class PaidReportAgentsRegistration
             LoadPromptSync(sp, "08_reasoning_explainer_v3.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
             ResponseReasoningEffortLevel.Medium, LlmLogger(sp))));
 
+        // [ADDED 2026-10-07] Design spec Section 4's patch loop - report-type-agnostic (the same
+        // plain endpoint/model/apiKey every non-freehand render call already uses, not
+        // freehandEndpoint), so one registration covers every report type.
+        services.AddSingleton<IPatchRenderAgent>(sp => new MafPatchRenderAgent(MafAgentFactory.CreateTextAgent(
+            endpoint, model, apiKey, "PatchRenderAgent", "Fixes only the named real problem(s) in an already-rendered report, leaving everything else unchanged.",
+            LoadPromptSync(sp, "10_patch_render_defect.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
         // this session. Fixed Holistic (05_report_html_fixed_holistic.md, ReportType

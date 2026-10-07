@@ -42,6 +42,7 @@ public class PaidReportAgentsRegistrationTests
         Assert.NotNull(provider.GetRequiredService<INarrativeReflectionAgent>());
         Assert.NotNull(provider.GetRequiredService<IVisionQaAgent>());
         Assert.NotNull(provider.GetRequiredService<ITileGlitchReviewAgent>());
+        Assert.NotNull(provider.GetRequiredService<IPatchRenderAgent>());
 
         var htmlAgents = provider.GetRequiredService<IReadOnlyDictionary<string, IReportHtmlAgent>>();
         Assert.NotNull(htmlAgents["fixed_holistic"]);
