@@ -129,6 +129,59 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
         Assert.DoesNotContain(findings, f => f.Severity == TileFindingSeverity.Functional && f.Interaction.Contains("scroll"));
     }
 
+    // [ADDED 2026-10-08, FOUND LIVE] Real Motul reports produced 50+ "no visible change at all"
+    // findings across EVERY tile and interaction - confirmed via an out-of-band Playwright repro
+    // that the exact same click DOES open the panel correctly. Root cause: card.BoundingBoxAsync()
+    // returns VIEWPORT-relative coordinates, but it was compared against a FullPage screenshot,
+    // which is DOCUMENT-relative. Any card below the fold (or any element whose own click triggers
+    // Playwright's implicit scroll-into-view) gets an ownTileRegion pointing at the wrong part of
+    // the page, so the real visual change lands outside the checked rectangle every time. Every
+    // existing test above happens to use a page short enough that viewport == document, so none of
+    // them could have caught this - this one deliberately pushes the real card below the fold.
+    [Fact]
+    public async Task ToggleInsideACardBelowTheFold_AfterRealScroll_IsNotAFalsePositive()
+    {
+        var spacer = "<div style='height:1800px'>Spacer so the real card sits below the fold.</div>";
+        var html = spacer + "<section class='card'><h3>Info</h3>" +
+            "<button class='hr-toggle' onclick=\"" +
+            "var p=document.getElementById('panel'); p.style.display='block'; " +
+            "var r=this.getBoundingClientRect(); p.style.top=(r.bottom+5)+'px'; p.style.left=r.left+'px';\">i</button></section>" +
+            "<div id='panel' style='display:none;position:fixed;background:#333;color:#fff;padding:10px;width:200px'>Formula detail</div>";
+        var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
+        Assert.DoesNotContain(findings, f => f.Severity == TileFindingSeverity.Functional);
+    }
+
+    // [ADDED 2026-10-08, FOUND LIVE] Real Motul Departments report produced 45 near-identical
+    // Functional findings across every tile. Root cause confirmed by instrumenting the real class
+    // against the real extracted report HTML: the per-card tagging query (`.hr-toggle, .hr-i, .pf,
+    // button, svg`) runs over the WHOLE card, which includes the decorative illustrative `<svg>`
+    // icons living INSIDE a card's own "How to read this chart" help panel (`.hr-panel`) - content
+    // that is explanatory prose, never meant to be independently interactive, and starts closed
+    // (visibility:hidden) besides. Those got tagged, hovered, and reported as broken toggles
+    // ("produced no visible change") purely because they are decorative icons with no handler -
+    // genuinely correct that nothing happened, but they were never real interactive elements. A
+    // real card's help panel can carry 10+ such icons, explaining the volume. Content inside
+    // `.hr-panel`/`.pf-panel` must never be tagged, whatever element type it is.
+    [Fact]
+    public async Task DecorativeContentInsideAHelpPanel_IsNeverTaggedAsInteractive()
+    {
+        var html = "<section class='card'><h3>Info</h3><div class='hr'>" +
+            "<button class='hr-toggle' onclick=\"" +
+            "var p=document.getElementById('panel'); p.style.visibility='visible'; p.style.opacity='1'; " +
+            "var r=this.getBoundingClientRect(); p.style.top=(r.bottom+5)+'px'; p.style.left=r.left+'px';\">i</button>" +
+            "<aside id='panel' class='hr-panel' style='visibility:hidden;opacity:0;position:fixed;background:#333;color:#fff;padding:10px;width:200px'>" +
+            "<p>How to read this chart</p>" +
+            "<svg width='30' height='30'><circle cx='15' cy='15' r='10' fill='red'/></svg>" +
+            "<svg width='30' height='30'><circle cx='15' cy='15' r='10' fill='blue'/></svg>" +
+            "<button onclick=\"void(0)\">Decorative, not real</button>" +
+            "</aside></div></section>";
+        var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
+        // The real toggle legitimately opens its own panel - no finding for it. The decorative
+        // svgs/button inside the panel must never even be checked, so there must be no findings
+        // about them either - the whole card should come back clean.
+        Assert.Empty(findings);
+    }
+
     [Fact]
     public async Task ChartLoadAnimationSettledBeforeFirstInteraction_IsNotAIssue()
     {
