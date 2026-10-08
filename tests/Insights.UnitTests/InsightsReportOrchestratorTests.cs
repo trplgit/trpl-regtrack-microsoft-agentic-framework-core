@@ -734,10 +734,16 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()), Times.Exactly(2));
     }
 
-    /// <summary>[ADDED 2026-10-07] A Functional finding that survives every patch attempt refuses the
-    /// run under the new INTERACTIVE_ELEMENT_BROKEN reason code.</summary>
+    /// <summary>[CHANGED 2026-10-08, user decision] A Functional finding that survives every patch
+    /// attempt used to refuse the run (INTERACTIVE_ELEMENT_BROKEN). Changed: ship the report anyway,
+    /// same posture Cosmetic-only findings already had - InteractiveTileQaActivity's own LogWarning
+    /// on the final re-verification call already records the finding, so nothing is silently lost,
+    /// but a refused report delivers nothing while a shipped one delivers everything else correctly.
+    /// Reason: a real false-positive incident (InteractiveTileChecker tagging decorative content
+    /// inside closed help panels as testable) refused real customer reports outright; this is the
+    /// safety net for whatever the next undiscovered false-positive class turns out to be.</summary>
     [Fact]
-    public async Task RunTask_FunctionalFindingSurvivesAllPatchAttempts_Refuses()
+    public async Task RunTask_FunctionalFindingSurvivesAllPatchAttempts_ShipsAnywayLogged()
     {
         var context = BuildHappyPathContext();
         var finding = new TileFinding("section.card[data-tile-qa-index=\"0\"]", "Title", "click", TileFindingSeverity.Functional, "does nothing", "b.png", "a.png");
@@ -753,10 +759,11 @@ public class InsightsReportOrchestratorTests
         var orchestrator = new InsightsReportOrchestrator();
         var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
 
-        var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
-        Assert.Equal("INTERACTIVE_ELEMENT_BROKEN", ex.ReasonCode);
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
         context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Exactly(3));
-        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+        context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
     }
 
     /// <summary>[ADDED 2026-10-07] A Cosmetic-only finding that survives every patch attempt ships

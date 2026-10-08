@@ -82,13 +82,28 @@ public sealed class InteractiveTileChecker(
                 // COMPUTED overflow-y is auto/scroll (a scrollable register/list) - that last one
                 // cannot be expressed as a plain CSS selector, so it needs its own JS-side filter
                 // pass rather than being folded into the querySelectorAll string above.
+                //
+                // [FOUND LIVE 2026-10-08] A card's own "How to read this chart" help panel
+                // (.hr-panel/.pf-panel) is explanatory prose - it commonly carries 10+ purely
+                // illustrative <svg> icons with no handler of their own, and starts closed
+                // (visibility:hidden). The selector above runs over the WHOLE card, so it swept
+                // these up too, hovered them, and correctly observed "nothing happened" - true, but
+                // they were never real interactive elements. A real Motul Departments report
+                // produced 45 near-identical false "broken toggle" findings this way. Content
+                // nested inside .hr-panel/.pf-panel must never be tagged, whatever element type it
+                // is - the real triggers (.hr-toggle/.hr-i/.pf) always sit as SIBLINGS before the
+                // panel, never inside it, so this exclusion can never hide a genuine trigger.
                 await page.EvaluateAsync(
                     """
                     (sel) => {
                       const card = document.querySelector(sel);
                       if (!card) return;
-                      const matches = new Set(card.querySelectorAll('.hr-toggle, .hr-i, .pf, button, svg'));
+                      const inExplanatoryPanel = el => el.closest('.hr-panel, .pf-panel') !== null;
+                      const matches = new Set(
+                        Array.from(card.querySelectorAll('.hr-toggle, .hr-i, .pf, button, svg')).filter(el => !inExplanatoryPanel(el))
+                      );
                       card.querySelectorAll('*').forEach(el => {
+                        if (inExplanatoryPanel(el)) return;
                         const s = getComputedStyle(el);
                         if (s.overflowY === 'auto' || s.overflowY === 'scroll') matches.add(el);
                       });
@@ -132,9 +147,16 @@ public sealed class InteractiveTileChecker(
         // Class check FIRST: a <button class="hr-toggle"> must classify as 'toggle' (so it gets
         // the Escape-key reset below), not 'button' (which has none) - tagName alone would pick
         // 'button' and leave a real toggle open for every element checked after it.
+        //
+        // [FOUND LIVE 2026-10-08] `el.tagName === 'SVG'` never matches a real SVG element - SVG
+        // (XML-namespaced) elements report their tagName in source case, lowercase 'svg', not
+        // uppercased the way HTML elements are. Every genuine data-mark <svg> fell through to the
+        // 'toggle' default, got hovered AND clicked instead of hover-only, and (outside this test's
+        // own panel-exclusion fix) could still misreport a real hover-only chart mark as a broken
+        // toggle. Compare case-insensitively.
         var kind = await element.EvaluateAsync<string>(
             "el => (el.classList.contains('hr-toggle') || el.classList.contains('hr-i') || el.classList.contains('pf')) ? 'toggle' : " +
-            "el.tagName === 'SVG' ? 'svg' : el.tagName === 'BUTTON' ? 'button' : " +
+            "el.tagName.toLowerCase() === 'svg' ? 'svg' : el.tagName === 'BUTTON' ? 'button' : " +
             "(getComputedStyle(el).overflowY === 'auto' || getComputedStyle(el).overflowY === 'scroll') ? 'scroll' : 'toggle'");
         var interaction = kind switch
         {
