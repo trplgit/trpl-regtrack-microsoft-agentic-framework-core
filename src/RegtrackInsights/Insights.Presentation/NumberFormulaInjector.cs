@@ -107,9 +107,9 @@ public static class NumberFormulaInjector
         .pf-formula{display:block;background:#e8f2fd;border-radius:10px;padding:14px 16px 16px;margin-top:4px}
         .pf-formula-label{display:block;font-size:11px;font-weight:700;color:#125aab;letter-spacing:.03em;margin:0 0 10px}
         .pf-diff{display:flex;flex-direction:column;align-items:center;gap:2px}
-        .pf-diff-row{display:flex;align-items:baseline;gap:8px;justify-content:center}
+        .pf-diff-row{display:flex;align-items:baseline;gap:8px;justify-content:center;min-width:0;max-width:100%}
         .pf-diff-value{font-size:15px;font-weight:700;color:#1f2937;white-space:nowrap}
-        .pf-diff-label{font-size:11px;color:#585858;white-space:nowrap}
+        .pf-diff-label{font-size:11px;color:#585858;white-space:normal;overflow-wrap:break-word;text-align:left}
         .pf-diff-op{display:block;text-align:center;font-size:14px;font-weight:600;color:#1f2937;margin:2px 0}
         .pf-diff-result .pf-diff-value{color:#125aab}
         .pf-frac{display:flex;align-items:center;justify-content:center;gap:10px}
