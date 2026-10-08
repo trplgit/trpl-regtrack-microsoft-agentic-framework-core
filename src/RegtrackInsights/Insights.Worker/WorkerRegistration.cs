@@ -39,6 +39,10 @@ public static class WorkerRegistration
     internal static readonly IReadOnlyList<(string Name, string Version, Type Type)> OrchestrationRegistrations =
     [
         (InsightsReportOrchestrator.Name, InsightsReportOrchestrator.Version, typeof(InsightsReportOrchestrator)),
+        // [FROZEN 2026-10-08] Superseded by 4.8 (self-hosted font stripped before, re-injected
+        // after, each patch-loop LLM call). Retire via tools/DrainCheck once it reports zero
+        // in-flight "4.7" instances.
+        (InsightsReportOrchestrator.Name, "4.7", typeof(InsightsReportOrchestratorV4_7)),
         // [FROZEN 2026-10-07] Superseded by 4.7 (VisionQaActivity removed from the pipeline,
         // superseded by InteractiveTileQaActivity). Retire via tools/DrainCheck once it reports
         // zero in-flight "4.6" instances.

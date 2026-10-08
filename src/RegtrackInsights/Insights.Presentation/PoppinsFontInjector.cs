@@ -38,6 +38,14 @@ public static class PoppinsFontInjector
 
     private static readonly Regex HeadOpenTag = new(@"<head[^>]*>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Matches EXACTLY the block Inject() itself produces below - three @font-face rules, in that
+    // order, inside one <style> tag, nothing else inside it. Deliberately tight (not a generic
+    // "any style tag mentioning Poppins" match) so this can never remove content the render agent
+    // or another injector wrote.
+    private static readonly Regex InjectedFontStyleBlock = new(
+        @"<style>(?:@font-face\{font-family:'Poppins';[^}]*\}){3}</style>",
+        RegexOptions.Compiled);
+
     /// <summary>
     /// Inserts a self-hosted @font-face &lt;style&gt; block immediately after the document's
     /// opening &lt;head&gt; tag - earliest possible position, so nothing else in &lt;head&gt;
@@ -77,4 +85,19 @@ public static class PoppinsFontInjector
 
         return html.Insert(match.Index + match.Length, fontFace);
     }
+
+    /// <summary>
+    /// [ADDED 2026-10-08, FOUND LIVE] Removes the exact self-hosted font block Inject() produces,
+    /// if present. A no-op on a document that never carried it, so this is always safe to call
+    /// defensively.
+    ///
+    /// Exists so the orchestrator's patch loop can strip this block BEFORE sending the document to
+    /// an LLM patch call, instead of asking the model to faithfully reproduce ~30KB of opaque
+    /// base64 glyph data in its own output. A real Motul BacklogAging report shipped with its font
+    /// silently broken: the patch call dropped 2 of the 3 weight blocks entirely, and even
+    /// corrupted the one it kept (one character short of the real file - enough to break WOFF2
+    /// decoding, so the browser fell back to a system font with no visible error). Strip before the
+    /// call, re-inject a guaranteed-correct copy via <see cref="Inject"/> after it.
+    /// </summary>
+    public static string Strip(string html) => InjectedFontStyleBlock.Replace(html, "", 1);
 }
