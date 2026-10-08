@@ -1313,20 +1313,18 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
                     if (remainingFindings.Count == 0) break;
 
-                    if (patchAttempt == maxPatchAttempts)
-                    {
-                        var functional = remainingFindings.Where(f => f.Severity == TileFindingSeverity.Functional).ToList();
-                        if (functional.Count > 0)
-                        {
-                            throw new OrchestrationRefusedException(
-                                "INTERACTIVE_ELEMENT_BROKEN",
-                                "We couldn't generate this report to our accuracy standard. Our team has been notified.",
-                                internalDiagnostics: functional.Select(f => $"{f.CardTitle} ({f.Interaction}): {f.TechnicalDescription}").ToList());
-                        }
-                        // Cosmetic-only findings ship anyway on the last attempt, same posture as
-                        // LAYOUT_OVERLAP's own last-attempt exception - logged by
-                        // InteractiveTileQaActivity itself, nothing further to do here.
-                    }
+                    // [CHANGED 2026-10-08, user decision] Any finding still standing after
+                    // maxPatchAttempts - Cosmetic OR Functional - ships with the last patched HTML,
+                    // same posture LAYOUT_OVERLAP's own last-attempt exception already used for
+                    // Cosmetic alone. Previously a surviving Functional finding refused the whole
+                    // run under INTERACTIVE_ELEMENT_BROKEN; changed after a real false-positive
+                    // incident (InteractiveTileChecker tagging decorative content inside closed help
+                    // panels as testable, refusing real customer reports outright for something that
+                    // was never actually broken). A refused report delivers nothing; a shipped report
+                    // with one stale tile still delivers everything else correctly - judged the
+                    // better failure mode. InteractiveTileQaActivity's own LogWarning on this final
+                    // re-verification call already records the finding for ops to review - nothing
+                    // further to do here.
                 }
 
                 finalStructureChecked = finalStructureChecked with { Html = currentHtml };
