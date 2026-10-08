@@ -734,6 +734,43 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()), Times.Exactly(2));
     }
 
+    /// <summary>[ADDED 2026-10-08, FOUND LIVE] A real Motul BacklogAging report shipped with its
+    /// self-hosted font silently broken because PatchRenderActivity's input still carried the
+    /// ~30KB of real base64 glyph data InjectFontActivity had already embedded, and the LLM patch
+    /// call corrupted it while "preserving everything else". The patch call must never see that
+    /// block at all, and InjectFontActivity must run again on the patched output to restore it.</summary>
+    [Fact]
+    public async Task RunTask_PatchLoop_StripsFontBeforePatchCall_ReinjectsAfter()
+    {
+        var context = BuildHappyPathContext();
+        var realFontHtml = PoppinsFontInjector.Inject("<html><head></head><body>report</body></html>");
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput(realFontHtml));
+
+        var finding = new TileFinding("section.card[data-tile-qa-index=\"0\"]", "Title", "click", TileFindingSeverity.Functional, "does nothing", "b.png", "a.png");
+        context.SetupSequence(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([finding]))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched, no font</html>", 500));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new NormalizeOutput("<html>normalized</html>"));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new SanitizeOutput("<html>sanitized</html>"));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        // The patch call must never see the font block - it was stripped first.
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0",
+            It.Is<object[]>(args => !((PatchRenderInput)args[0]).Html.Contains("@font-face"))), Times.Once);
+        // InjectFontActivity must run again inside the patch loop, fed the patched HTML.
+        context.Verify(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0",
+            It.Is<object[]>(args => ((InjectFontInput)args[0]).Html == "<html>patched, no font</html>")), Times.Once);
+    }
+
     /// <summary>[CHANGED 2026-10-08, user decision] A Functional finding that survives every patch
     /// attempt used to refuse the run (INTERACTIVE_ELEMENT_BROKEN). Changed: ship the report anyway,
     /// same posture Cosmetic-only findings already had - InteractiveTileQaActivity's own LogWarning
