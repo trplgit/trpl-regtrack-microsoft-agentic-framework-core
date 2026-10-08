@@ -95,10 +95,49 @@ public static class EntityScoreFormulaInjector
     // is not calculated at all. Every row/panel below now states its own real result explicitly.
     private static decimal Contribution(ScoreComponent c) => decimal.Round(c.Score * c.Weight, 2);
 
+    /// <summary>
+    /// [ADDED 2026-10-08, user-reported] What each pillar actually measures - grounded in
+    /// CompositeScoreCalculator's own formula/doc comments, never invented business rationale.
+    /// Weights themselves are explicitly PROVISIONAL (see that class's top doc comment - "the
+    /// business is expected to review and retune both the formulas and the weights"), so this
+    /// states what is measured, not a false claim that the weight was business-approved.
+    /// </summary>
+    private static string WhatItMeasures(string name) => name.Trim().ToLowerInvariant() switch
+    {
+        "risk" => "What it measures: 100 minus the overdue rate of the tenant's own CRITICAL risk tier only - the tier the classification dictionary resolves as Critical, never a name match.",
+        "licence" => "What it measures: 100 minus the share of this tenant's licences currently in Expired status.",
+        "coverage" => "What it measures: of the tenant's real leaf branches (not grouping/entity-tree nodes), the share that are healthy or only lightly flagged, half credit for high-ownerless branches, zero for branches with no obligations configured at all.",
+        "overdue" => "What it measures: 100 minus the tenant-wide overdue rate across every scoped obligation - a lagging, estate-wide signal distinct from Risk's critical-tier-only view.",
+        "people" => "What it measures: 100 minus how concentrated performer and reviewer work is in a small number of people - a continuity risk, not a workload measure.",
+        "timeliness" => "What it measures: the tenant-wide share of scheduled work that closes on time.",
+        "evidence" => "What it measures: the share of closures that carry a review trail - a proxy for evidence discipline, not document-level attestation.",
+        _ => "What it measures: this pillar's own 0-100 health score this run.",
+    };
+
     private static string BuildCompositePanel(string id, string displayText, IReadOnlyList<ScoreComponent> components)
     {
         var rows = string.Concat(components.Select(c =>
             $"""<span class="pf-diff-row"><span class="pf-diff-value">{c.Score} &times; {c.Weight} = {Contribution(c)}</span><span class="pf-diff-label">{System.Net.WebUtility.HtmlEncode(c.Name)}</span></span>"""));
+
+        // [ADDED 2026-10-08, user-reported clarity gap] The rows above sum to the NUMERATOR only -
+        // when not every pillar scored this run (a degraded/null dimension), the weight actually
+        // counted is less than 1.0 and the real composite is that numerator divided by the weight
+        // ACTUALLY counted, never by 1.0. Found live: Motul tenant 1926's Entity report scored 5 of
+        // 7 pillars (weight 0.75), numerator 36.05, real displayed composite 48.0 - a reader adding
+        // the rows alone landed on 36.05 with no explanation of the 12-point gap. The final answer
+        // below is the real passed-in displayText, never recomputed here, so it can never drift
+        // from what the donut actually shows even if this file's own rounding ever disagreed with
+        // CompositeScoreCalculator's.
+        var weightSum = components.Sum(c => c.Weight);
+        var numerator = decimal.Round(components.Sum(c => c.Score * c.Weight), 2);
+        var scoredCount = components.Count;
+        var footer = $"""
+            <span class="pf-diff-row pf-diff-subtotal"><span class="pf-diff-value">{numerator}</span><span class="pf-diff-label">Sum of the weighted contributions above</span></span>
+            <span class="pf-diff-op">&divide;</span>
+            <span class="pf-diff-row"><span class="pf-diff-value">{weightSum}</span><span class="pf-diff-label">Weight actually counted this run ({scoredCount} of 7 pillars scored - a missing pillar's weight is dropped, never treated as a zero score)</span></span>
+            <span class="pf-diff-op">=</span>
+            <span class="pf-diff-row pf-diff-result"><span class="pf-diff-value">{displayText}</span><span class="pf-diff-label">Composite score (the number shown above)</span></span>
+            """;
 
         return $"""
             <span class="hr">
@@ -107,8 +146,8 @@ public static class EntityScoreFormulaInjector
               <span class="hr-panel pf-panel" role="dialog" aria-label="How this score is worked out">
                 <label for="{id}" class="hr-close" aria-label="Close">&times;</label>
                 <span class="hr-title pf-title">Compliance-health score - {displayText} / 100</span>
-                <span class="hr-intro pf-intro">A weighted sum of each real score component below, 0-100. Only components that scored this run are counted.</span>
-                <span class="pf-formula"><span class="pf-formula-label">HOW IT IS CALCULATED</span><span class="pf-diff">{rows}</span></span>
+                <span class="hr-intro pf-intro">A weighted average of each real score component below, 0-100. Only components that scored this run are counted - both in the sum and in what it is divided by.</span>
+                <span class="pf-formula"><span class="pf-formula-label">HOW IT IS CALCULATED</span><span class="pf-diff">{rows}{footer}</span></span>
               </span>
             </span>
             """;
@@ -124,6 +163,7 @@ public static class EntityScoreFormulaInjector
                 <label for="{id}" class="hr-close" aria-label="Close">&times;</label>
                 <span class="hr-title pf-title">{System.Net.WebUtility.HtmlEncode(component.Name)} score - {displayText}</span>
                 <span class="hr-intro pf-intro">This pillar's own health score this run, 0-100 - contributes to the composite score above at weight {component.Weight}.</span>
+                <span class="pf-intro pf-what">{System.Net.WebUtility.HtmlEncode(WhatItMeasures(component.Name))}</span>
                 <span class="pf-formula"><span class="pf-formula-label">HOW IT IS CALCULATED</span>
                   <span class="pf-diff">
                     <span class="pf-diff-row"><span class="pf-diff-value">{component.Score}</span><span class="pf-diff-label">This pillar's own score</span></span>
