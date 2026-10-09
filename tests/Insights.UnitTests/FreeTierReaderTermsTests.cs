@@ -115,11 +115,11 @@ public class FreeTierReaderTermsTests
 
 public class ExampleUnitTests
 {
-    /// <summary>[FOUND LIVE 2026-10-09] A slippage example (compliances) written as "sites where it applies".</summary>
+    /// <summary>[FOUND LIVE 2026-10-09] A slippage example (compliances) written as "sites where it applies". [2026-10-09, evening] The rule is scoped to ACT examples/findings (a location example may sit in a "N of the M locations" sentence), so the Act fixture is the one that must trip it.</summary>
     [Fact]
     public void ASlippageExampleIsNeverWrittenAsSites()
     {
-        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName("location"));
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName("act"));
         var eg = prompt.Examples.FirstOrDefault(e => !e.Example.PatternFactKey.Contains("multi_location", StringComparison.Ordinal))?.Placeholder
                  ?? prompt.NamedFindings.First(n => n.NamePlaceholder is not null && !n.Candidate.Detector.Contains("multi_location", StringComparison.Ordinal)).NamePlaceholder!;
         var body = "Good morning,\n\nHere is your update. The figures below are as of {{AS_AT}}.\n\nUnder " + eg + ", 21 of its 22 sites where it applies have it overdue. This work was due last month and is not finished.";
