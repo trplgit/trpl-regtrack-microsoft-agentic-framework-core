@@ -14,7 +14,10 @@ namespace Insights.Worker.Orchestration.Activities;
 /// </param>
 public sealed record PersistInput(
     string Html, int TenantId, string ReportType, string Period, string ScopeDescriptor, int UserId,
-    IReadOnlyList<string>? RequestedDimensions = null);
+    IReadOnlyList<string>? RequestedDimensions = null,
+    // [ADDED 2026-10-09] Trailing-optional, payload-only: what the tile-QA stage concluded, so the
+    // one structured warning below can carry the ReportId. Null for runs recorded before this existed.
+    TileQaSummary? TileQa = null);
 
 /// <param name="LocalFilePath">
 /// [ADDED 2026-09-12] Set only when Reports:LocalFallbackDirectory is configured - see
@@ -28,7 +31,12 @@ public sealed record PersistInput(
 /// blob path ReportContentService will later re-derive from GeneratedReport.GeneratedAtUtc - any
 /// mismatch here would make the trace unfindable at read time.
 /// </param>
-public sealed record PersistOutput(string ReportId, string? LocalFilePath = null, DateTime GeneratedAtUtc = default);
+/// <param name="TileQa">
+/// [ADDED 2026-10-09] Echo of PersistInput.TileQa, trailing-optional. The orchestrator returns
+/// this record as its terminal Output, so the stored task-hub Output row now says whether the
+/// report shipped with open tile-QA findings - queryable with no schema change. Null for older runs.
+/// </param>
+public sealed record PersistOutput(string ReportId, string? LocalFilePath = null, DateTime GeneratedAtUtc = default, TileQaSummary? TileQa = null);
 
 /// <summary>
 /// Node 12: build order item 14's write path. Encrypt -> blob -> SQL index row, replacing
@@ -67,6 +75,9 @@ public sealed class PersistActivity(
     ILogger<PersistActivity> logger, ITenantReportLock tenantReportLock, string? localFallbackDirectory = null)
     : AsyncTaskActivity<PersistInput, PersistOutput>
 {
+    /// <summary>[ADDED 2026-10-09] Structured event id for "shipped with open tile-QA findings" - alert on it.</summary>
+    public static readonly EventId TileQaOpenFindings = new(5101, nameof(TileQaOpenFindings));
+
     protected override Task<PersistOutput> ExecuteAsync(TaskContext context, PersistInput input) =>
         RunAsync(input, context.OrchestrationInstance.ExecutionId);
 
@@ -83,6 +94,18 @@ public sealed class PersistActivity(
         // the same key must get a new report, a redelivered attempt of THIS run must not.
         var reportId = InsightsRunId.ReportId(input.TenantId, input.ScopeDescriptor, input.ReportType, input.Period, executionId);
         var generatedAtUtc = DateTime.UtcNow;
+
+        // [ADDED 2026-10-09] The ONE place a shipped-with-open-findings report is recorded with its
+        // ReportId. Six real tenant-1271 runs shipped that way on 2026-10-09 with nothing but an
+        // anonymous LogWarning inside the checker; ops had no way to tie a blank-chart complaint
+        // back to a run. Structured, so Loki/Grafana can alert on EventId TileQaOpenFindings.
+        if (input.TileQa is { } tileQa && (tileQa.OpenFunctional > 0 || tileQa.OpenCosmetic > 0))
+        {
+            logger.LogWarning(TileQaOpenFindings,
+                "Report {ReportId} (tenant {CustomerId}, {ReportType}, {Dimensions}) ships with open tile-QA findings: {Functional} functional, {Cosmetic} cosmetic after {Attempts} patch attempt(s) ({Applied} applied); outcome={Outcome}; checkerTruncated={Truncated}.",
+                reportId, input.TenantId, input.ReportType, ReportDimensionKey.Normalize(input.RequestedDimensions),
+                tileQa.OpenFunctional, tileQa.OpenCosmetic, tileQa.PatchAttempts, tileQa.PatchesApplied, tileQa.Outcome, tileQa.CheckerTruncated);
+        }
 
         if (!string.IsNullOrWhiteSpace(localFallbackDirectory))
         {

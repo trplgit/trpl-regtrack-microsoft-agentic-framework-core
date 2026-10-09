@@ -4,17 +4,11 @@ using SkiaSharp;
 namespace Insights.Presentation;
 
 /// <summary>
-/// [ADDED 2026-10-07] Pure, deterministic PNG pixel comparison - no Playwright, no LLM. Used by
-/// InteractiveTileChecker to decide (a) whether an interaction visibly changed anything inside its
-/// own tile at all, and (b) whether anything OUTSIDE that tile visibly changed. A small per-channel
-/// tolerance absorbs anti-aliasing/font-rendering jitter between two otherwise-identical renders,
-/// same class of noise LayoutCollisionChecker's own `area(...) &lt; 4` guard exists for.
-///
-/// [REPLACED SixLabors.ImageSharp 2026-10-07, SAME DAY] ImageSharp's own build target enforces its
-/// commercial license as a hard ERROR under `dotnet publish -c Release` (only a warning under
-/// plain `dotnet build`) - broke the real production Docker build the moment it shipped. SkiaSharp
-/// is genuinely MIT-licensed, no license gate at any build configuration - see
-/// Directory.Packages.props's own note on this swap for the full real incident.
+/// Pixel comparison for the tile-QA checker. Two PNGs are decoded ONCE per public call and
+/// compared over raw pixel spans - [CHANGED 2026-10-09] the previous per-pixel
+/// <c>SKBitmap.GetPixel</c> loop over a 1280 x 4000 screenshot, repeated per 40 x 40 block, was a
+/// measurable share of the hour-long checker passes seen live. Semantics are unchanged: a pixel
+/// "differs" when any colour channel differs by more than <see cref="ChannelTolerance"/>.
 /// </summary>
 public static class PixelDiff
 {
@@ -35,11 +29,43 @@ public static class PixelDiff
         if (clamped.Width <= 0 || clamped.Height <= 0)
             return 0.0;
 
-        var differing = 0L;
         var total = (long)clamped.Width * clamped.Height;
-        for (var y = clamped.Top; y < clamped.Bottom; y++)
+        var differing = before.BytesPerPixel == 4 && after.BytesPerPixel == 4 && before.ColorType == after.ColorType
+            ? CountDifferingSpan(before, after, clamped)
+            : CountDifferingSlow(before, after, clamped);
+        return total == 0 ? 0.0 : (double)differing / total;
+    }
+
+    private static long CountDifferingSpan(SKBitmap before, SKBitmap after, Rectangle r)
+    {
+        var differing = 0L;
+        var b = before.GetPixelSpan();
+        var a = after.GetPixelSpan();
+        var rowB = before.RowBytes;
+        var rowA = after.RowBytes;
+        for (var y = r.Top; y < r.Bottom; y++)
         {
-            for (var x = clamped.Left; x < clamped.Right; x++)
+            var offB = y * rowB + r.Left * 4;
+            var offA = y * rowA + r.Left * 4;
+            for (var x = 0; x < r.Width; x++, offB += 4, offA += 4)
+            {
+                // Channel order (RGBA vs BGRA) is identical for both decodes, so comparing the
+                // first three bytes position-wise is a colour comparison either way; byte 4 is alpha.
+                if (Math.Abs(b[offB] - a[offA]) > ChannelTolerance
+                    || Math.Abs(b[offB + 1] - a[offA + 1]) > ChannelTolerance
+                    || Math.Abs(b[offB + 2] - a[offA + 2]) > ChannelTolerance)
+                    differing++;
+            }
+        }
+        return differing;
+    }
+
+    private static long CountDifferingSlow(SKBitmap before, SKBitmap after, Rectangle r)
+    {
+        var differing = 0L;
+        for (var y = r.Top; y < r.Bottom; y++)
+        {
+            for (var x = r.Left; x < r.Right; x++)
             {
                 var a = before.GetPixel(x, y);
                 var b = after.GetPixel(x, y);
@@ -47,7 +73,7 @@ public static class PixelDiff
                     differing++;
             }
         }
-        return total == 0 ? 0.0 : (double)differing / total;
+        return differing;
     }
 
     public static IReadOnlyList<Rectangle> FindChangedBlocksOutside(
@@ -57,7 +83,6 @@ public static class PixelDiff
         using var after = SKBitmap.Decode(afterPng);
         var width = Math.Min(before.Width, after.Width);
         var height = Math.Min(before.Height, after.Height);
-
         var flaggedBlocks = new List<Rectangle>();
         for (var y = 0; y < height; y += blockSize)
         {
@@ -70,13 +95,9 @@ public static class PixelDiff
                     flaggedBlocks.Add(block);
             }
         }
-
         return MergeAdjacent(flaggedBlocks);
     }
 
-    /// <summary>Greedy union of any two flagged blocks whose (slightly inflated) rectangles touch or overlap,
-    /// repeated until no further merge happens - turns a grid of small flagged blocks into a handful of
-    /// real regions worth cropping and sending to the vision model.</summary>
     private static List<Rectangle> MergeAdjacent(List<Rectangle> blocks)
     {
         var merged = new List<Rectangle>(blocks);

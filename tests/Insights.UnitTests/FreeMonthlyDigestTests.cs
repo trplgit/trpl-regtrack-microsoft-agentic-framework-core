@@ -716,7 +716,10 @@ public sealed class FreeMonthlyDigestValidatorTests
         var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.LocationWithAggregateExamples());
 
         var result = FreeMonthlyDigestValidator.Validate(
-            "Good morning,\n\nAcross your organisation, 18 of the 24 locations with overdue work hold obligations that have been overdue for more than 90 days, including {{EG_1}} and {{EG_2}}, and none of that work has been closed as at {{AS_AT}}.",
+            // [2026-10-09] The examples sit in their own sentence: a site count in the SAME sentence
+            // as an example that counts compliances is now a failure of its own (the "sites where it
+            // applies" rule), which is not what this test is about.
+            "Good morning,\n\nAcross your organisation, 18 of the 24 locations with overdue work hold obligations that have been overdue for more than 90 days. {{EG_1}} and {{EG_2}} are among them, and none of that work has been closed as at {{AS_AT}}.",
             prompt);
 
         Assert.Contains(result.FailedChecks, f => f.Contains("names 0 of 2 findings"));
@@ -1867,10 +1870,14 @@ public sealed class FreeMonthlyDraftNormalizerTests
     /// <summary>
     /// [THE RECURRING DEFECT] "One point per paragraph" is what the prompt could never hold - it
     /// was dropped in a rewrite unnoticed, and once restored still produced a Location paragraph
-    /// carrying four subjects. Splitting is lossless: only the blank lines move.
+    /// carrying four subjects. Splitting was lossless: only the blank lines moved.
+    /// [OWNER, 2026-10-08] The splitter is SWITCHED OFF (see FreeMonthlyDraftNormalizer.SplitByPoint):
+    /// the shared rules now keep a subject's figures together with their meaning sentence, and the
+    /// validator rejects a one-sentence paragraph, so splitting undid exactly that. The model's
+    /// paragraphs stand as written; this test now pins that the wall of text is left whole.
     /// </summary>
     [Fact]
-    public void SplitsAWallOfTextThatMakesSeveralPoints()
+    public void LeavesAWallOfTextAsWritten_TheSplitterIsOff()
     {
         var normalized = FreeMonthlyDraftNormalizer.Normalize(
             "Good morning,\n\n2 sites have overdue obligations carrying personal criminal liability. "
@@ -1882,9 +1889,9 @@ public sealed class FreeMonthlyDraftNormalizerTests
 
         var paragraphs = normalized.Split("\n\n");
 
-        Assert.True(paragraphs.Length > 2, "a long paragraph carrying several subjects should be broken up");
-        // A sentence with no figure explains the point before it, so it never starts a paragraph.
-        Assert.EndsWith("Ownership is missing from **144** of them.", paragraphs[^1], StringComparison.Ordinal);
+        Assert.Equal(2, paragraphs.Length);
+        Assert.Contains("**2 sites**", paragraphs[1], StringComparison.Ordinal);
+        Assert.EndsWith("Ownership is missing from 144 of them.", paragraphs[^1], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2016,14 +2023,17 @@ public sealed class FreeMonthlyDraftNormalizerTests
     public void ADraftThatOnlyOverBolds_NowPasses()
     {
         var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.Overview());
-        var draft = "Good morning,\n\n**5 items** from last month carry **personal criminal liability** and **24 items** are **still open** as at {{AS_AT}} across your scope.\n\n"
-                    + "Between today and the end of {{CURR_MONTH}}, **268 items** fall due, and 4 of the overdue items have no one assigned.\n\n"
+        // [2026-10-09] Every figure paragraph ends with a closing line carrying no number (shared rules
+        // Sec.4a) - the draft under test is only meant to fail on its over-bolding, nothing else.
+        var draft = "Good morning,\n\n**5 items** from last month carry **personal criminal liability** and **24 items** are **still open** as at {{AS_AT}} across your scope. That is what last month left behind.\n\n"
+                    + "Between today and the end of {{CURR_MONTH}}, **268 items** fall due, and 4 of the overdue items have no one assigned. That is what falls due before the month ends.\n\n"
                     // Both findings are named: an email given findings has to use them, so a draft
                     // testing emphasis still has to satisfy that check.
-                    + "{{NAME_1}} at {{NAME_1_AT}} expires on {{DATE_1}} with no renewal filed. {{NAME_2}} holds **6** of them.";
+                    + "{{NAME_1}} at {{NAME_1_AT}} expires on {{DATE_1}} with no renewal filed. {{NAME_2}} holds **6** of them. These are the ones to act on first.";
 
         Assert.False(FreeMonthlyDigestValidator.Validate(draft, prompt).IsValid);
-        Assert.True(FreeMonthlyDigestValidator.Validate(FreeMonthlyDraftNormalizer.Normalize(draft), prompt).IsValid);
+        var normalized = FreeMonthlyDigestValidator.Validate(FreeMonthlyDraftNormalizer.Normalize(draft), prompt);
+        Assert.True(normalized.IsValid, string.Join("; ", normalized.FailedChecks));
     }
 
     /// <summary>

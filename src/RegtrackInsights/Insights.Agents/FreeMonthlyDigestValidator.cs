@@ -649,11 +649,15 @@ public static partial class FreeMonthlyDigestValidator
         /*  [FOUND LIVE on PROD tenant 1008, 2026-10-09, Act] "Under {{EG_2}}, 21 of the 22 sites where it
             applies have it overdue" - 21 of 22 is that Act's COMPLIANCES still open from September (the
             slippage example), not sites. Only a multi_location_pattern example or finding counts sites. */
+        // [2026-10-09, evening] Only ACT examples/findings: a location example legitimately sits in a sentence
+        // like "15 of the 62 locations ..., including your {{EG_1}} site", which this must not reject.
+        static bool IsAct(string? kind) => kind is not null && (kind.Contains("act", StringComparison.OrdinalIgnoreCase) || kind.Contains("law", StringComparison.OrdinalIgnoreCase));
         var countsCompliances = prompt.Examples
-            .Where(e => !(e.Example.Detector ?? string.Empty).Contains("multi_location", StringComparison.Ordinal)
+            .Where(e => IsAct(e.Example.EntityKind)
+                        && !(e.Example.Detector ?? string.Empty).Contains("multi_location", StringComparison.Ordinal)
                         && !(e.Example.PatternFactKey ?? string.Empty).Contains("multi_location", StringComparison.Ordinal))
             .Select(e => e.Placeholder)
-            .Concat(prompt.NamedFindings.Where(n => n.NamePlaceholder is not null && !n.Candidate.Detector.Contains("multi_location", StringComparison.Ordinal)).Select(n => n.NamePlaceholder!))
+            .Concat(prompt.NamedFindings.Where(n => n.NamePlaceholder is not null && IsAct(n.Candidate.EntityKind) && !n.Candidate.Detector.Contains("multi_location", StringComparison.Ordinal)).Select(n => n.NamePlaceholder!))
             .ToList();
         // [FOUND LIVE 2026-10-09, twice] The bold markers sit INSIDE the phrase ("**21 of the 22 sites** where
         // it applies"), so the match runs on the text with "**" removed.

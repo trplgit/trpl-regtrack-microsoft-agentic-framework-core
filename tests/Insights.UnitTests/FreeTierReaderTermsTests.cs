@@ -115,13 +115,23 @@ public class FreeTierReaderTermsTests
 
 public class ExampleUnitTests
 {
-    /// <summary>[FOUND LIVE 2026-10-09] A slippage example (compliances) written as "sites where it applies".</summary>
+    /// <summary>
+    /// [FOUND LIVE 2026-10-09] A slippage example (compliances) written as "sites where it applies".
+    /// [2026-10-09, evening] The rule is scoped to ACT examples/findings - a location example may
+    /// legitimately sit in a "N of the M locations" sentence - so the finding under test is an Act
+    /// slippage finding (the shipped Act fixture carries only a multi_location_pattern one, which
+    /// is exactly the kind that IS allowed to count sites).
+    /// </summary>
     [Fact]
     public void ASlippageExampleIsNeverWrittenAsSites()
     {
-        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.ByName("location"));
-        var eg = prompt.Examples.FirstOrDefault(e => !e.Example.PatternFactKey.Contains("multi_location", StringComparison.Ordinal))?.Placeholder
-                 ?? prompt.NamedFindings.First(n => n.NamePlaceholder is not null && !n.Candidate.Detector.Contains("multi_location", StringComparison.Ordinal)).NamePlaceholder!;
+        var act = MonthlyExamples.Act();
+        var data = act with
+        {
+            Candidates = [.. act.Candidates, MonthlyExamples.Candidate(2, "last_month_slippage", "act", "Shops and Establishments Act 1953", 21, 22, item: 21, baseCount: 22)],
+        };
+        var prompt = FreeMonthlyDigestPrompt.Build(data);
+        var eg = prompt.NamedFindings.First(n => n.NamePlaceholder is not null && n.Candidate.Detector == "last_month_slippage").NamePlaceholder!;
         var body = "Good morning,\n\nHere is your update. The figures below are as of {{AS_AT}}.\n\nUnder " + eg + ", 21 of its 22 sites where it applies have it overdue. This work was due last month and is not finished.";
         var review = FreeMonthlyDigestValidator.Validate(body, prompt);
         Assert.Contains(review.FailedChecks, f => f.Contains("counts COMPLIANCES, not sites"));

@@ -178,6 +178,15 @@ public static partial class FreeMonthlyFallbackBody
                     break;
             }
 
+        /*  [OWNER, 2026-10-09] Every figure paragraph ends with its closing line (shared rules Sec.4a):
+            a sentence with no number that says what the figures mean. The validator now rejects a
+            paragraph that ends on a figure, and this deterministic draft used to end every one of
+            its paragraphs on a figure - so it failed its own validator and the floor body shipped
+            instead, naming nothing. One fixed, number-free closing line per period, counted into
+            the word ceiling below so the trim accounts for it.                                   */
+        foreach (var period in sentences.Select(s => s.Period).Distinct().ToList())
+            sentences.Add(new Line(period, ClosingLine(period), Priority: 0, Removable: false));
+
         // -- the ceiling: least severe removable lines go first --------------------------------------
         var maxWords = FreeMonthlyDigestValidator.MaxWordsFor(slot);
         while (Words(sentences) > maxWords
@@ -187,7 +196,10 @@ public static partial class FreeMonthlyFallbackBody
         var paragraphs = sentences
             .GroupBy(s => s.Period)
             .OrderBy(g => g.Key)
-            .Select(g => string.Join(" ", g.Select(s => s.Text)))
+            .Select(g => g.OrderBy(s => IsClosingLine(s.Text) ? 1 : 0).Select(s => s.Text).ToList())
+            // A period whose figure lines were all trimmed away keeps no orphan closing line.
+            .Where(g => g.Any(t => !IsClosingLine(t)))
+            .Select(g => string.Join(" ", g))
             .ToList();
 
         var body = Greeting + "\n\n" + string.Join("\n\n", paragraphs);
@@ -199,6 +211,22 @@ public static partial class FreeMonthlyFallbackBody
     private const int MinWords = 25;
 
     private enum Period { Lead = 0, Past = 1, Present = 2, Stock = 3, Future = 4, Context = 5 }
+
+    /*  Number-free, placeholder-free, no capitalised word past the first, none of the banned
+        phrases - each must pass SentenceProblems on its own, because Fits() is not applied to them. */
+    private static readonly IReadOnlyDictionary<Period, string> ClosingLines = new Dictionary<Period, string>
+    {
+        [Period.Lead] = "These are the figures to read first this month.",
+        [Period.Past] = "That is what last month left behind.",
+        [Period.Present] = "That is where the month stands today.",
+        [Period.Stock] = "That is the standing backlog, whichever month it arose in.",
+        [Period.Future] = "That is what falls due before the month ends.",
+        [Period.Context] = "That is the wider picture these figures sit in.",
+    };
+
+    private static string ClosingLine(Period period) => ClosingLines[period];
+
+    private static bool IsClosingLine(string text) => ClosingLines.Values.Contains(text, StringComparer.Ordinal);
 
     private sealed record Line(Period Period, string Text, int Priority, bool Removable);
 

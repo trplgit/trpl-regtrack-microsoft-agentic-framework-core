@@ -803,6 +803,314 @@ public class InsightsReportOrchestratorTests
         context.Verify(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
     }
 
+    private const string PatchLoopRows = """[{"ActID":7,"ActName":"Factories Act","Overdue":12},{"ActID":9,"ActName":"Shops Act","Overdue":0}]""";
+    private const string PatchLoopTotals = """{"ScopedInstances":12}""";
+
+    /// <summary>A single freehand dimension run that reaches the tile-QA patch loop, with every
+    /// HTML-carrying activity after render passing its input straight through - so what reaches
+    /// PersistActivity is exactly what the orchestrator itself assembled.</summary>
+    private static (Mock<OrchestrationContext> Context, List<PersistInput> Persisted, List<PatchRenderInput> PatchInputs) BuildSingleDimensionPatchLoopContext(string renderedHtml, string patchedHtml)
+    {
+        var context = BuildHappyPathContext();
+        var dimensionJson = $$"""{"Rows":{{PatchLoopRows}},"ControlTotals":{{PatchLoopTotals}},"DataQuality":[]}""";
+        context.Setup(c => c.ScheduleTask<FetchDimensionsOutput>(typeof(FetchDimensionsActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new FetchDimensionsOutput(new Dictionary<string, string> { ["Act"] = dimensionJson }, [], []));
+        var plan = new CompositionPlan(new CompositionHero("worst_acts", "highest real overdue rate for this tenant"), [], [], []);
+        context.Setup(c => c.ScheduleWithRetry<ComposeFreehandDimensionOutput>(typeof(ComposeFreehandDimensionActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
+            .ReturnsAsync(new ComposeFreehandDimensionOutput(plan, 1000));
+        context.Setup(c => c.ScheduleTask<AnalyzeAndNarrateOutput>(typeof(AnalyzeAndNarrateActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new AnalyzeAndNarrateOutput(new NarrativeResult([]), 1000));
+        context.Setup(c => c.ScheduleTask<BuildReasoningTraceOutput>(typeof(BuildReasoningTraceActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new BuildReasoningTraceOutput(true));
+
+        context.Setup(c => c.ScheduleWithRetry<RenderHtmlOutput>(typeof(RenderHtmlActivity).Name, "1.0", It.IsAny<RetryOptions>(), It.IsAny<object[]>()))
+            .ReturnsAsync(new RenderHtmlOutput(renderedHtml, 1000));
+
+        // Pass-through for everything that carries the page between render and persist.
+        context.Setup(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectFontOutput(((InjectFontInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectCoverageGridOutput>(typeof(InjectCoverageGridActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectCoverageGridOutput(((InjectCoverageGridInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectCoverageCssOutput>(typeof(InjectCoverageCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectCoverageCssOutput(((InjectCoverageCssInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectCoverageScriptOutput>(typeof(InjectCoverageScriptActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectCoverageScriptOutput(((InjectCoverageScriptInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarOutput>(typeof(InjectBacklogAgeBarActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectBacklogAgeBarOutput(((InjectBacklogAgeBarInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectBacklogAgeBarCssOutput>(typeof(InjectBacklogAgeBarCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectBacklogAgeBarCssOutput(((InjectBacklogAgeBarCssInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookOutput>(typeof(InjectForwardLookActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectForwardLookOutput(((InjectForwardLookInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectForwardLookCssOutput>(typeof(InjectForwardLookCssActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectForwardLookCssOutput(((InjectForwardLookCssInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<InjectNumberFormulaOutput>(typeof(InjectNumberFormulaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectNumberFormulaOutput(((InjectNumberFormulaInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new NormalizeOutput(((NormalizeInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new SanitizeOutput(((SanitizeInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new ValidateFixedHolisticStructureOutput(((ValidateFixedHolisticStructureInput)a[0]).Html)));
+
+        var finding = new TileFinding("section.card[data-tile-qa-index=\"0\"]", "Title", "click", TileFindingSeverity.Functional, "does nothing", "b.png", "a.png");
+        context.SetupSequence(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([finding]))
+            .ReturnsAsync(new InteractiveTileQaOutput([]));
+
+        var patchInputs = new List<PatchRenderInput>();
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Callback<string, string, object[]>((_, _, a) => patchInputs.Add((PatchRenderInput)a[0]))
+            .ReturnsAsync(new PatchRenderOutput(patchedHtml, 500));
+
+        var persisted = new List<PersistInput>();
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Callback<string, string, object[]>((_, _, a) => persisted.Add((PersistInput)a[0]))
+            .ReturnsAsync(new PersistOutput("22222222-2222-2222-2222-222222222222", null, new DateTime(2026, 10, 9, 7, 0, 0, DateTimeKind.Utc)));
+
+        return (context, persisted, patchInputs);
+    }
+
+    /// <summary>[ADDED 2026-10-09, FOUND LIVE] Three real tenant-1271 reports (Users, Act, Licence)
+    /// shipped with every row-driven chart blank: PatchRenderActivity re-sent the whole page,
+    /// #insights-data included, through the patch LLM call, which returned "rows":[] - and nothing
+    /// put the real rows back. The patch call must never see the block, and the page that reaches
+    /// PersistActivity must carry the code-written rows again.</summary>
+    [Fact]
+    public async Task RunTask_PatchLoop_StripsDataBlockBeforePatchCall_ReinjectsRealRowsAfter()
+    {
+        var rendered = DimensionDataInjector.Inject("<html><body><section class=\"card\">c</section><script>draw()</script></body></html>", "Act", PatchLoopRows, PatchLoopTotals);
+        // What the LLM actually returned live: the same page with the rows collapsed to [].
+        const string patched = "<html><body><section class=\"card\">patched</section><script type=\"application/json\" id=\"insights-data\">{\"dimension\":\"Act\",\"rows\":[],\"totals\":null}</script><script>draw()</script></body></html>";
+        var (context, persisted, patchInputs) = BuildSingleDimensionPatchLoopContext(rendered, patched);
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Act"]);
+
+        var result = await orchestrator.RunTask(context.Object, input);
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        var patchInput = Assert.Single(patchInputs);
+        Assert.DoesNotContain("insights-data", patchInput.Html);
+        var shipped = Assert.Single(persisted).Html;
+        Assert.False(DimensionDataInjector.RowsLost(shipped, PatchLoopRows));
+        Assert.Contains("Factories Act", shipped);
+        Assert.Contains("patched", shipped);
+        Assert.Equal(1, shipped.Split("id=\"insights-data\"").Length - 1);
+    }
+
+    /// <summary>[ADDED 2026-10-09] The backstop: if the rows are gone from the page about to be
+    /// persisted - however that happened - the run refuses under DATA_BLOCK_LOST instead of
+    /// shipping a "complete" report whose charts are all empty.</summary>
+    [Fact]
+    public async Task RunTask_RowsMissingFromFinalPage_RefusesUnderDataBlockLost_NeverPersists()
+    {
+        var rendered = DimensionDataInjector.Inject("<html><body><section class=\"card\">c</section><script>draw()</script></body></html>", "Act", PatchLoopRows, PatchLoopTotals);
+        var (context, persisted, _) = BuildSingleDimensionPatchLoopContext(rendered, "<html><body>patched</body></html>");
+        // Simulate a downstream step dropping the block after re-injection.
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new SanitizeOutput(DimensionDataInjector.Strip(((SanitizeInput)a[0]).Html))));
+
+        var orchestrator = new InsightsReportOrchestrator();
+        var input = new InsightsReportOrchestrationInput(29, DimensionSelectionComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38, RequestedDimensions: ["Act"]);
+
+        var ex = await Assert.ThrowsAsync<OrchestrationRefusedException>(() => orchestrator.RunTask(context.Object, input));
+
+        Assert.Equal("DATA_BLOCK_LOST", ex.ReasonCode);
+        Assert.Empty(persisted);
+    }
+
+    // ----- [ADDED 2026-10-09] Bounded, best-effort patch loop (ADR 2026-10-09-tile-qa-patch-loop-rework) -----
+
+    private static readonly TileFinding LoopFinding0 = new("section.card[data-tile-qa-index=\"0\"]", "Title", "click", TileFindingSeverity.Functional, "does nothing", "", "", 0, "button");
+    private static readonly TileFinding LoopFinding2 = new("section.card[data-tile-qa-index=\"2\"]", "Other", "click", TileFindingSeverity.Cosmetic, "bleed", "", "", 2, "button");
+
+    /// <summary>Happy path with pass-through Normalize/Sanitize/InjectFont and a PersistInput capture, so the shipped HTML is observable.</summary>
+    private static (Mock<OrchestrationContext> Context, List<PersistInput> Persisted) BuildPatchLoopContext(string renderedHtml = "<html>rendered</html>")
+    {
+        var context = BuildHappyPathContext();
+        context.Setup(c => c.ScheduleTask<ValidateFixedHolisticStructureOutput>(typeof(ValidateFixedHolisticStructureActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new ValidateFixedHolisticStructureOutput(renderedHtml));
+        context.Setup(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new InjectFontOutput(((InjectFontInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new NormalizeOutput(((NormalizeInput)a[0]).Html)));
+        context.Setup(c => c.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => Task.FromResult(new SanitizeOutput(((SanitizeInput)a[0]).Html)));
+        var persisted = new List<PersistInput>();
+        context.Setup(c => c.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Callback<string, string, object[]>((_, _, a) => persisted.Add((PersistInput)a[0]))
+            .ReturnsAsync(new PersistOutput("22222222-2222-2222-2222-222222222222"));
+        return (context, persisted);
+    }
+
+    private static InsightsReportOrchestrationInput FixedHolisticInput() =>
+        new(29, FixedHolisticComposition.ReportType, new InsightsScopeRequest("tenant", null), "FY2025-26", 38);
+
+    [Theory]
+    [InlineData("rejected")]
+    [InlineData("failed")]
+    [InlineData("unchanged")]
+    [InlineData("skipped")]
+    [InlineData("disabled")]
+    public async Task RunTask_PatchOutcomeOtherThanPatched_StopsBeforeInjectFont_ShipsPrePatchPage(string outcome)
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0], PatchDisabled: false, PageErrors: [], Truncated: false));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>rendered</html>", 100, Outcome: outcome));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+        context.Verify(c => c.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once); // initial render only
+        context.Verify(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+        var shipped = Assert.Single(persisted);
+        Assert.Equal("<html>rendered</html>", shipped.Html);
+        Assert.NotNull(shipped.TileQa);
+        Assert.Equal("shipped_with_open_findings", shipped.TileQa!.Outcome);
+        Assert.Equal(1, shipped.TileQa.OpenFunctional);
+        Assert.Equal(1, shipped.TileQa.PatchAttempts);
+        Assert.Equal(0, shipped.TileQa.PatchesApplied);
+        Assert.Equal(shipped.TileQa, result.TileQa);
+    }
+
+    [Fact]
+    public async Task RunTask_PatchDisabledByConfiguration_SkipsTheLoop_ReportsPatchingDisabled()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0], PatchDisabled: true));
+
+        await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Never);
+        Assert.Equal("patching_disabled", Assert.Single(persisted).TileQa!.Outcome);
+    }
+
+    [Fact]
+    public async Task RunTask_CheckerDisabled_ReportsDisabled()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([], PatchDisabled: true, Disabled: true));
+
+        await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        Assert.Equal("disabled", Assert.Single(persisted).TileQa!.Outcome);
+    }
+
+    [Fact]
+    public async Task RunTask_CleanPass_ReportsClean()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+
+        await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        var summary = Assert.Single(persisted).TileQa!;
+        Assert.Equal("clean", summary.Outcome);
+        Assert.Equal(0, summary.PatchAttempts);
+    }
+
+    [Fact]
+    public async Task RunTask_PatchIntroducesAPageError_IsReverted_LoopStops()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.SetupSequence(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0], PatchDisabled: false, PageErrors: []))
+            .ReturnsAsync(new InteractiveTileQaOutput([], PatchDisabled: false, PageErrors: ["TypeError: Cannot read properties of null (reading 'firstChild')"]));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched but broken</html>", 100, Outcome: "patched", PatchedCardOrdinals: [0]));
+
+        await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        var shipped = Assert.Single(persisted);
+        Assert.Equal("<html>rendered</html>", shipped.Html);
+        Assert.Equal(0, shipped.TileQa!.PatchesApplied);
+        Assert.Equal(1, shipped.TileQa.OpenFunctional);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunTask_PreExistingPageError_DoesNotRevertAPatch()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.SetupSequence(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0], PatchDisabled: false, PageErrors: ["ReferenceError: old"]))
+            .ReturnsAsync(new InteractiveTileQaOutput([], PatchDisabled: false, PageErrors: ["ReferenceError: old"]));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched</html>", 100, Outcome: "patched", PatchedCardOrdinals: [0]));
+
+        await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        var shipped = Assert.Single(persisted);
+        Assert.Equal("<html>patched</html>", shipped.Html);
+        Assert.Equal("patched", shipped.TileQa!.Outcome);
+        Assert.Equal(1, shipped.TileQa.PatchesApplied);
+    }
+
+    [Fact]
+    public async Task RunTask_NormalizeThrowsInsideTheLoop_ShipsPrePatchPage_DoesNotFail()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0], PatchDisabled: false));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched</html>", 100, Outcome: "patched", PatchedCardOrdinals: [0]));
+        // Only the PATCHED page is refused; the initial render's own Normalize calls pass through.
+        context.Setup(c => c.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", It.IsAny<object[]>()))
+            .Returns<string, string, object[]>((_, _, a) => ((NormalizeInput)a[0]).Html != "<html>patched</html>"
+                ? Task.FromResult(new NormalizeOutput(((NormalizeInput)a[0]).Html))
+                : throw new OrchestrationRefusedException("NOT_NORMALIZABLE", "patched page refused"));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        Assert.Equal("<html>rendered</html>", Assert.Single(persisted).Html);
+    }
+
+    [Fact]
+    public async Task RunTask_TokenCeilingReachedInsideTheLoop_StopsPatching_NeverRefuses()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.Setup(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0], PatchDisabled: false));
+        context.Setup(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched</html>", 300_000, Outcome: "patched", PatchedCardOrdinals: [0]));
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        Assert.Equal("<html>rendered</html>", Assert.Single(persisted).Html);
+        context.Verify(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunTask_ScopedPatch_ReverifiesOnlyPatchedCards_AndMergesOpenFindings()
+    {
+        var (context, persisted) = BuildPatchLoopContext();
+        context.SetupSequence(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new InteractiveTileQaOutput([LoopFinding0, LoopFinding2], PatchDisabled: false))
+            .ReturnsAsync(new InteractiveTileQaOutput([], PatchDisabled: false)); // card 0 re-verified clean
+        context.SetupSequence(c => c.ScheduleTask<PatchRenderOutput>(typeof(PatchRenderActivity).Name, "1.0", It.IsAny<object[]>()))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched 0</html>", 100, Outcome: "patched", PatchedCardOrdinals: [0]))
+            .ReturnsAsync(new PatchRenderOutput("<html>patched 0</html>", 50, Outcome: "skipped")); // card 2 could not be located
+
+        var result = await new InsightsReportOrchestrator().RunTask(context.Object, FixedHolisticInput());
+
+        Assert.Equal("22222222-2222-2222-2222-222222222222", result.ReportId);
+        var shipped = Assert.Single(persisted);
+        Assert.Equal("<html>patched 0</html>", shipped.Html);
+        Assert.Equal(2, shipped.TileQa!.PatchAttempts);
+        Assert.Equal(1, shipped.TileQa.PatchesApplied);
+        Assert.Equal(0, shipped.TileQa.OpenFunctional);
+        Assert.Equal(1, shipped.TileQa.OpenCosmetic); // card 2's finding survived the merge
+        Assert.Equal("shipped_with_open_findings", shipped.TileQa.Outcome);
+        context.Verify(c => c.ScheduleTask<InteractiveTileQaOutput>(typeof(InteractiveTileQaActivity).Name, "1.0",
+            It.Is<object[]>(a => ((InteractiveTileQaInput)a[0]).OnlyCardOrdinals != null && ((InteractiveTileQaInput)a[0]).OnlyCardOrdinals!.SequenceEqual(new[] { 0 }))), Times.Once);
+    }
+
     /// <summary>[ADDED 2026-10-07] A Cosmetic-only finding that survives every patch attempt ships
     /// anyway (same posture as LAYOUT_OVERLAP's own last-attempt exception), using the LAST patched
     /// HTML, not the original.</summary>

@@ -493,7 +493,39 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         PartialDimensionPlaceholder.InsertPlaceholders above) before each patch call, so the LLM
         never has to touch it, and re-injected via this new ScheduleTask call right after. [VERIFY
         BEFORE DEPLOY] in-flight 4.7 instances not checked this session - the frozen 4.7 class is
-        what lets them keep running unaffected regardless. */
+        what lets them keep running unaffected regardless.
+
+        [2026-10-09, FOUND LIVE - NO bump, stays 4.8] Same patch loop, second data-loss class: the
+        #insights-data block (DimensionDataInjector - the real rows/totals every chart on a
+        single-dimension page draws from) was ALSO being round-tripped through the patch LLM call.
+        Three real tenant-1271 reports (Users, Act, Licence) shipped marked complete with
+        "rows":[] and every row-driven tile blank. Fix: DimensionDataInjector.Strip before each
+        PatchRenderActivity call and DimensionDataInjector.Inject on its output (both pure string
+        transforms inline, no new ScheduleTask - hence no bump: the activity call sequence is
+        byte-identical, only the payload handed to InjectFontActivity changes), plus a final
+        deterministic DimensionDataInjector.RowsLost gate before PersistActivity that refuses under
+        DATA_BLOCK_LOST rather than ship a page whose charts have no data.
+
+        [2026-10-09, same day - NO bump, stays 4.8] Patch loop made bounded and best-effort, per the
+        ADR in docs/superpowers/specs/2026-10-09-tile-qa-patch-loop-rework.md. Measured live: 0 of 6
+        runs converged, Act spent 75 min inside InteractiveTileQaActivity. Changes, every one of them
+        either payload-only, activity-internal, or a branch on a NEW trailing-optional output field
+        whose null value reproduces this exact 4.8 path (so recorded histories replay unchanged):
+          - InteractiveTileQaOutput: + PatchDisabled / PageErrors / Truncated / TotalTokens / Disabled.
+            PatchDisabled=true skips the loop; a new PageError after a patch reverts it; vision
+            tokens are now charged (without refusing).
+          - PatchRenderOutput: + Outcome / PatchedCardOrdinals / UnpatchableCardOrdinals /
+            RejectReason. Outcome other than "patched" (or null, the 4.8 shape) stops the loop;
+            PatchedCardOrdinals scopes the re-verify (InteractiveTileQaInput.OnlyCardOrdinals) and
+            the open-findings merge (MergeOpenFindings).
+          - In-loop budget: charge-then-stop instead of ChargeAndCheck; in-loop InjectFont/Normalize/
+            Sanitize failures revert and stop instead of failing the run. Both replay-safe: the old
+            outcome on those paths was terminal.
+          - PersistInput/PersistOutput: + TileQaSummary (one structured warning with the ReportId;
+            echoed on the terminal Output).
+        Scoped card patching (ScopedPatchSplicer), the before/after PatchIntegrityGate, element
+        sampling, timeouts and the Presentation:TileQa kill switches all live in the activities.
+        maxPatchAttempts stays 3 and no ScheduleTask was added, moved or removed. */
     public const string Version = "4.8";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
@@ -561,6 +593,18 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     "BUDGET_EXCEEDED",
                     "We couldn't generate this report to our accuracy standard. Our team has been notified.",
                     internalDiagnostics: [$"Per-run token budget exceeded: {runTotalTokens} tokens billed so far, ceiling is {perRunTokenCeiling}."]);
+        }
+
+        // [ADDED 2026-10-09] After a SCOPED patch (the activity says which card ordinals it touched),
+        // only those cards were re-verified: keep every still-open finding on an untouched card, and
+        // replace the patched cards' findings with whatever the re-verification reported. Pure.
+        static IReadOnlyList<TileFinding> MergeOpenFindings(
+            IReadOnlyList<TileFinding> previous, IReadOnlyList<int> patchedOrdinals, IReadOnlyList<TileFinding> reverified)
+        {
+            var patched = new HashSet<int>(patchedOrdinals);
+            var merged = previous.Where(f => TileCards.OrdinalOf(f) is not { } o || !patched.Contains(o)).ToList();
+            merged.AddRange(reverified);
+            return merged;
         }
 
         // Node 0 - design doc Sec.12.3's per-tenant monthly circuit breaker, run FIRST and OUTSIDE
@@ -999,6 +1043,17 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                         kv => System.Text.Json.JsonDocument.Parse(kv.Value).RootElement.GetProperty("ControlTotals").GetRawText())
                 : null;
 
+            // [ADDED 2026-10-09, FOUND LIVE] The one dimension whose rows/totals RenderHtmlActivity
+            // writes into the page as #insights-data (DimensionDataInjector) - exactly the same
+            // condition RenderHtmlInput.DimensionName is built from below. Kept here because the
+            // tile-QA patch loop further down must strip that block before each PatchRenderActivity
+            // call and put a code-written copy back afterwards, and the final guard before
+            // PersistActivity must know whether rows were ever expected on this page at all.
+            string? dataBlockDimension = input.ReportType == DimensionSelectionComposition.ReportType && input.RequestedDimensions is [var soleDataDimension]
+                ? soleDataDimension : null;
+            string? dataBlockRowsJson = dataBlockDimension is not null && dimensionRowsJson is not null && dimensionRowsJson.TryGetValue(dataBlockDimension, out var dbRows) ? dbRows : null;
+            string? dataBlockTotalsJson = dataBlockDimension is not null && dimensionControlTotalsJson is not null && dimensionControlTotalsJson.TryGetValue(dataBlockDimension, out var dbTotals) ? dbTotals : null;
+
             SetStage(InsightsRunStage.Rendering);
 
             // [FIX 2026-09-07] FixedHolisticStructureGate's own doc comment (item 3) documents this
@@ -1307,7 +1362,24 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             var tileQaResult = await context.ScheduleTask<InteractiveTileQaOutput>(
                 typeof(InteractiveTileQaActivity).Name, "1.0", new InteractiveTileQaInput(finalStructureChecked.Html));
 
-            if (tileQaResult.Findings.Count > 0)
+            // [CHANGED 2026-10-09] The checker's vision tokens were billed but never counted. Charged
+            // WITHOUT refusing: a QA-stage overage must never refuse a report that already passed every
+            // deterministic gate above (unlike the compose/narrate/render calls, which still refuse).
+            runTotalTokens += tileQaResult.TotalTokens;
+            var baselinePageErrors = new HashSet<string>(tileQaResult.PageErrors ?? [], StringComparer.Ordinal);
+            IReadOnlyList<TileFinding> openFindings = tileQaResult.Findings;
+            var patchAttempts = 0;
+            var patchesApplied = 0;
+
+            // [CHANGED 2026-10-09] Every new branch below keys on a trailing-optional output field whose
+            // null value reproduces the 4.8 path exactly (PatchDisabled, Outcome, PatchedCardOrdinals,
+            // PageErrors, TotalTokens all deserialize as null/0 from a history recorded before they
+            // existed), so this is replay-safe without a version bump. The patch loop itself is now
+            // best-effort in every direction: a failed, rejected, unchanged or over-budget attempt STOPS
+            // the loop and ships the last good page; it can never make the page worse, refuse the run,
+            // or spend more than maxPatchAttempts calls. Scoped patching, the integrity gate and the
+            // element sampling live in the activities (PatchRenderActivity / InteractiveTileQaActivity).
+            if (tileQaResult.Findings.Count > 0 && tileQaResult.PatchDisabled != true)
             {
                 const int maxPatchAttempts = 3;
                 var currentHtml = finalStructureChecked.Html;
@@ -1315,6 +1387,7 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
 
                 for (var patchAttempt = 1; patchAttempt <= maxPatchAttempts && remainingFindings.Count > 0; patchAttempt++)
                 {
+                    patchAttempts++;
                     // [ADDED 2026-10-08, FOUND LIVE] Strip the self-hosted font block before
                     // handing the document to the patch LLM call, and re-inject a guaranteed-
                     // correct copy right after - a real Motul BacklogAging report shipped with its
@@ -1323,20 +1396,73 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     // faithfully reproduce ~30KB of opaque base64 glyph data in its own output
                     // while "preserving everything else". See PoppinsFontInjector.Strip's own doc
                     // comment. The LLM now never sees that block at all.
-                    var strippedForPatch = PoppinsFontInjector.Strip(currentHtml);
+                    //
+                    // [ADDED 2026-10-09, FOUND LIVE] The SAME treatment for the #insights-data block
+                    // (DimensionDataInjector) - the real rows/totals every chart on a single-dimension
+                    // page draws from. Three real tenant-1271 reports (Users, Act, Licence) shipped
+                    // with "rows":[] after this loop: the LLM collapsed tens of KB of row JSON it was
+                    // asked to reproduce "byte-for-byte", every ROWS-driven tile rendered empty, and
+                    // nothing downstream noticed. The block is stripped before the call and a
+                    // code-written copy is put straight back on the patched output (a pure string
+                    // transform, same determinism treatment as PoppinsFontInjector.Strip here) -
+                    // before Normalize/Sanitize, the same position it holds on the initial render
+                    // path inside RenderHtmlActivity. Inject also removes any copy the model wrote,
+                    // so a hallucinated block can never survive either.
+                    var strippedForPatch = DimensionDataInjector.Strip(PoppinsFontInjector.Strip(currentHtml));
                     var patchResult = await context.ScheduleTask<PatchRenderOutput>(
                         typeof(PatchRenderActivity).Name, "1.0", new PatchRenderInput(strippedForPatch, remainingFindings));
-                    ChargeAndCheck(patchResult.TotalTokens);
 
-                    var refonted = await context.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", new InjectFontInput(patchResult.Html));
+                    // [CHANGED 2026-10-09] Charge, then STOP if over the ceiling - never refuse here.
+                    // The report is already good; the only thing a budget overage inside the patch
+                    // loop may cost is further patching. (Replay-safe: the old ChargeAndCheck path
+                    // ended the run in BUDGET_EXCEEDED, so no in-flight history continues past it.)
+                    runTotalTokens += patchResult.TotalTokens;
+                    if (runTotalTokens > perRunTokenCeiling) break;
 
-                    var patchNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(refonted.Html));
-                    var patchSanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(patchNormalized.Html));
-                    currentHtml = patchSanitized.Html;
+                    // [ADDED 2026-10-09] Outcome null = a whole-document patch recorded by 4.8 (treated
+                    // as "patched", the only outcome that path had). Anything else but "patched" means
+                    // the activity kept the input page untouched - nothing to re-verify, stop.
+                    if (patchResult.Outcome is not null && patchResult.Outcome != "patched") break;
 
+                    var patchedWithData = dataBlockDimension is not null && dataBlockRowsJson is not null
+                        ? DimensionDataInjector.Inject(patchResult.Html, dataBlockDimension, dataBlockRowsJson, dataBlockTotalsJson)
+                        : patchResult.Html;
+
+                    // [CHANGED 2026-10-09] The in-loop font/normalize/sanitize chain used to propagate
+                    // a failure (a Normalize refusal of the PATCHED page, a transient activity error)
+                    // out of the loop and fail a run whose pre-patch page was already approved. Now:
+                    // revert to the last good page and stop patching. Replay-safe for the same reason
+                    // as the budget stop above - the old outcome on this path was terminal.
+                    string candidateHtml;
+                    try
+                    {
+                        var refonted = await context.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", new InjectFontInput(patchedWithData));
+                        var patchNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(refonted.Html));
+                        var patchSanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(patchNormalized.Html));
+                        candidateHtml = patchSanitized.Html;
+                    }
+                    catch (Exception)
+                    {
+                        break;
+                    }
+
+                    // Re-verify only the cards that were patched when the activity says which (scoped
+                    // patching); a legacy whole-document patch (null) re-checks the whole page as 4.8 did.
                     var reverified = await context.ScheduleTask<InteractiveTileQaOutput>(
-                        typeof(InteractiveTileQaActivity).Name, "1.0", new InteractiveTileQaInput(currentHtml));
-                    remainingFindings = reverified.Findings;
+                        typeof(InteractiveTileQaActivity).Name, "1.0", new InteractiveTileQaInput(candidateHtml, patchResult.PatchedCardOrdinals));
+                    runTotalTokens += reverified.TotalTokens;
+
+                    // [ADDED 2026-10-09, FOUND LIVE] A patch that introduces an uncaught page error (a
+                    // real Act report lost its #timeline container and threw on load) is reverted:
+                    // currentHtml stays at the last good page and the loop stops.
+                    if (reverified.PageErrors is { Count: > 0 } pageErrors && pageErrors.Any(e => !baselinePageErrors.Contains(e)))
+                        break;
+
+                    currentHtml = candidateHtml;
+                    patchesApplied++;
+                    remainingFindings = patchResult.PatchedCardOrdinals is null
+                        ? reverified.Findings
+                        : MergeOpenFindings(remainingFindings, patchResult.PatchedCardOrdinals, reverified.Findings);
 
                     if (remainingFindings.Count == 0) break;
 
@@ -1354,12 +1480,43 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     // further to do here.
                 }
 
+                openFindings = remainingFindings;
                 finalStructureChecked = finalStructureChecked with { Html = currentHtml };
+            }
+
+            // [ADDED 2026-10-09] What this stage concluded, carried to PersistActivity (one structured
+            // warning with the ReportId) and echoed on the orchestration's terminal Output so the task
+            // hub row says it - no schema change. Pure bookkeeping over values already in hand.
+            var tileQaSummary = new TileQaSummary(
+                Outcome: tileQaResult.Disabled == true ? "disabled"
+                    : tileQaResult.Findings.Count == 0 ? "clean"
+                    : openFindings.Count == 0 ? "patched"
+                    : tileQaResult.PatchDisabled == true ? "patching_disabled"
+                    : "shipped_with_open_findings",
+                OpenFunctional: openFindings.Count(f => f.Severity == TileFindingSeverity.Functional),
+                OpenCosmetic: openFindings.Count(f => f.Severity == TileFindingSeverity.Cosmetic),
+                PatchAttempts: patchAttempts,
+                PatchesApplied: patchesApplied,
+                CheckerTruncated: tileQaResult.Truncated == true);
+
+            // [ADDED 2026-10-09, FOUND LIVE] Last deterministic gate before anything is persisted:
+            // if this page was given real rows (a non-empty rows array for its one dimension) and
+            // the page about to ship no longer carries them - block missing, unparsable, or
+            // "rows":[] - refuse. Three real reports shipped exactly like that and were marked
+            // complete with every chart blank; a refused report is a good outcome, a complete one
+            // with empty charts is not (CLAUDE.md Sec. 2, rule 2). Pure string/JSON check, no I/O.
+            if (DimensionDataInjector.RowsLost(finalStructureChecked.Html, dataBlockRowsJson))
+            {
+                throw new OrchestrationRefusedException(
+                    "DATA_BLOCK_LOST",
+                    $"The {dataBlockDimension} report lost its #insights-data rows between render and persistence - every row-driven chart would ship empty. Refusing to publish.",
+                    [$"dimension={dataBlockDimension}", $"expectedRowsJsonLength={dataBlockRowsJson!.Length}"]);
             }
 
             SetStage(InsightsRunStage.Complete, final: true);
             var persistResult = await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
-                new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId, input.RequestedDimensions));
+                new PersistInput(finalStructureChecked.Html, input.TenantId, input.ReportType, input.Period, input.Scope.ToDescriptor(), input.UserId, input.RequestedDimensions,
+                    TileQa: tileQaSummary));
 
             // [ADDED 2026-09-26] Node 12b - the freehand single-dimension path (the only shape with
             // a real CompositionPlan + Assertions/Findings for one dimension). Fails soft, always
@@ -1399,7 +1556,9 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 runTotalTokens += trace?.TotalTokens ?? 0;
             }
 
-            return persistResult;
+            // [CHANGED 2026-10-09] Terminal Output now also says what tile QA concluded (trailing
+            // optional on PersistOutput; DurableTaskRunStatusReader reads only ReportId, unaffected).
+            return persistResult with { TileQa = tileQaSummary };
         }
         finally
         {
