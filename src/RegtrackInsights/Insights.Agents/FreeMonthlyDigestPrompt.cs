@@ -100,8 +100,22 @@ internal static partial class FactLabels
         /*  Worded to stand ALONE: in the Overview this fact arrives without lic_expired_total, so
             an "of those..." opening would have nothing to refer back to.                        */
         ["lic_expired_unrenewed"] = "licences are currently expired with no renewal in progress",
-        ["lic_lapsed_this_month"] = "licences expired during the current month - these are part of the expired total, not additional to it",
-        ["lic_lapsed_last_month"] = "licences expired during last month - also part of the expired total, not additional to it",
+        /*  [CORRECTED 2026-10-07, PROD tenant 1008] These labels used to say "part of the expired
+            total". That is FALSE: the period is decided by the licence's END DATE, "expired" by its
+            status label TODAY (LoadLicences). A licence that ended in July and has since had a
+            renewal filed shows "Applied", not "Expired" - and the model, told it was part of the 19,
+            wrote "Of these 19 licences, 1 expired during July". The note above (3 inside the 5)
+            only holds when none of them has been renewed since.                               */
+        /*  [v4.1 2026-10-07] The licence windows count by END DATE ONLY, any status, to equal the
+            licence report's End Date column (LoadLicences v4.1). Some of these licences have
+            since been renewed or have a renewal filed, so they are NOT part of the expired total;
+            only the matching "_unrenewed" fact says how many still have nothing filed.         */
+        /*  [2026-10-08, owner] Never write "whatever their status today" - say how many still have no
+            renewal, from the matching _unrenewed fact: "2 licences reached their end date in September;
+            both have since been renewed or have a renewal filed" / "...; 1 still has no renewal filed". */
+        ["lic_lapsed_this_month"] = "licences reached their end date so far this month (count every one; say how many still have no renewal using lic_lapsed_this_month_unrenewed; not part of the expired total)",
+        ["lic_lapsed_last_month"] = "licences reached their end date last month (count every one; say how many still have no renewal using lic_lapsed_last_month_unrenewed; not part of the expired total)",
+        ["lic_expiring_rest_of_month"] = "licences reach their end date between today and the end of the month",
 
         /*  [FOUND LIVE on tenant 1082, 2026-09-22] The Overview says "the standing backlog is 2,853
             overdue obligations" and reads clearly; Location, Users and Act say "419 of its 1,209
@@ -295,8 +309,9 @@ public sealed partial class FreeMonthlyDigestPrompt
     private static bool ReadsTheSame(MonthlyCandidate a, MonthlyCandidate b) =>
         string.Equals(a.EntityKind, b.EntityKind, StringComparison.Ordinal)
         && a.EntityLabel is { } la && b.EntityLabel is { } lb
-        && string.Equals(CleanLabel(la), CleanLabel(lb), StringComparison.OrdinalIgnoreCase)
-        && string.Equals(a.ContextLabel is null ? null : CleanLabel(a.ContextLabel), b.ContextLabel is null ? null : CleanLabel(b.ContextLabel), StringComparison.OrdinalIgnoreCase)
+        // [2026-10-07] Compared on the FULL name: two different statutes can shorten to the same first statute.
+        && string.Equals(FullCleanLabel(la), FullCleanLabel(lb), StringComparison.OrdinalIgnoreCase)
+        && string.Equals(a.ContextLabel is null ? null : FullCleanLabel(a.ContextLabel), b.ContextLabel is null ? null : FullCleanLabel(b.ContextLabel), StringComparison.OrdinalIgnoreCase)
         && a.EventDate == b.EventDate;
 
     /// <summary>
@@ -771,6 +786,23 @@ public sealed partial class FreeMonthlyDigestPrompt
                 numbers.Add(baseCount);
         }
 
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-07] Two DIFFERENT entities whose shortened names
+            are identical ("Factories Act, 1948 & Maharashtra Factories Rules, 1963" and "Factories Act,
+            1948 and Uttar Pradesh Factories Rules, 1950" -> "Factories Act, 1948") read as one name
+            written twice. Where that happens, those placeholders get their FULL names instead.     */
+        var fullNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var finding in named)
+            if (finding.NamePlaceholder is { } name)
+                fullNames[name] = FullCleanLabel(finding.Candidate.EntityLabel!);
+        foreach (var e in examples)
+            fullNames[e.Placeholder] = FullCleanLabel(e.Example.EntityLabel);
+
+        foreach (var clash in fullNames.Keys
+                     .GroupBy(p => bindings[p], StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Select(p => fullNames[p]).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1))
+            foreach (var placeholder in clash)
+                bindings[placeholder] = fullNames[placeholder];
+
         /*  [MEASURED 2026-09-21] must_use repeats the placeholders as a bare list, right at the top
             of the input. The rule is already in the shared prompt, but with two findings the model
             routinely named only the first: three of five emails in one run failed on "never uses
@@ -1039,6 +1071,45 @@ public sealed partial class FreeMonthlyDigestPrompt
         "locations_with_obligations",// and how many of those are actually configured
     };
 
+    /// <summary>
+    /// [2026-10-07] The fact an "of those ..." line is a part of, stated explicitly. The old rule took
+    /// the FIRST non-"of those" fact in the section, which is wrong wherever a section carries more
+    /// than one population: in the slots' shared "context" section t_rm_liability ("of those carry
+    /// personal criminal liability") was paired with t_lm_due, t_rm_due was never sent, and a draft on
+    /// tenant 1926 put rest-of-month liability under "so far in September". Every pair here is a
+    /// subset by construction in the slot procs (the child's predicate is the parent's plus a filter).
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> FactParent = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["lm_on_time"] = "lm_due", ["lm_late"] = "lm_due", ["lm_still_open"] = "lm_due", ["lm_closed_without_completion"] = "lm_due",
+        ["t_lm_still_open"] = "t_lm_due",
+        ["tm_closed_so_far"] = "tm_due_so_far", ["tm_closed_without_completion"] = "tm_due_so_far", ["tm_open_past_due"] = "tm_due_so_far",
+        ["tm_open_liability"] = "tm_open_past_due",
+        ["rm_already_closed"] = "rm_due", ["rm_critical"] = "rm_due", ["rm_liability"] = "rm_due", ["rm_no_owner"] = "rm_due",
+        ["t_rm_liability"] = "t_rm_due",
+        ["od_0_30_days"] = "od_total", ["od_31_60_days"] = "od_total", ["od_61_90_days"] = "od_total", ["od_over_90_days"] = "od_total",
+        ["t_od_over_90_days"] = "t_od_total",
+        ["lic_valid"] = "lic_total", ["lic_expired_renewing"] = "lic_expired_total",
+        ["lic_expiring_unrenewed"] = "lic_expiring_rest_of_month", ["lic_expiring_renewal_filed"] = "lic_expiring_rest_of_month",
+        ["lic_lapsed_last_month_unrenewed"] = "lic_lapsed_last_month", ["lic_lapsed_this_month_unrenewed"] = "lic_lapsed_this_month",
+        ["u_people_with_overdue"] = "u_people_with_open_work",
+        ["loc_with_obligations"] = "loc_in_scope", ["locations_with_obligations"] = "locations_in_scope",
+        ["law_with_liability_oblig"] = "law_in_scope",
+    };
+
+    /// <summary>The parent of an "of those" fact: the explicit map first, else the nearest earlier non-"of those" fact in its section.</summary>
+    internal static MonthlyFact? ParentOf(MonthlyFact child, IReadOnlyList<MonthlyFact> facts)
+    {
+        if (FactParent.TryGetValue(child.FactKey, out var parentKey))
+            return facts.FirstOrDefault(f => f.FactKey == parentKey);
+
+        return facts
+            .Where(o => o.Section == child.Section && o.DisplayOrder < child.DisplayOrder
+                        && !o.DisplayLabel.StartsWith("of those", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(o => o.DisplayOrder)
+            .FirstOrDefault();
+    }
+
     internal static IReadOnlyList<MonthlyFact> ForTheModel(IReadOnlyList<MonthlyFact> facts, MonthlyDigestSlot slot)
     {
         /*  [MEASURED 2026-09-20] AlwaysSent exists because severity and usefulness are different
@@ -1068,12 +1139,8 @@ public sealed partial class FreeMonthlyDigestPrompt
             count as if it were the denominator, which is how a draft reached "29 of the 41".  */
         foreach (var f in ordered.Where(f => keep.Contains(f.FactKey)
                                              && f.DisplayLabel.StartsWith("of those", StringComparison.OrdinalIgnoreCase)))
-        {
-            var sectionBase = ordered.FirstOrDefault(o => o.Section == f.Section
-                                                          && !o.DisplayLabel.StartsWith("of those", StringComparison.OrdinalIgnoreCase));
-            if (sectionBase is not null && sectionBase.DisplayOrder < f.DisplayOrder)
-                keep.Add(sectionBase.FactKey);
-        }
+            if (ParentOf(f, ordered) is { } parent)
+                keep.Add(parent.FactKey);
 
         var kept = ordered.Where(f => keep.Contains(f.FactKey)).ToList();
 
@@ -1092,6 +1159,13 @@ public sealed partial class FreeMonthlyDigestPrompt
                         || f.FactKey.EndsWith("_of", StringComparison.Ordinal))
             .Select(f => f.FactKey)
             .ToHashSet(StringComparer.Ordinal);
+
+        /*  [2026-10-07] A kept "of those" line keeps its parent through the cap too - otherwise the
+            cap can drop t_rm_due while t_rm_liability survives, and "of those" points at nothing. */
+        foreach (var f in kept.Where(f => structural.Contains(f.FactKey)
+                                          && f.DisplayLabel.StartsWith("of those", StringComparison.OrdinalIgnoreCase)).ToList())
+            if (ParentOf(f, kept) is { } parent)
+                structural.Add(parent.FactKey);
 
         var room = MaxFactsFor(slot) - structural.Count;
         var bySeverity = kept
@@ -1149,6 +1223,16 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// are removed: <c>*</c> (bold markers) and braces (placeholder syntax). Whitespace runs, including
     /// line breaks, collapse to one space. The renderer HTML-encodes the result.
     /// </summary>
+    /// <summary>
+    /// [2026-10-07] The label cleaned for prose but NOT shortened to its first statute. Used where two
+    /// different entities must stay distinguishable: on PROD tenant 1008 "Factories Act, 1948 &amp;
+    /// Maharashtra Factories Rules, 1963" and "Factories Act, 1948 and Uttar Pradesh Factories Rules,
+    /// 1950" both shortened to "Factories Act, 1948", and the Act email read "including Factories Act,
+    /// 1948 and Factories Act, 1948".
+    /// </summary>
+    internal static string FullCleanLabel(string label) =>
+        Capitalised(Whitespace().Replace(label.Replace("*", string.Empty).Replace("{", string.Empty).Replace("}", string.Empty), " ").Trim());
+
     internal static string CleanLabel(string label)
     {
         var clean = Whitespace().Replace(label.Replace("*", string.Empty).Replace("{", string.Empty).Replace("}", string.Empty), " ").Trim();

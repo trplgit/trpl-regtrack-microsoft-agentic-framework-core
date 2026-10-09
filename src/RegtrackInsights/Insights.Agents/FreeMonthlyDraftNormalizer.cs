@@ -178,6 +178,15 @@ public static partial class FreeMonthlyDraftNormalizer
     /// </summary>
     private static IEnumerable<string> SplitByPoint(string paragraph)
     {
+        /*  [OWNER, 2026-10-08] SWITCHED OFF. The shared rules now require figures about one subject
+            to sit together in a paragraph of 2 to 5 sentences with a meaning sentence, and the
+            validator rejects a one-sentence paragraph. This splitter was undoing exactly that: the
+            Location draft arrived with "52 of your 79 locations ... 60 of your 79 ... 11 of your 79
+            ..." in one paragraph and left as three one-line paragraphs. The model's paragraphs
+            stand as written.                                                                     */
+        return [paragraph];
+
+#pragma warning disable CS0162 // unreachable - kept for the history below
         /*  [MEASURED on tenant 1082, 2026-09-22] This was reshaping paragraphs the model had got
             RIGHT. The Users draft arrived with 5 paragraphs - within the brief - and left with 9,
             because any paragraph carrying three figures was broken into three. That is what made
@@ -207,6 +216,7 @@ public static partial class FreeMonthlyDraftNormalizer
         return blocks.Count < 4
             ? [paragraph]
             : blocks.Select(b => string.Join(" ", b));
+#pragma warning restore CS0162
     }
 
     /// <summary>Roughly three full lines in an email client - the point at which a block reads as a wall.</summary>

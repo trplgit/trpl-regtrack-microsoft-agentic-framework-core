@@ -201,7 +201,7 @@ public static class InsightCardRules
         if (factKey.Contains("no_reviewer", StringComparison.Ordinal))
             return "unreviewed";
         if (factKey.Contains("liability", StringComparison.Ordinal))
-            return "with liability";
+            return "with personal liability";
         if (factKey.Contains("never_touched", StringComparison.Ordinal))
             return "never started";
         if (factKey.Contains("over_90", StringComparison.Ordinal))
@@ -213,13 +213,21 @@ public static class InsightCardRules
         if (factKey.Contains("single_performer", StringComparison.Ordinal))
             return "on one person";
         if (factKey.Contains("expiring", StringComparison.Ordinal))
-            return "expiring";
-        if (factKey.Contains("expired", StringComparison.Ordinal) || factKey.Contains("lapsed", StringComparison.Ordinal))
-            return "lapsed";
+            return factKey.Contains("unrenewed", StringComparison.Ordinal) ? "expiring, no renewal" : "expiring";
+        // [2026-10-08] The emails' licence words: "expired with no renewal in progress", never "lapsed".
+        if (factKey.Contains("unrenewed", StringComparison.Ordinal))
+            return "expired, no renewal";
+        if (factKey.Contains("lapsed", StringComparison.Ordinal))
+            return "reached end date";
+        if (factKey.Contains("expired", StringComparison.Ordinal))
+            return "expired";
         if (factKey.Contains("critical", StringComparison.Ordinal))
-            return "critical";
+            return "rated critical";
+        // [2026-10-08] "open · 52 locations" told the reader nothing; these count last month's work still open.
+        if (factKey.Contains("last_month_open", StringComparison.Ordinal) || factKey.StartsWith("lm_", StringComparison.Ordinal))
+            return "still open from last month";
         if (factKey.Contains("still_open", StringComparison.Ordinal) || factKey.Contains("_open", StringComparison.Ordinal))
-            return "open";
+            return "still open";
         if (factKey.Contains("overdue", StringComparison.Ordinal) || factKey.StartsWith("od_", StringComparison.Ordinal) || factKey.StartsWith("t_od_", StringComparison.Ordinal))
             return "overdue";
         if (factKey.Contains("due", StringComparison.Ordinal))
@@ -246,13 +254,13 @@ public static class InsightCardRules
     /// <summary>The same chip vocabulary for a detector-led headline.</summary>
     public static string MetricNounForDetector(string detector) => detector switch
     {
-        "liability_share" or "liability_overdue_location" => "with liability",
+        "liability_share" or "liability_overdue_location" => "with personal liability",
         "single_point_of_failure" => "on one person",
         "deactivated_owner" => "with inactive owners",
         "self_review" => "self-reviewed",
-        "last_month_slippage" => "left open",
-        "licence_expiring_unrenewed" => "expiring",
-        "licence_lapsed_recent_unrenewed" or "expired_unrenewed_location" or "licence_type_lapse_rate" => "lapsed",
+        "last_month_slippage" => "still open from last month",
+        "licence_expiring_unrenewed" => "expiring, no renewal",
+        "licence_lapsed_recent_unrenewed" or "expired_unrenewed_location" or "licence_type_lapse_rate" => "expired, no renewal",
         "ghost_location" => "with nothing configured",
         "overdue_concentration" or "chronic_backlog" or "category_overdue_skew" or "multi_location_pattern" => "overdue",
         _ => string.Empty,

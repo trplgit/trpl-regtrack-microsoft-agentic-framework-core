@@ -165,7 +165,13 @@ public sealed class FreeMonthlyPreviewWorker(
 
                 try
                 {
-                    var result = await composer.ComposeWithDiagnosticsAsync(tenantId, group.RepresentativeUserId, edition, asOf, cancellationToken);
+                    /*  [FOUND 2026-10-07] With AsOfToday the composer re-clamped the as-at to the
+                        edition's OWN Sunday, so a slot whose Sunday is already past (the Overview,
+                        1st Sunday) came out "as at 4 Oct" while the others were "as at today". The
+                        edition itself must stay intact (its Sunday drives the next-edition teaser),
+                        so the composer is told not to clamp to it instead.                         */
+                    var result = await composer.ComposeWithDiagnosticsAsync(tenantId, group.RepresentativeUserId, edition, asOf, cancellationToken,
+                        clampToEditionSunday: !configuration.GetValue("FreeDigest:Preview:AsOfToday", false));
 
                     var html = await renderer.RenderHtmlAsync(
                         result.Output.Body, tenantName, edition, settings.UpgradeUrl, "#", settings.PortalUrl, cancellationToken);
@@ -476,7 +482,7 @@ public sealed class FreeMonthlyPreviewWorker(
             ? MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition with { Sunday = edition.CurrMonthEnd })
             : MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition);
 
-    private static MonthlyDigestEdition EditionFor(MonthlyDigestSlot slot, DateOnly monthStart)
+    internal static MonthlyDigestEdition EditionFor(MonthlyDigestSlot slot, DateOnly monthStart)
     {
         var firstSunday = monthStart.AddDays(((int)DayOfWeek.Sunday - (int)monthStart.DayOfWeek + 7) % 7);
         var sunday = firstSunday.AddDays(7 * (int)slot);

@@ -30,7 +30,7 @@ public sealed class InsightCardBuilderTests
         Assert.Equal("ins_1403_88214_20260928", card.InsightId);
 
         Assert.Equal(5, card.PrimaryMetric.Current);
-        Assert.Equal("obligations", card.PrimaryMetric.Unit);
+        Assert.Equal("compliances", card.PrimaryMetric.Unit);   // [2026-10-07] reader wording: never "obligations"
         Assert.Equal("lower_is_better", card.PrimaryMetric.Direction);
         Assert.Equal(0, card.PrimaryMetric.Target);
     }
@@ -95,9 +95,9 @@ public sealed class InsightCardBuilderTests
                 Assert.NotEqual(chip.Label, theme, StringComparer.OrdinalIgnoreCase);
         }
 
-        // The three vocabularies stay distinct for the phrase that kept repeating.
+        // Title theme stays distinct from the chips; the chip now uses the email's full words (2026-10-08).
         Assert.Equal("personal exposure", InsightCardRules.TitleTheme("pat_liability_share"));
-        Assert.Equal("with liability", InsightCardRules.MetricNoun("pat_liability_share"));
+        Assert.Equal("with personal liability", InsightCardRules.MetricNoun("pat_liability_share"));
         Assert.Equal("with personal liability", InsightCardRules.ShortNounForFact("pat_liability_share"));
     }
 
@@ -151,7 +151,7 @@ public sealed class InsightCardBuilderTests
                 // "939 lapses", not "939 licences that have lapsed without a renewal in progress".
                 Assert.InRange(metric.Label.Length, 1, 34);
                 Assert.DoesNotContain(".", metric.Label);
-                Assert.Equal(metric.Label.ToLowerInvariant(), metric.Label);
+                Assert.Equal(metric.Label.ToLowerInvariant(), metric.Label.Replace("Acts", "acts").Replace("Act ", "act "));   // "Acts" is a proper noun, as in the email
             }
 
             // No two chips, and no chip and the headline, may say the same thing twice.
@@ -296,8 +296,8 @@ public sealed class InsightCardBuilderTests
                 "llm", null, true, 10, 20, string.Empty));
 
         Assert.All(Texts(card), t => Assert.DoesNotContain("criminal", t, StringComparison.OrdinalIgnoreCase));
-        Assert.Equal("47 laws have overdue obligations that carry personal liability.", card.Headline);
-        Assert.StartsWith("31 laws have an unusually high share of overdue work carrying personal liability.", card.Narrative, StringComparison.Ordinal);
+        Assert.Equal("47 Acts have overdue compliances that carry personal liability.", card.Headline);   // [2026-10-07/08] reader wording: compliances, Acts
+        Assert.StartsWith("31 Acts have a high share of overdue work carrying personal liability.", card.Narrative, StringComparison.Ordinal);
 
         // The fallback and the metric labels are built from the proc labels, which still say it.
         foreach (var name in new[] { "overview", "users", "location", "act", "licence" })
