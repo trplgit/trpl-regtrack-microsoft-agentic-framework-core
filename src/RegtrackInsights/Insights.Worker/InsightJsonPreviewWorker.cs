@@ -123,6 +123,41 @@ public sealed class InsightJsonPreviewWorker(
                 sp.GetRequiredService<ILogger<InsightCardComposer>>(),
                 sp.GetService<FreeDigestMetrics>());
 
+        /*  PREVIEW ONLY (2026-10-08): FreeDigest:InsightPreview:AllSlotsAsOfToday=true writes the FIVE
+            cards of the current month - Overview, Users, Location, Act, Licence - all as at now, to sit
+            beside the as-at-today emails (FreeDigest:Preview:AsOfToday). Files: {tenant}-g{n}-{k}-{slot}.insight.json. */
+        if (configuration.GetValue("FreeDigest:InsightPreview:AllSlotsAsOfToday", false))
+        {
+            var monthStart = new DateOnly(localNow.Year, localNow.Month, 1);
+            for (var g = 0; g < groups.Count; g++)
+            {
+                foreach (var slot in Enum.GetValues<MonthlyDigestSlot>())
+                {
+                    var edition = FreeMonthlyPreviewWorker.EditionFor(slot, monthStart);
+                    var stem = Path.Combine(dir, $"{tenantId}-g{g + 1}-{(int)slot + 1}-{slot.ToString().ToLowerInvariant()}");
+                    try
+                    {
+                        var result = await composer.ComposeForEditionAsOfAsync(tenantId, groups[g].RepresentativeUserId, edition, localNow, cancellationToken);
+                        var payload = AiReportWeeklyMapper.Map(
+                            new PostInsightJsonInput(tenantId, groups[g].RepresentativeUserId, edition.Sunday.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), result.Card),
+                            AiReportWeeklyMapper.PeriodStartDateFor(edition.Sunday));
+                        await File.WriteAllTextAsync(stem + ".insight.json", JsonSerializer.Serialize(payload, Indented), cancellationToken);
+                        await File.WriteAllTextAsync(stem + ".insight.debug.txt", Debug(result), cancellationToken);
+                        summary.AppendLine($"group {g + 1} {slot}: {result.Card.PrimaryMetric.Label} - {result.Source}");
+                        logger.LogInformation("Insight JSON preview (as at today) group {Group} {Slot}: {Source} -> {File}.insight.json", g + 1, slot, result.Source, stem);
+                    }
+                    catch (FreeMonthlyDigestRefusedException ex)
+                    {
+                        await File.WriteAllTextAsync(stem + ".insight.debug.txt", $"REFUSED by SQL error {ex.SqlErrorNumber}.\n\n{ex.Message}", cancellationToken);
+                        logger.LogError("Insight JSON preview group {Group} {Slot}: REFUSED by SQL error {Code}", g + 1, slot, ex.SqlErrorNumber);
+                    }
+                }
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(dir, $"{tenantId}-insight-summary.txt"), summary.ToString(), cancellationToken);
+            return;
+        }
+
         logger.LogInformation(
             "Insight JSON preview: tenant {TenantId}, {GroupCount} scope group(s), week ending {WeekEnding}, output {Dir}. No email is composed; nothing is posted.",
             tenantId, groups.Count, weekEnding, dir);

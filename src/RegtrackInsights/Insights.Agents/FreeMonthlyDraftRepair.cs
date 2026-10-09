@@ -249,25 +249,26 @@ public static partial class FreeMonthlyDraftRepair
                     : TrailingInference().Replace(original, string.Empty);
                 sentence = Intensifier().Replace(sentence, string.Empty);
 
-                /*  A sentence never OPENS with a digit. [FOUND LIVE on PROD tenant 1008, 2026-09-23]
-                    "Three compliance categories also have overdue rates..." became "3 compliance
-                    categories also..." - correct, checkable, and the one thing a company secretary
-                    would never write. The opening word is left as the model spelled it; the
-                    validator checks a sentence-initial number word against the closed set by its
-                    value, so nothing is lost but the ugliness.                                   */
-                var opening = SentenceInitialNumberWord().Match(sentence);
-                var opensWithNumberWord = opening.Success
-                    && SpelledNumbers.Any(s => s.Word.Equals(opening.Groups[1].Value, StringComparison.OrdinalIgnoreCase));
-                if (!opensWithNumberWord)
-                    foreach (var (word, digit) in SpelledNumbers)
-                        sentence = Regex.Replace(sentence, $@"\b{word}\b", digit, RegexOptions.IgnoreCase);
-                else
-                    /*  ...and in a sentence that opens with a word, a small bare digit becomes a
-                        word too: "Three of the 8 compliance categories" reads as a misprint;
-                        "Three of the eight" does not. Only 2-20, never a percentage, never a
-                        comma-grouped figure. The validator checks each by value.             */
-                    sentence = SmallBareDigit().Replace(sentence, m =>
-                        SpelledNumbers.FirstOrDefault(s => s.Digit == m.Value).Word is { } word ? word : m.Value);
+                /*  [CHANGED 2026-10-07, product owner] EVERY figure is digits - including a sentence's
+                    first word and including 1. The 2026-09-23 rule kept a sentence-opening number
+                    word ("Three of the eight compliance categories ...") and even turned the small
+                    digits after it back into words; testers reconciling against the Detailed Report
+                    read "Nineteen", "twelve of its eighteen", "Fourteen of the forty" and asked for
+                    digits everywhere. A sentence may now open with a digit ("19 licences are expired
+                    ..."); the prompt asks for a leading clause, this guarantees the digits.        */
+                foreach (var (word, digit) in SpelledNumbers)
+                    sentence = Regex.Replace(sentence, $@"\b{word}\b", digit, RegexOptions.IgnoreCase);
+
+                /*  "one" as a QUANTITY becomes 1: "one of 17 people", "One has been overdue for 31 to
+                    60 days, one for 61 to 90 days", "one other location". Left alone wherever it is
+                    the pronoun or an idiom - "no one", "the one", "each one", "at one site", "one
+                    person only" (see QuantityOne).
+                    Only when 1 is in this email's closed set: a digit outside it is treated as an
+                    invented figure and its whole sentence is deleted further down, which would cost
+                    a true sentence for the sake of one word. Where 1 is not a data value, "one" is
+                    the idiom and staying a word is correct.                                       */
+                if (prompt is null || prompt.AllowedNumbers.Contains(1))
+                    sentence = QuantityOne().Replace(sentence, "1");
 
                 /*  "As at {{AS_AT}}" belongs on the FIRST as-at figure and nowhere else. [FOUND
                     LIVE on tenant 1082, 2026-09-22] The Overview opened two paragraphs with the
@@ -404,7 +405,13 @@ public static partial class FreeMonthlyDraftRepair
                 sentence = AdditiveOpener().Replace(sentence, string.Empty);
 
                 sentence = SamePartAndWhole().Replace(sentence, m =>
-                    m.Groups["n"].Value == "1" ? "the only " : m.Groups["n"].Value == "2" ? "both " : $"all {m.Groups["n"].Value} ");
+                {
+                    // [FOUND LIVE 2026-10-08] "19 of the 19 expired licences ..." at the start of a sentence
+                    // became "all 19 expired licences ..." - lowercase, and the validator rejected the email.
+                    var word = m.Groups["n"].Value == "1" ? "the only " : m.Groups["n"].Value == "2" ? "both " : $"all {m.Groups["n"].Value} ";
+                    var atStart = sentence[..m.Index].TrimStart('*', ' ').Length == 0;
+                    return atStart ? char.ToUpperInvariant(word[0]) + word[1..] : word;
+                });
 
                 if (actPlaceholders.Count > 0)
                     sentence = AtYourName().Replace(sentence, m =>
@@ -482,8 +489,16 @@ public static partial class FreeMonthlyDraftRepair
                     restating the first about a subset. Keep the key on wording. The tenant-5
                     hollow paragraph it was meant to fix had a different cause entirely - an
                     unsupported figure in a trailing clause, handled by TrimUnsupportedTail.     */
-                var shape = Shape(sentence);
-                if (shape.Length > 0 && !seen.Add(shape))
+                /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] This key deleted REAL FINDINGS. The
+                    Location email names four sites, three of them for the same thing (liability
+                    share), so "At your {{NAME_1}} site, 416 of its 595 ..." and "At your {{NAME_3}}
+                    site, 150 of its 273 ..." have the same shape - and {{NAME_3}} and {{NAME_4}} were
+                    deleted as filler on every run, in every slot, all day. A sentence that names a
+                    DIFFERENT site, person, Act or licence is never a repeat: the name IS the point.
+                    The key now keeps the placeholder, so only a restatement about the same thing,
+                    or an unnamed one, collapses.                                                  */
+                var shape = Shape(sentence) + "|" + string.Join(",", Placeholders().Matches(sentence).Select(m => m.Value).Order());
+                if (Shape(sentence).Length > 0 && !seen.Add(shape))
                 {
                     removed.Add($"repeats an earlier sentence: {sentence.Trim()}");
                     continue;
@@ -554,6 +569,10 @@ public static partial class FreeMonthlyDraftRepair
             }
 
             // A verdict sentence beside a figure sentence goes; see IsCommentaryWithoutAFigure.
+            /*  [OWNER, 2026-10-09] A standalone opening line of commentary ("Most of your overdue work is
+                old.") is NOT wanted - the point goes into the figure sentence. So the first sentence is
+                judged like any other; only the fixed closing lines (KeptWithoutAFigure) survive without
+                a figure.                                                                            */
             if (kept.Any(s => s.Any(char.IsDigit) || Placeholders().IsMatch(s)))
                 foreach (var commentary in kept.Where(IsCommentaryWithoutAFigure).ToList())
                 {
@@ -562,10 +581,61 @@ public static partial class FreeMonthlyDraftRepair
                 }
 
             if (kept.Count > 0)
-                paragraphs.Add(string.Join(" ", kept.Select(s => s.Trim())));
+                paragraphs.Add(WithClosingLine(string.Join(" ", kept.Select(s => s.Trim()))));
         }
 
         return new RepairedDraft(string.Join("\n\n", paragraphs), removed);
+    }
+
+    /// <summary>
+    /// [OWNER, 2026-10-09] A paragraph that ends on a figure is data with no insight. The model is
+    /// asked for a closing line from the shared rules' fixed table (Sec.4a); when the line is missing
+    /// (dropped on a redraft, or cut above), the matching fixed line is appended here, chosen from the
+    /// paragraph's own words. Fixed text only - nothing is inferred that the paragraph did not say.
+    /// </summary>
+    internal static string WithClosingLine(string paragraph)
+    {
+        var sentences = Regex.Split(paragraph.Trim(), @"(?<=[.!?])\s+(?=[A-Z0-9*{])").Where(s => s.Trim().Length > 0).ToList();
+        if (sentences.Count == 0)
+            return paragraph;
+
+        var stripped = Placeholders().Replace(paragraph, "ph");
+        if (!stripped.Any(char.IsDigit))
+            return paragraph;                                   // greeting, introduction, a quiet-month paragraph
+        if (!Placeholders().Replace(sentences[^1], "ph").Any(char.IsDigit))
+            return paragraph;                                   // already ends on a line without a figure
+
+        var line = ClosingLineFor(paragraph);
+        return line is null ? paragraph : paragraph.TrimEnd() + " " + line;
+    }
+
+    private static string? ClosingLineFor(string p)
+    {
+        bool Has(string pattern) => Regex.IsMatch(p, pattern, RegexOptions.IgnoreCase);
+
+        if (Has(@"\bfalls? due\b|\bBefore the end of\b"))
+            return "This work can still be completed on time if it is picked up now.";
+        if (Has(@"\bno renewal\b|\bexpired\b"))
+            return "Until a licence is renewed, there is no valid licence on record for that activity.";
+        if (Has(@"\bwhere it applies\b|\bat 2 or more locations\b|\bof (?:its|the) [\d,]+ (?:sites|locations)\b"))
+            return "This Act is being missed in many places at once, which points to the process rather than to a single site.";
+        if (Has(@"\brest(?:s|ing)? with one person\b"))
+            return "If that person is unavailable, the compliance work at that site stops.";
+        if (Has(@"\bperformer and reviewer\b"))
+            return "No second person checks this work before it is marked complete.";
+        if (Has(@"\bcompared with [\d,]+% across\b") && Has(@"\bliability\b"))
+            return "The overdue work here carries more personal risk for its officer than overdue work elsewhere in your organisation.";
+        if (Has(@"\baccounts? for\b|\bholds? [\d,]+ of\b|\bwith the most\b"))
+            return "Clearing the overdue work at these few places would remove a large part of your whole overdue total.";
+        if (Has(@"\bmore than 90 days\b"))
+            return "This part of the overdue work has been waiting for more than a quarter of a year, so it is not a recent slip.";
+        if (Has(@"\bpersonal (?:criminal )?liability\b"))
+            return "If these are not completed, the officer responsible can be held personally liable, not only the company.";
+        if (Has(@"\bSo far in\b"))
+            return "This is work that fell due this month and has still not been completed.";
+        if (Has(@"\{\{PREV_MONTH\}\}|\blast month\b|\bremain(?:ed|s)? open\b|\bstill open\b"))
+            return "This work was due last month and is not finished.";
+        return null;
     }
 
     /// <summary>
@@ -636,14 +706,6 @@ public static partial class FreeMonthlyDraftRepair
     [GeneratedRegex(@"^\s*overall\s*,", RegexOptions.IgnoreCase)]
     private static partial Regex RecapOpener();
 
-    /// <summary>A capitalised number word opening the sentence ("Three compliance categories ...").</summary>
-    [GeneratedRegex(@"^\s*([A-Z][a-z]+)\b")]
-    private static partial Regex SentenceInitialNumberWord();
-
-    /// <summary>A bare one- or two-digit figure: not part of a comma-grouped number, not a percentage, not a day ("1st").</summary>
-    [GeneratedRegex(@"(?<![\d,])\b(\d{1,2})\b(?![,.]?\d|\s*%|st|nd|rd|th)")]
-    private static partial Regex SmallBareDigit();
-
     /// <summary>
     /// A sentence that carries no figure, no name and no approved consequence, inside a paragraph
     /// that does carry a figure, is a verdict about the sentence before it. [FOUND LIVE on PROD
@@ -664,7 +726,23 @@ public static partial class FreeMonthlyDraftRepair
 
     /// <summary>Figure-less sentences the prompts ask for: the residual at zero, the empty-scope branches.</summary>
     private static readonly string[] KeptWithoutAFigure =
-        ["no other", "the only", "no licences are tracked", "no open work", "nothing is configured", "cannot be assessed"];
+        ["no other", "the only", "no licences are tracked", "no open work", "nothing is configured", "cannot be assessed",
+         // [2026-10-08] The introduction every email now opens with ("Here is your monthly update on ...
+         // The figures below are as of {{AS_AT}}.") - it carries no figure by design.
+         "these figures are as of", "the figures below are as of", "here is your",
+         /*  [OWNER, 2026-10-08] The MEANING sentences of shared rules Sec.4a - one per paragraph, no
+             figure by design ("figures without their meaning are data thrown at the reader"). Each
+             is identified by a fragment of its fixed wording, so an invented commentary sentence is
+             still removed.                                                                        */
+         "has still not been completed", "is not finished", "most often left unfinished", "not a recent slip",
+         "can be held personally liable", "more personal risk for its officer", "would remove a large part",
+         "if that person is unavailable", "no second person checks", "being missed in many places",
+         "no valid licence on record", "where your expired licences are gathered",
+         "can still be completed on time", "highest risk rating",
+         // Licence: what became of the licences that reached their end date (no figure when all were renewed).
+         "have since been renewed", "renewal filed", "keeps a valid licence on record", "handled in time",
+         // [2026-10-08] The free-tier pointer at the paid report (shared rules Sec.6) - fixed wording, no figure.
+         "in RegInsights Ultimate"];
 
 
     [GeneratedRegex(@"\d{1,3}(?:,\d{3})+|\d+")]
@@ -878,9 +956,24 @@ public static partial class FreeMonthlyDraftRepair
     [GeneratedRegex(@"\b[Aa]t your (?<p>\{\{NAME_\d+\}\})")]
     private static partial Regex AtYourName();
 
-    /// <summary>"one of 18 people", "one of the 5 sites" - the residual, stated once.</summary>
-    [GeneratedRegex(@"\bone of (?:the )?\d[\d,]*\b", RegexOptions.IgnoreCase)]
+    /// <summary>
+    /// "one of 18 people", "one of the 5 sites" - the residual, stated once. [2026-10-07] Also
+    /// "1 of 18" (QuantityOne now converts the word before this runs) and "among 18 people" (the
+    /// prompt's residual wording since the digits-everywhere change).
+    /// </summary>
+    [GeneratedRegex(@"\b(?:(?:one|1) of|among) (?:the )?\d[\d,]*\b", RegexOptions.IgnoreCase)]
     private static partial Regex OneOfN();
+
+    /// <summary>
+    /// "one" used as a QUANTITY: followed by "of N", "other", "for", "has/is/was/remains", or a
+    /// counted noun (obligation, location, site, licence, Act, law, item, category). Never after
+    /// "no", "the", "each", "any", "every", "some", "which", "this", "that", "only", "at" - there it
+    /// is the pronoun or an idiom ("no one else", "the one", "each one", "5 at one site" = at a
+    /// single site). "one person" is deliberately not matched: it is the fixed teaser wording
+    /// "where a job depends on one person only".
+    /// </summary>
+    [GeneratedRegex(@"(?<!\b(?:no|the|each|any|every|some|which|this|that|only|at)\s+)\bone\b(?=\s+(?:of\s+(?:the\s+)?\d|other\b|for\b|has\b|is\b|was\b|remains?\b|obligations?\b|locations?\b|sites?\b|licen[cs]es?\b|acts?\b|laws?\b|items?\b|categor(?:y|ies)\b))", RegexOptions.IgnoreCase)]
+    private static partial Regex QuantityOne();
 
     /// <summary>", with 17 others", ", with 34 other Acts in the same position" - the residual again.</summary>
     [GeneratedRegex(@",?\s*(?:and\s+)?with \d[\d,]* others?\b[^,.;]*", RegexOptions.IgnoreCase)]

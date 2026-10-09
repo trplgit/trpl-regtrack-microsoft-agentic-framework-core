@@ -1,39 +1,42 @@
 # Free Monthly Insights - Licence
 
 About the reader's licences: their right to operate. Everything turns on one distinction: a
-renewal filed, or nothing filed. A lapse with a renewal in progress is being handled; a
-lapse with nothing filed is the finding. Every number you write says which of the two it is.
+renewal filed, or nothing filed. A licence is "expired", "expiring" or "renewed" - never
+"overdue", "due" or "lapsed".
 
-- Past - what lapsed during {{PREV_MONTH}} and so far in {{CURR_MONTH}}, and how much of
-  that still has nothing filed as at {{AS_AT}}.
-- Present - licences currently expired with no renewal in progress, and where they sit: a
-  site or a licence type holding a large share, named, in one paragraph.
-- Future - what expires between today and the end of {{CURR_MONTH}} with nothing filed.
-  This is the most preventable item in the email, and every such licence you were given is
-  named here with its site and date.
+## What this email states, in this order
 
-**A named licence is always placed.** Whenever a finding gives `Placeholder`,
-`AtPlaceholder` and `DatePlaceholder`, the sentence that names the licence carries all
-three: "{{NAME_1}} expired on {{DATE_1}} at your {{NAME_1_AT}} site and still has no renewal
-in progress." Licences in the same situation may share a paragraph, each with its own site
-and date, so the reader has the list a colleague would hand them.
+Every item below is a paragraph: its figures, each with its base, then ONE meaning sentence
+from the shared rules (section 4a). Figures without their meaning sentence are not enough.
 
-Nothing that has not yet expired may be called expired, lapsed or overdue.
-
-`lic_expired_total` is every licence currently expired, whatever its date;
-`lic_lapsed_this_month` and `lic_lapsed_last_month` are part of it. State the total first
-and put the recent ones inside the same sentence.
+1. **Currently** - "Currently, N licences are expired with no renewal in progress across
+   your organisation. Until a licence is renewed, there is no valid licence on record for
+   that activity." Never write "N of the N expired licences" - say it once as above. Then the locations in ONE plain sentence using only
+   `loc_with_expired_unrenewed` of `loc_with_licences`, with the examples named: "N of your
+   M locations that hold licences have at least one expired licence with no renewal in
+   progress, including your {{EG_1}} site (N of its M licences)."
+2. **The named licence type or site** - "The {{NAME_1}} licence type has N of its M
+   licences expired with no renewal in progress, or P%, compared with P% across your
+   organisation." Then the residual in its own sentence, or that no other type is in that
+   situation.
+3. **In {{PREV_MONTH}} and so far in {{CURR_MONTH}}** - licences that reached their end date
+   in that period, followed in the same sentence by how many still have no renewal, from the
+   matching `_unrenewed` fact only: "N licences reached their end date in {{PREV_MONTH}}. N of
+   them still have no renewal filed." When no `_unrenewed` fact is given for that period,
+   write: "All of them have since been renewed or have a renewal filed." Never a bare "N
+   licences reached their end date" with nothing after it. Never "expired in {{PREV_MONTH}}", never
+   "whatever their status", never tie these to the expired total with "of these" or
+   "including".
+4. **Before the end of {{CURR_MONTH}}** - every licence expiring with no renewal, named with
+   its site and date: "{{NAME_2}} expires on {{DATE_2}} at your {{NAME_2_AT}} site and has no
+   renewal in progress."
 
 ## Units
 
-Counts here are licences, except the facts that count sites or licence types; the label
-says which.
+Counts are licences unless the label says sites or licence types. Never state
+`pat_expired_unrenewed_location` or any comparison between locations. A licence finding
+with no `Placeholder` is written from its site and date, or left out; never invent a name.
+If `lic_total` is 0, write two sentences: no licences are tracked in RegTrack for them, and
+any recorded there will appear in this email when they come up for renewal.
 
-A licence finding may arrive with no `Placeholder` for the licence itself. Then write it
-from the site and date you do have, or leave it out. Never invent a name.
-
-If `lic_total` is 0, write exactly two sentences and stop: no licences are tracked in
-RegTrack for them, and any recorded there will appear in this email when they come up for
-renewal.
-
-**Length:** up to 560 words after `Good morning,`, up to 6 paragraphs, up to 10 figures.
+**Length:** about 250 words after `Good morning,`, 4 or 5 paragraphs.

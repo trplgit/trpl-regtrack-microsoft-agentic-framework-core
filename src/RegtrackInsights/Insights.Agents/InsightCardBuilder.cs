@@ -54,8 +54,9 @@ public static partial class InsightCardBuilder
         if (headlineChip.Length == 0)
             headlineChip = primary.Unit;
 
+        // [2026-10-07] Reader wording ("compliance", never "obligation") on every text field - see FreeTierReaderTerms.
         var supporting = SupportingMetrics(facts, primary, headlineChip, slot)
-            .Select(m => m with { Label = WithoutBannedPhrases(m.Label) })
+            .Select(m => m with { Label = FreeTierReaderTerms.Apply(WithoutBannedPhrases(m.Label)), Unit = FreeTierReaderTerms.Apply(m.Unit) })
             .ToList();
 
         return new InsightCard(
@@ -64,10 +65,10 @@ public static partial class InsightCardBuilder
             Type: input.HeadlineType,
             Severity: InsightCardRules.Severity(severityTier),
             WeekOf: InsightCardRules.Date(weekOf),
-            Title: WithoutBannedPhrases(input.Title),
-            Headline: WithoutBannedPhrases(text.Headline),
-            Narrative: WithoutBannedPhrases(text.Narrative),
-            PrimaryMetric: primary with { Label = WithoutBannedPhrases(primary.Label) },
+            Title: FreeTierReaderTerms.Apply(WithoutBannedPhrases(input.Title)),
+            Headline: FreeTierReaderTerms.Apply(WithoutBannedPhrases(text.Headline)),
+            Narrative: FreeTierReaderTerms.Apply(WithoutBannedPhrases(text.Narrative)),
+            PrimaryMetric: primary with { Label = FreeTierReaderTerms.Apply(WithoutBannedPhrases(primary.Label)), Unit = FreeTierReaderTerms.Apply(primary.Unit) },
             SupportingMetrics: supporting);
     }
 
@@ -79,11 +80,23 @@ public static partial class InsightCardBuilder
     /// first, and a validator rejection only swaps it for the fallback, which says it too. So it
     /// is rewritten here, on every text field, whatever wrote it. Email is unaffected.
     /// </summary>
-    internal static string WithoutBannedPhrases(string text) =>
-        CriminalLiability().Replace(text, m => char.IsUpper(m.Value[0]) ? "Personal liability" : "personal liability");
+    internal static string WithoutBannedPhrases(string text)
+    {
+        text = CriminalLiability().Replace(text, m => char.IsUpper(m.Value[0]) ? "Personal liability" : "personal liability");
+
+        // [2026-10-08] "96 laws have overdue compliances" - the emails, the unit and RegTrack all say "Acts".
+        text = ALaw().Replace(text, m => char.IsUpper(m.Value[0]) ? "An Act" : "an Act");
+        return Law().Replace(text, m => m.Value.EndsWith('s') ? "Acts" : "Act");
+    }
 
     [GeneratedRegex(@"\b(?:personal\s+)?criminal\s+liability\b", RegexOptions.IgnoreCase)]
     private static partial Regex CriminalLiability();
+
+    [GeneratedRegex(@"\b[Aa]\s+law\b")]
+    private static partial Regex ALaw();
+
+    [GeneratedRegex(@"\b[Ll]aws?\b")]
+    private static partial Regex Law();
 
     /// <summary>
     /// The figures that render beside the headline one as "939 lapses · 345 locations". Each label

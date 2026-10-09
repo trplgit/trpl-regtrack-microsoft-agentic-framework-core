@@ -1,54 +1,40 @@
 # Free Monthly Insights - Overview
 
-The first email of the month and the only one that looks at everything; for many readers
-the only one they read closely. It answers: where do I stand this month, what is the one
-thing I should know, and where does it sit? Pick the three or four things that matter
-most and give each a proper paragraph, with the named site, person, Act or licence that
-carries it, rather than eight things a clause each.
+The first email of the month and the only one that looks at everything. It answers: where
+do I stand this month, and where does the problem sit?
 
-## The paragraphs
+## What this email states, in this order
 
-1. The worst thing, now. The headline fact or finding and what it exposes them to, in the
-   first sentence after the greeting. When the headline is a part of a larger figure, state
-   the whole first and the part inside it: "590 of the 1,915 compliances that fell due in
-   {{PREV_MONTH}} remain open, and 180 of those carry personal criminal liability". If the
-   input names where it sits, say so in the same paragraph.
-2. Past - what {{PREV_MONTH}} left behind. If `signals.last_month_closing` is present, this
-   paragraph carries the contrast between how the month closed and what it left: "most of
-   what fell due closed on time, and this is what did not" tells the reader their process
-   works and the exception is what to look at.
-3. Present - this month so far, then the standing backlog. **Whenever `tm_due_so_far` is
-   given, state how many of the compliances that have fallen due so far in {{CURR_MONTH}}
-   are already past due, as "N of the M that have fallen due so far", with the
-   liability-bearing part where given.** If `signals.month_trend` says this month is falling
-   behind faster than the last, that contrast leads the paragraph; if it says the month is
-   going much like the last, say so beside the figures. Then the backlog, its size once,
-   and where it is held, using the named findings and examples.
-4. Future - what is still due before {{CURR_MONTH}} ends and can still be acted on. Work
-   due soon carrying personal liability or with nobody assigned is the most preventable
-   problem in this email. A licence expiring this month unrenewed belongs here, named,
-   placed and dated.
+Every item below is a paragraph: its figures, each with its base, then ONE meaning sentence
+from the shared rules (section 4a). Figures without their meaning sentence are not enough.
 
-Drop at most one of these if the input cannot support it. If you must choose what to cut,
-keep the worst thing first, keep every name, and keep the ending on what can still be done.
+1. **In {{PREV_MONTH}}** - how many compliances fell due, how many are still open today, how
+   many of those carry personal liability, how many are rated Critical. "In {{PREV_MONTH}},
+   N compliances fell due across your organisation. N of them are still open today.
+   N of those N carry personal criminal liability for the responsible officer."
+2. **So far in {{CURR_MONTH}}** - its own paragraph: how many have fallen due, how many of
+   those are already overdue, how many of those carry personal liability. ONLY `curr`
+   figures in this paragraph - nothing from all months.
+3. **In total, from all months** - its own paragraph: the overdue total, how many are overdue
+   for more than 90 days, how many carry personal liability, then the meaning sentence.
+4. **Where it sits** - the two pattern facts, each with its FIRST example only, then the
+   paid-report line: "N of the M locations have a higher overdue rate for compliances with
+   personal liability than your company average, including your {{EG_1}} site with N
+   overdue compliances carrying personal liability. N of the M compliance categories have a
+   higher overdue rate than your company average, including {{EG_3}} with N of its M
+   compliances overdue. The full list, with each one's figures, is in RegInsights Ultimate."
+   Never name {{EG_2}}. An example is only ever given for its own pattern: a location
+   example ({{EG_1}}, {{EG_2}}) is never written as a compliance category, and a category
+   example ({{EG_3}}) is never written as a site. Licences go in their own paragraph (item 5),
+   never in this one.
+5. **Currently** - licences expired with no renewal in progress, in the same paragraph as
+   item 4 or with item 6: "Currently, N licences are expired with no renewal in progress."
+   Add the `not_assessable` count, with its number, where one is given.
+6. **Before the end of {{CURR_MONTH}}** - what still falls due, and the part with personal
+   liability. A licence expiring this month with no renewal is named here with its site and
+   date.
 
-## What this email always states, when the input gives it
+If `signals` say last month closed mostly on time, say it with the figures only, never with
+the signal's words ("mixed", "meaningful share").
 
-Each is one clause, and each is the figure a reader looks for first:
-
-- Last month: how many of what fell due remain open, and how many of those carry personal
-  criminal liability.
-- This month so far: how many have fallen due, how many are already past due, and how many
-  of those carry liability.
-- The standing backlog: its total, how many have been overdue for more than 90 days, and
-  how many carry liability.
-- Every pattern fact, with its count over the number compared ("27 of the 62 locations")
-  and its examples named in the same sentence.
-- Licences: how many are currently expired with no renewal in progress, and the
-  `not_assessable` count excluded, with its number.
-- What still falls due before the month ends: the total and the liability-bearing part.
-
-If {{PREV_MONTH}} and {{CURR_MONTH}} genuinely hold little, say so in one sentence and let
-the standing position carry the email. A quiet month is itself the finding.
-
-**Length:** up to 700 words after `Good morning,`, up to 6 paragraphs.
+**Length:** about 350 words after `Good morning,`, 5 paragraphs.

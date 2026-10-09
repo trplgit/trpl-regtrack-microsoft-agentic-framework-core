@@ -58,7 +58,12 @@ public static class FreeDigestRegistration
         /*  Named HttpClients via the factory, never `new HttpClient()`. A long-lived host that
             constructs its own clients exhausts sockets; one holding a single static client never
             picks up DNS changes. The factory solves both.                                      */
-        services.AddHttpClient(LlmClientName);
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] No timeout was set, so HttpClient's 100s
+            default applied: a reasoning-model call for Minda's Overview (~6.5K tokens in, up to ~5K
+            out) took 90-110s and was cancelled, and the whole email step failed. The paid tier
+            already allows 5 minutes per call (MafAgentFactory). Llm:HttpTimeoutSeconds, default 300. */
+        var llmHttpTimeout = TimeSpan.FromSeconds(RequirePositive(configuration, "Llm:HttpTimeoutSeconds", 300));
+        services.AddHttpClient(LlmClientName, http => http.Timeout = llmHttpTimeout);
 
         /*  An explicit timeout, not HttpClient's 100s default: one wedged provider call would
             otherwise hold a recipient for ~6.5 minutes across the three retry attempts.        */

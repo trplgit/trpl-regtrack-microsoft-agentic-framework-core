@@ -67,6 +67,21 @@ public sealed class InsightCardComposer(
         return await ComposeFromDataAsync(data, tenantId, representativeUserId, weekEnding, cancellationToken);
     }
 
+    /// <summary>
+    /// PREVIEW ONLY (2026-10-08): the card for a given edition (subject), as at <paramref name="localNow"/>
+    /// capped at the edition's month end rather than its Sunday - so all 5 cards of a month can be made
+    /// "as at today" alongside the as-at-today emails, including the Licence card in a 4-Sunday month.
+    /// The scheduled lane never calls this; it uses <see cref="ComposeAsync"/>.
+    /// </summary>
+    public async Task<InsightCardResult> ComposeForEditionAsOfAsync(
+        int tenantId, int representativeUserId, MonthlyDigestEdition edition, DateTime localNow,
+        CancellationToken cancellationToken = default)
+    {
+        var asOf = MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition with { Sunday = edition.CurrMonthEnd });
+        var data = await repository.GetSlotAsync(edition, tenantId, representativeUserId, asOf, monthlySettings.AllowPersonNames, cancellationToken);
+        return await ComposeFromDataAsync(data, tenantId, representativeUserId, edition.Sunday, cancellationToken);
+    }
+
     /// <summary>Composes from subject data already in hand - the replay preview, and tests.</summary>
     public async Task<InsightCardResult> ComposeFromDataAsync(
         MonthlyDigestData data, int tenantId, long userId, DateOnly weekEnding, CancellationToken cancellationToken = default)

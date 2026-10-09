@@ -1,32 +1,41 @@
 # Free Monthly Insights - Users
 
-About the people doing the work. It answers: does my exposure depend on one person, who is
-carrying the most, and has ownership broken anywhere? It is about dependency and control,
-never about grading anyone: a person is named because their share of the work is unusual
-and the reader should know whose desk it is on. State it and stop.
+About the people doing the work. It answers: who holds the overdue work, whose overdue work
+carries the most personal liability, and where does work depend on one person? A person is
+named because their share is high and the reader should know whose desk it is on. State it
+and stop; never grade anyone.
 
-- Past - which people left {{PREV_MONTH}}'s work outstanding, and by how much against the
-  rest of the organisation. A person with everything they owned still open is a finding; a
-  normal share is not.
-- Present - where ownership has broken and who is carrying too much: work held by someone
-  no longer active, work nobody owns or reviews, one person doing and approving the same
-  compliance, or the backlog concentrated on two or three people. This is the heart of the
-  email and where most of the names go. The largest holder gets a paragraph of their own:
-  how much of the organisation's overdue work is on their desk, what kind of work it is,
-  and whether anyone else is assigned to it.
-- Future - only what the input gives you.
+## What this email states, in this order
 
-The Overview has already given the backlog total and its liability share. State the
-backlog total once, where a named person is measured against it, and do not restate the
-organisation-wide liability count on its own. The reader should finish knowing who, and
-how much of the work each of them holds.
+Every item below is a paragraph: its figures, each with its base, then ONE meaning sentence
+from the shared rules (section 4a). Figures without their meaning sentence are not enough.
+
+1. **In {{PREV_MONTH}}** - the slippage pattern with its examples: "N of the M people with
+   work due in {{PREV_MONTH}} still have a higher share of it open than the rest, including
+   {{EG_1}} (N of their M) and {{EG_2}} (N of their M)."
+2. **In total, from all months** - the overdue total, the part overdue for more than 90 days
+   and the part with personal liability. Then the meaning sentence. Nothing else in this
+   paragraph.
+2a. **The one strongest pattern of people** - its own short paragraph: EITHER the
+   self-reviewed work ("N of the M open compliances have the same person as performer and
+   reviewer.") OR work held by someone no longer active OR the 3-people share - the one with
+   the largest count - then the meaning sentence. The others stay in RegInsights Ultimate.
+3. **The named people** - {{NAME_1}} and {{NAME_2}} in full, one paragraph; {{NAME_3}} and {{NAME_4}} counted with the others and pointed at RegInsights Ultimate (shared rules section 6):
+   - liability share: "For {{NAME_1}}, N of their M overdue compliances carry personal
+     liability, or P%, compared with P% across your organisation." Then the residual in its
+     own sentence: "N other people also have a higher share than your company average."
+   - concentration: "{{NAME_2}} holds N of the M overdue compliances across your
+     organisation, or P%." Then ITS OWN residual: "N other people also hold a large share of
+     all overdue compliances." A residual count always belongs to the finding it came with -
+     never attach the liability-share residual to the concentration sentence or the other
+     way round, and never name {{NAME_3}} or {{NAME_4}}.
+4. **Before the end of {{CURR_MONTH}}** - what still falls due, and the part with personal
+   liability.
 
 ## Units
 
-This email mixes people and compliances; the label says which. A finding's `BaseCount` is
-that person's total ("192 of their 1,041 compliances") except under `overdue_concentration`
-("holds 4,655 of the 5,178 overdue compliances across your organisation").
+People and compliances never share a clause. A finding's `BaseCount` is that person's own
+total, except under `overdue_concentration`, where it is the organisation's overdue total.
+If `u_open_items` is 0, say in one sentence that there is no open work, and stop.
 
-If `u_open_items` is 0, say in one sentence that there is no open work for them, and stop.
-
-**Length:** up to 620 words after `Good morning,`, up to 6 paragraphs, up to 10 figures.
+**Length:** about 300 words after `Good morning,`, 5 paragraphs.
