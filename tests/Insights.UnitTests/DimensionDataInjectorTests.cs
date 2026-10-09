@@ -77,4 +77,68 @@ public sealed class DimensionDataInjectorTests
         Assert.Equal(1, result.Split("id=\"insights-data\"").Length - 1);
         Assert.DoesNotContain("fake", result);
     }
+
+    /// <summary>[ADDED 2026-10-09, FOUND LIVE] The tile-QA patch loop must never hand the row JSON
+    /// to the patch LLM - three real reports came back with "rows":[]. Strip removes the whole
+    /// block, every copy, and nothing else.</summary>
+    [Fact]
+    public void Strip_RemovesTheDataBlock_AndNothingElse()
+    {
+        const string page = "<html><body><h1>R</h1><script>draw()</script></body></html>";
+        var injected = DimensionDataInjector.Inject(page, "Users", Rows, Totals);
+        var twice = injected.Replace("</body>", "<script id=\"insights-data\" type=\"application/json\">{\"rows\":[]}</script></body>");
+
+        var stripped = DimensionDataInjector.Strip(twice);
+
+        Assert.Equal(page, stripped);
+        Assert.DoesNotContain("insights-data", stripped);
+    }
+
+    [Fact]
+    public void Strip_ThenInject_RoundTripsEveryRow()
+    {
+        var injected = DimensionDataInjector.Inject("<html><body><script>x()</script></body></html>", "Users", Rows, Totals);
+
+        var restored = DimensionDataInjector.Inject(DimensionDataInjector.Strip(injected), "Users", Rows, Totals);
+
+        Assert.Equal(injected, restored);
+        Assert.False(DimensionDataInjector.RowsLost(restored, Rows));
+    }
+
+    /// <summary>The live failure shape: rows were expected, the page's block says "rows":[].</summary>
+    [Fact]
+    public void RowsLost_WhenRowsWereExpected_AndTheBlockHasAnEmptyArray()
+    {
+        const string page = "<html><body><script type=\"application/json\" id=\"insights-data\">{\"dimension\":\"Users\",\"rows\":[],\"totals\":{\"UsersReported\":160}}</script><script>draw()</script></body></html>";
+
+        Assert.True(DimensionDataInjector.RowsLost(page, Rows));
+    }
+
+    [Fact]
+    public void RowsLost_WhenRowsWereExpected_AndTheBlockIsMissingOrUnparsable()
+    {
+        Assert.True(DimensionDataInjector.RowsLost("<html><body><script>draw()</script></body></html>", Rows));
+        Assert.True(DimensionDataInjector.RowsLost("<html><body><script type=\"application/json\" id=\"insights-data\">{not json</script></body></html>", Rows));
+    }
+
+    [Fact]
+    public void RowsLost_IsFalse_WhenThePageCarriesTheRows()
+    {
+        var page = DimensionDataInjector.Inject("<html><body><script>x()</script></body></html>", "Users", Rows, Totals);
+
+        Assert.False(DimensionDataInjector.RowsLost(page, Rows));
+    }
+
+    /// <summary>No rows expected (fixed_holistic, or a dimension that genuinely returned none) can
+    /// never be "lost" - the guard must stay silent for every page that never had a block.</summary>
+    [Fact]
+    public void RowsLost_IsFalse_WhenNoRowsWereExpected()
+    {
+        const string bare = "<html><body><script>draw()</script></body></html>";
+
+        Assert.False(DimensionDataInjector.RowsLost(bare, null));
+        Assert.False(DimensionDataInjector.RowsLost(bare, ""));
+        Assert.False(DimensionDataInjector.RowsLost(bare, "[]"));
+        Assert.False(DimensionDataInjector.RowsLost(DimensionDataInjector.Inject(bare, "Act", "[]", null), "[]"));
+    }
 }

@@ -61,10 +61,12 @@ public sealed class InteractiveTileQaLabTest(ITestOutputHelper output) : IAsyncL
             endpoint, model, apiKey, "TileGlitchReviewAgent", "Lab run.",
             await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "prompts", "07_tile_glitch_review.md"))));
 
-        var checker = new InteractiveTileChecker(browser!, reviewAgent, screenshotDir!, NullLogger<InteractiveTileChecker>.Instance);
-        var findings = await checker.FindIssuesAsync(html);
+        var checker = new InteractiveTileChecker(browser!, reviewAgent, NullLogger<InteractiveTileChecker>.Instance);
+        var result = await checker.FindIssuesAsync(html, new TileCheckRequest(ScreenshotDirectory: screenshotDir));
+        var findings = result.Findings;
 
-        output.WriteLine($"Found {findings.Count} finding(s).");
+        output.WriteLine($"Found {findings.Count} finding(s); truncated={result.Truncated}; pageErrors={result.PageErrors.Count}; visionTokens={result.TotalTokens}.");
+        foreach (var e in result.PageErrors) output.WriteLine($"  page error: {e}");
         foreach (var f in findings)
             output.WriteLine($"  [{f.Severity}] {f.CardTitle} - {f.Interaction}: {f.TechnicalDescription} (before={f.BeforeScreenshotPath}, after={f.AfterScreenshotPath})");
     }

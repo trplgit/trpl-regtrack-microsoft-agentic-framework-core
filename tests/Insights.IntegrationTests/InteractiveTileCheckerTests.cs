@@ -10,26 +10,25 @@ namespace Insights.IntegrationTests;
 /// <summary>
 /// [ADDED 2026-10-07] InteractiveTileChecker in real Chromium against hand-made pages - mirrors
 /// LayoutCollisionCheckerTests.cs's own convention (real browser, synthetic HTML, IAsyncLifetime).
+/// [REWORKED 2026-10-09] The checker now samples one element per kind per card, never reports an
+/// inert svg hover, runs under a budget, captures page errors and writes nothing to disk unless a
+/// lab directory is given - each of those has a test below.
 /// </summary>
 public sealed class InteractiveTileCheckerTests : IAsyncLifetime
 {
     private IPlaywright? playwright;
     private IBrowser? browser;
-    private string? screenshotDir;
 
     public async Task InitializeAsync()
     {
         playwright = await Playwright.CreateAsync();
         browser = await playwright.Chromium.LaunchAsync();
-        screenshotDir = Path.Combine(Path.GetTempPath(), "insights-tile-qa-tests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(screenshotDir);
     }
 
     public async Task DisposeAsync()
     {
         if (browser is not null) await browser.DisposeAsync();
         playwright?.Dispose();
-        if (screenshotDir is not null && Directory.Exists(screenshotDir)) Directory.Delete(screenshotDir, recursive: true);
     }
 
     private sealed class FakeGlitchReviewAgent(bool isBroken, string? explanation = "test-forced verdict") : ITileGlitchReviewAgent
@@ -42,9 +41,15 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
         }
     }
 
-    private Task<IReadOnlyList<TileFinding>> Check(string body, ITileGlitchReviewAgent reviewAgent) =>
-        new InteractiveTileChecker(browser!, reviewAgent, screenshotDir!, NullLogger<InteractiveTileChecker>.Instance).FindIssuesAsync(
-            $"<!DOCTYPE html><html><head><style>body{{font:14px sans-serif;margin:0}}.card{{position:relative;margin:20px;padding:12px;min-height:60px}}</style></head><body>{body}</body></html>");
+    private static string Page(string body) =>
+        $"<!DOCTYPE html><html><head><style>body{{font:14px sans-serif;margin:0}}.card{{position:relative;margin:20px;padding:12px;min-height:60px}}</style></head><body>{body}</body></html>";
+
+    private Task<TileCheckResult> CheckFull(string body, ITileGlitchReviewAgent reviewAgent, TileCheckRequest? request = null) =>
+        new InteractiveTileChecker(browser!, reviewAgent, NullLogger<InteractiveTileChecker>.Instance)
+            .FindIssuesAsync(Page(body), request ?? new TileCheckRequest());
+
+    private async Task<IReadOnlyList<TileFinding>> Check(string body, ITileGlitchReviewAgent reviewAgent) =>
+        (await CheckFull(body, reviewAgent)).Findings;
 
     [Fact]
     public async Task NoCards_ReturnsEmptyFindings()
@@ -54,11 +59,15 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ButtonWithNoVisibleEffect_IsAFunctionalFinding()
+    public async Task ButtonWithNoVisibleEffect_IsAFunctionalFinding_WithOrdinalAndKind()
     {
         var html = "<section class='card'><h3>Dead Button</h3><button onclick=\"void(0)\">Click me</button></section>";
         var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
-        Assert.Contains(findings, f => f.Severity == TileFindingSeverity.Functional && f.CardTitle.Contains("Dead Button"));
+        var finding = Assert.Single(findings, f => f.Severity == TileFindingSeverity.Functional);
+        Assert.Equal("Dead Button", finding.CardTitle);
+        Assert.Equal(0, finding.CardOrdinal);
+        Assert.Equal("button", finding.ElementKind);
+        Assert.Equal(string.Empty, finding.BeforeScreenshotPath); // nothing written in prod mode
     }
 
     [Fact]
@@ -97,15 +106,35 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BareSvgHoverTarget_IsDetectedAndChecked()
+    public async Task SvgWithTitle_IsHovered_OwnTileChangeIsNotAFinding()
     {
         var html = "<section class='card'><h3>Chart</h3>" +
             "<svg width='60' height='60' onmouseover=\"this.querySelector('rect').setAttribute('fill','red')\">" +
             "<title>Bar value: 42</title><rect width='60' height='60' fill='blue'/></svg></section>";
         var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
-        // Hovering the SVG changes its own fill (own-tile effect) and nothing else - no finding,
-        // but reaching this line with no exception proves the SVG selector was found and exercised.
         Assert.Empty(findings);
+    }
+
+    /// <summary>[CHANGED 2026-10-09] A hover on a mark that shows nothing (native title tooltips never
+    /// render in screenshots) used to be a Functional finding no patch could fix - 0 of 6 real runs
+    /// converged. It is no longer a finding of any kind.</summary>
+    [Fact]
+    public async Task SvgHoverWithNoVisibleChange_IsNeverAFinding()
+    {
+        var html = "<section class='card'><h3>Chart</h3>" +
+            "<svg width='60' height='60'><title>Bar value: 42</title><rect width='60' height='60' fill='blue'/></svg></section>";
+        var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
+        Assert.Empty(findings);
+    }
+
+    /// <summary>[ADDED 2026-10-09] One element per kind per card: three dead buttons produce ONE finding.</summary>
+    [Fact]
+    public async Task ThreeDeadButtonsInOneCard_ProduceOneFinding()
+    {
+        var html = "<section class='card'><h3>Buttons</h3>" +
+            "<button onclick=\"void(0)\">A</button><button onclick=\"void(0)\">B</button><button onclick=\"void(0)\">C</button></section>";
+        var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
+        Assert.Single(findings);
     }
 
     [Fact]
@@ -120,8 +149,21 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
         Assert.DoesNotContain(findings, f => f.Severity == TileFindingSeverity.Functional);
     }
 
+    /// <summary>[ADDED 2026-10-09] The hidden 1x1 checkbox behind a CSS toggle is never the thing to click.</summary>
     [Fact]
-    public async Task ScrollableRegion_AfterShotCapturedWhileScrolled_RealScrollIsNotAFunctionalFalsePositive()
+    public async Task HiddenCheckboxBehindAToggle_IsNotTagged_VisibleLabelIs()
+    {
+        var html = "<style>.hr-panel{display:none}.hr-toggle:checked ~ .hr-panel{display:block;background:#333;color:#fff;padding:10px}</style>" +
+            "<section class='card'><h3>Help</h3><div class='hr'>" +
+            "<input type='checkbox' class='hr-toggle' id='hr-x' style='position:absolute;width:1px;height:1px;opacity:0'>" +
+            "<label class='hr-i' for='hr-x' style='display:inline-block;width:20px;height:20px;background:#09c'>i</label>" +
+            "<aside class='hr-panel'>How to read this chart, in several words.</aside></div></section>";
+        var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
+        Assert.Empty(findings); // the label click opens the panel: real change, no finding, no exception
+    }
+
+    [Fact]
+    public async Task ScrollableRegion_RealScrollIsNotAFunctionalFalsePositive()
     {
         var rows = string.Concat(Enumerable.Range(1, 40).Select(i => $"<div style='height:24px'>Row {i}</div>"));
         var html = $"<section class='card'><h3>Register</h3><div style='height:100px;overflow-y:auto'>{rows}</div></section>";
@@ -129,15 +171,6 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
         Assert.DoesNotContain(findings, f => f.Severity == TileFindingSeverity.Functional && f.Interaction.Contains("scroll"));
     }
 
-    // [ADDED 2026-10-08, FOUND LIVE] Real Motul reports produced 50+ "no visible change at all"
-    // findings across EVERY tile and interaction - confirmed via an out-of-band Playwright repro
-    // that the exact same click DOES open the panel correctly. Root cause: card.BoundingBoxAsync()
-    // returns VIEWPORT-relative coordinates, but it was compared against a FullPage screenshot,
-    // which is DOCUMENT-relative. Any card below the fold (or any element whose own click triggers
-    // Playwright's implicit scroll-into-view) gets an ownTileRegion pointing at the wrong part of
-    // the page, so the real visual change lands outside the checked rectangle every time. Every
-    // existing test above happens to use a page short enough that viewport == document, so none of
-    // them could have caught this - this one deliberately pushes the real card below the fold.
     [Fact]
     public async Task ToggleInsideACardBelowTheFold_AfterRealScroll_IsNotAFalsePositive()
     {
@@ -151,17 +184,6 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
         Assert.DoesNotContain(findings, f => f.Severity == TileFindingSeverity.Functional);
     }
 
-    // [ADDED 2026-10-08, FOUND LIVE] Real Motul Departments report produced 45 near-identical
-    // Functional findings across every tile. Root cause confirmed by instrumenting the real class
-    // against the real extracted report HTML: the per-card tagging query (`.hr-toggle, .hr-i, .pf,
-    // button, svg`) runs over the WHOLE card, which includes the decorative illustrative `<svg>`
-    // icons living INSIDE a card's own "How to read this chart" help panel (`.hr-panel`) - content
-    // that is explanatory prose, never meant to be independently interactive, and starts closed
-    // (visibility:hidden) besides. Those got tagged, hovered, and reported as broken toggles
-    // ("produced no visible change") purely because they are decorative icons with no handler -
-    // genuinely correct that nothing happened, but they were never real interactive elements. A
-    // real card's help panel can carry 10+ such icons, explaining the volume. Content inside
-    // `.hr-panel`/`.pf-panel` must never be tagged, whatever element type it is.
     [Fact]
     public async Task DecorativeContentInsideAHelpPanel_IsNeverTaggedAsInteractive()
     {
@@ -172,14 +194,75 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
             "<aside id='panel' class='hr-panel' style='visibility:hidden;opacity:0;position:fixed;background:#333;color:#fff;padding:10px;width:200px'>" +
             "<p>How to read this chart</p>" +
             "<svg width='30' height='30'><circle cx='15' cy='15' r='10' fill='red'/></svg>" +
-            "<svg width='30' height='30'><circle cx='15' cy='15' r='10' fill='blue'/></svg>" +
             "<button onclick=\"void(0)\">Decorative, not real</button>" +
             "</aside></div></section>";
         var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
-        // The real toggle legitimately opens its own panel - no finding for it. The decorative
-        // svgs/button inside the panel must never even be checked, so there must be no findings
-        // about them either - the whole card should come back clean.
         Assert.Empty(findings);
+    }
+
+    /// <summary>[ADDED 2026-10-09] Uncaught page errors are reported, not swallowed - the orchestrator
+    /// reverts a patch that introduces one.</summary>
+    [Fact]
+    public async Task UncaughtPageError_IsCaptured()
+    {
+        var html = "<section class='card'><h3>Timeline</h3></section><script>document.getElementById('timeline').firstChild;</script>";
+        var result = await CheckFull(html, new FakeGlitchReviewAgent(isBroken: false));
+        Assert.Contains(result.PageErrors, e => e.Contains("firstChild") || e.Contains("null"));
+    }
+
+    /// <summary>[ADDED 2026-10-09] OnlyCardOrdinals limits the pass to the named cards.</summary>
+    [Fact]
+    public async Task OnlyCardOrdinals_SkipsTheOtherCards()
+    {
+        var html = "<section class='card'><h3>First</h3><button onclick=\"void(0)\">dead</button></section>" +
+                   "<section class='card'><h3>Second</h3><button onclick=\"void(0)\">dead</button></section>";
+        var result = await CheckFull(html, new FakeGlitchReviewAgent(isBroken: false), new TileCheckRequest(OnlyCardOrdinals: [1]));
+        var finding = Assert.Single(result.Findings);
+        Assert.Equal(1, finding.CardOrdinal);
+        Assert.Equal("Second", finding.CardTitle);
+    }
+
+    /// <summary>[ADDED 2026-10-09] A card inserted by script has no static ordinal and is not tested.</summary>
+    [Fact]
+    public async Task ScriptInsertedCard_IsNotTested()
+    {
+        var html = "<section class='card'><h3>Static</h3></section>" +
+                   "<script>var s=document.createElement('section');s.className='card';s.innerHTML='<h3>Dynamic</h3><button onclick=\"void(0)\">dead</button>';document.body.appendChild(s);</script>";
+        var result = await CheckFull(html, new FakeGlitchReviewAgent(isBroken: false));
+        Assert.Empty(result.Findings);
+    }
+
+    /// <summary>[ADDED 2026-10-09] The pass budget returns partial results instead of running for an hour.</summary>
+    [Fact]
+    public async Task ExhaustedBudget_ReturnsTruncated_NotAnException()
+    {
+        var cards = string.Concat(Enumerable.Range(1, 30).Select(i =>
+            $"<section class='card'><h3>Card {i}</h3><button onclick=\"void(0)\">dead</button></section>"));
+        // BudgetSeconds is floored at 10 inside the checker; 30 cards x (2 screenshots + settle) comfortably exceeds it.
+        var result = await CheckFull(cards, new FakeGlitchReviewAgent(isBroken: false), new TileCheckRequest(BudgetSeconds: 1));
+        Assert.True(result.Truncated);
+        Assert.True(result.Findings.Count < 30);
+    }
+
+    /// <summary>[ADDED 2026-10-09] Lab mode writes screenshots for findings only, under a per-call folder.</summary>
+    [Fact]
+    public async Task LabScreenshotDirectory_WritesOnlyForFindings()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "insights-tile-qa-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var html = "<section class='card'><h3>Dead</h3><button onclick=\"void(0)\">dead</button></section>" +
+                       "<section class='card'><h3>Fine</h3><button onclick=\"this.textContent='clicked and grown a lot wider'\">ok</button></section>";
+            var result = await CheckFull(html, new FakeGlitchReviewAgent(isBroken: false), new TileCheckRequest(ScreenshotDirectory: dir));
+            var finding = Assert.Single(result.Findings);
+            Assert.True(File.Exists(finding.BeforeScreenshotPath));
+            Assert.True(File.Exists(finding.AfterScreenshotPath));
+            Assert.Equal(2, Directory.GetFiles(dir, "*.png", SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Fact]
@@ -189,9 +272,6 @@ public sealed class InteractiveTileCheckerTests : IAsyncLifetime
             "<script>setTimeout(() => document.getElementById('label').style.opacity = '1', 50);</script>" +
             "<button onclick=\"void(0)\">Refresh</button></section>";
         var findings = await Check(html, new FakeGlitchReviewAgent(isBroken: false));
-        // The one-time load animation (50ms) is long settled by the time FindIssuesAsync's own
-        // page-settle wait (NetworkIdle + fonts.ready + fixed delay) finishes, so it must never be
-        // reported as caused by the button click that follows.
         Assert.DoesNotContain(findings, f => f.CardTitle.Contains("Chart") && f.Severity == TileFindingSeverity.Cosmetic);
     }
 }

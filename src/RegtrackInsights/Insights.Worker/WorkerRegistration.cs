@@ -184,6 +184,11 @@ public static class WorkerRegistration
             sp.GetService<Insights.Presentation.ILayoutChecker>()));
         services.AddTransient<PlaywrightQaActivity>();
         services.AddTransient<VisionQaActivity>();
+        // [ADDED 2026-10-09] Kill switches + budgets for the tile-QA stage, section Presentation:TileQa.
+        // Code defaults are BOTH OFF (Enabled=false, PatchEnabled=false) - a host with no key never
+        // opens a page for this stage. Bound as IOptionsMonitor so a config change takes effect on
+        // the next activity execution, no restart. See TileQaOptions' own doc comment.
+        services.Configure<Insights.Presentation.TileQaOptions>(configuration.GetSection(Insights.Presentation.TileQaOptions.SectionName));
         services.AddTransient<InteractiveTileQaActivity>();
         services.AddTransient<PatchRenderActivity>();
         // [ADDED 2026-09-12, TEMPORARY] See PersistActivity's own doc comment - Reports:LocalFallbackDirectory
