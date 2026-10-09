@@ -53,6 +53,9 @@
   </ItemGroup>
   <ItemGroup Label="Presentation">
     <PackageVersion Include="HtmlSanitizer" Version="9.0.892" />
+    <!-- [ADDED 2026-10-09] Pinned to the exact version HtmlSanitizer 9.0.892 already pulls in transitively -
+         used directly by TileCards / PatchIntegrityGate / ScopedPatchSplicer. Do NOT move to 1.x independently. -->
+    <PackageVersion Include="AngleSharp" Version="0.17.1" />
   </ItemGroup>
   <ItemGroup Label="Host">
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />

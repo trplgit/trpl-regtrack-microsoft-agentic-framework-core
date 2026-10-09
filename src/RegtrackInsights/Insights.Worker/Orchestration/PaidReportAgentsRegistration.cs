@@ -311,9 +311,12 @@ public static class PaidReportAgentsRegistration
         // [ADDED 2026-10-07] Design spec Section 4's patch loop - report-type-agnostic (the same
         // plain endpoint/model/apiKey every non-freehand render call already uses, not
         // freehandEndpoint), so one registration covers every report type.
-        services.AddSingleton<IPatchRenderAgent>(sp => new MafPatchRenderAgent(MafAgentFactory.CreateTextAgent(
-            endpoint, model, apiKey, "PatchRenderAgent", "Fixes only the named real problem(s) in an already-rendered report, leaving everything else unchanged.",
-            LoadPromptSync(sp, "10_patch_render_defect.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+        // [CHANGED 2026-10-09] JSON agent + prompt v2: the call now receives ONLY the failing card(s)
+        // (ScopedPatchSplicer) and answers {cards:[{ordinal,html}], unfixable:[...]} - never the whole
+        // page. v1 (10_patch_render_defect.md, whole-document text contract) stays on disk, unreferenced.
+        services.AddSingleton<IPatchRenderAgent>(sp => new MafPatchRenderAgent(MafAgentFactory.CreateJsonAgent(
+            endpoint, model, apiKey, "PatchRenderAgent", "Fixes only the named real problem(s) inside the given report card(s), returning each fixed card as JSON.",
+            LoadPromptSync(sp, "10_patch_render_defect_v2.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
@@ -494,10 +497,12 @@ public static class PaidReportAgentsRegistration
 
         // [ADDED 2026-10-07] Screenshots saved to disk, not kept in memory/serialized through DTFx -
         // see InteractiveTileChecker's own doc comment on TileFinding's *Path fields.
+        // [CHANGED 2026-10-09] No screenshot directory here any more: nothing is written to disk
+        // unless Presentation:TileQa:ScreenshotDirectory is configured (lab only) - the activity
+        // passes it per call via TileCheckRequest.
         services.AddSingleton<IInteractiveTileChecker>(sp => new InteractiveTileChecker(
             sp.GetRequiredService<IBrowser>(),
             sp.GetRequiredService<ITileGlitchReviewAgent>(),
-            Path.Combine(Path.GetTempPath(), "insights-tile-qa"),
             sp.GetRequiredService<ILogger<InteractiveTileChecker>>()));
 
         return services;

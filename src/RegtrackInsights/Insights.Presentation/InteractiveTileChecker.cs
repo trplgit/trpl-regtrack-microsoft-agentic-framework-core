@@ -9,13 +9,12 @@ namespace Insights.Presentation;
 public enum TileFindingSeverity { Cosmetic, Functional }
 
 /// <summary>
-/// [ADDED 2026-10-07] One real problem InteractiveTileChecker found while exercising a report's
-/// interactive elements tile by tile. CardSelector/Interaction are stable enough to re-locate the
-/// same element after a patch (see docs/superpowers/specs/2026-10-07-interactive-tile-qa-design.md
-/// Section 1). Severity drives the orchestrator's patch-loop exhaustion behaviour (Section 4):
-/// Functional means the control itself did not appear to do anything when triggered (own tile
-/// showed no visible change); Cosmetic means triggering it visibly broke a DIFFERENT part of the
-/// page (cross-tile bleed), confirmed by a real vision-model review of the before/after crop.
+/// One defect found by real browser interaction with one card.
+/// [CHANGED 2026-10-09] <paramref name="CardOrdinal"/> / <paramref name="ElementKind"/> are trailing
+/// optional: the ordinal is the card's static position (TileCards) so the scoped patcher can find
+/// it in the stored HTML; findings recorded before this field existed carry null and fall back to
+/// the legacy index in <paramref name="CardSelector"/>. The screenshot paths are empty in prod
+/// (nothing is written unless TileQaOptions.ScreenshotDirectory is set) and kept for compatibility.
 /// </summary>
 public sealed record TileFinding(
     string CardSelector,
@@ -24,140 +23,224 @@ public sealed record TileFinding(
     TileFindingSeverity Severity,
     string TechnicalDescription,
     string BeforeScreenshotPath,
-    string AfterScreenshotPath);
+    string AfterScreenshotPath,
+    int? CardOrdinal = null,
+    string? ElementKind = null);
+
+/// <summary>Per-pass knobs - a snapshot of TileQaOptions plus the optional re-verify scope.</summary>
+public sealed record TileCheckRequest(
+    IReadOnlyList<int>? OnlyCardOrdinals = null,
+    int BudgetSeconds = 180,
+    int PerElementSeconds = 20,
+    int MaxGlitchReviews = 4,
+    int MaxCards = 40,
+    string? ScreenshotDirectory = null);
+
+/// <summary>
+/// <paramref name="PageErrors"/>: uncaught page errors raised while loading and exercising the page
+/// (a patch that introduces one is reverted by the orchestrator). <paramref name="Truncated"/>:
+/// the overall budget ran out and the findings are partial.
+/// </summary>
+public sealed record TileCheckResult(
+    IReadOnlyList<TileFinding> Findings,
+    long TotalTokens,
+    IReadOnlyList<string> PageErrors,
+    bool Truncated);
 
 public interface IInteractiveTileChecker
 {
-    Task<IReadOnlyList<TileFinding>> FindIssuesAsync(string html, CancellationToken cancellationToken = default);
+    Task<TileCheckResult> FindIssuesAsync(string html, TileCheckRequest request, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Interactive tile QA: exercises a sample of interactive elements in each card of a rendered
+/// report in real Chromium and reports what did not behave.
+///
+/// [REWORKED 2026-10-09, FOUND LIVE] The first version (2026-10-07) tested EVERY svg, button,
+/// toggle and scrollable element in every card, with two full-page screenshots each and no
+/// Playwright timeout; on a real Act report (thousands of chart marks) one pass took 57 minutes,
+/// and a hover on a mark with no tooltip was reported as a Functional defect that no patch could
+/// ever fix - so no run ever converged. Now:
+///  - at most ONE element per kind per card (toggle, button, scroll, svg), only visible ones,
+///    never the hidden 1x1 input behind a toggle, only scrollables that actually overflow, only
+///    svg marks that carry a title or sit in a card with a tooltip element;
+///  - an svg hover that changes nothing is NOT a finding (native title tooltips never appear in
+///    screenshots); Functional findings come only from toggles and buttons;
+///  - 3 s Playwright default timeout, a per-element budget and an overall pass budget on a real
+///    CancellationToken threaded into Playwright and the vision call; partial results come back
+///    with Truncated = true rather than hanging a pod for an hour;
+///  - screenshots stay full-page (a position:fixed help panel opens far from its card in document
+///    coordinates, so a clip around the card produced false "does nothing" findings) but are
+///    decoded once and compared over pixel spans, and there are far fewer of them;
+///  - cards are keyed by static ordinal + heading fingerprint (TileCards) so a finding can be
+///    located in the stored HTML without the browser; cards built by scripts do not match and are
+///    not tested;
+///  - nothing is written to disk unless a lab screenshot directory is configured;
+///  - uncaught page errors are collected and returned.
+/// </summary>
 public sealed class InteractiveTileChecker(
-    IBrowser browser, ITileGlitchReviewAgent glitchReviewAgent, string screenshotDirectory, ILogger<InteractiveTileChecker> logger)
+    IBrowser browser, ITileGlitchReviewAgent glitchReviewAgent, ILogger<InteractiveTileChecker> logger)
     : IInteractiveTileChecker
 {
     public const int ViewportWidth = 1280;
     private const int SettleMs = 400;
     private const int TileMargin = 24;
+    private const int DefaultActionTimeoutMs = 3000;
     // [CALIBRATED LIVE] A real one-line text reveal inside a 1240px-wide card measured a 0.3%
-    // own-tile change ratio (most of a wide card stays visually empty even when it does something
-    // real) - 0.01 (1%) missed it. Set below that real measurement with margin, still comfortably
-    // above pure floating/anti-aliasing noise (measured ~0.0 on a genuinely inert control).
+    // own-tile change ratio - 0.01 (1%) missed it. Set below that with margin, above anti-aliasing noise.
     private const double OwnTileChangeThreshold = 0.001;
     private const int CrossTileBlockSize = 40;
-    // [CALIBRATED LIVE] A real cross-tile text-colour change (black -> blue heading) measured
-    // 2.875% of its own 40x40 block - most of a text glyph's bounding block is still background.
-    // 0.15 (15%) missed it entirely. Set with margin below that real measurement.
+    // [CALIBRATED LIVE] A real cross-tile heading colour change measured 2.875% of its 40x40 block.
     private const double CrossTileBlockThreshold = 0.01;
     private const int CropMargin = 16;
 
-    public async Task<IReadOnlyList<TileFinding>> FindIssuesAsync(string html, CancellationToken cancellationToken = default)
+    private const string TagSampleElementsJs =
+        """
+        (sel) => {
+          const card = document.querySelector(sel);
+          if (!card) return 0;
+          const inPanel = el => el.closest('.hr-panel, .pf-panel') !== null;
+          const visible = el => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width >= 4 && r.height >= 4 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+          };
+          const pick = list => Array.from(list).find(el => !inPanel(el) && visible(el));
+          const chosen = [];
+          const toggle = pick(Array.from(card.querySelectorAll('.hr-i, .pf, label.hr-toggle, button.hr-toggle')).filter(el => el.tagName !== 'INPUT'));
+          if (toggle) chosen.push(['toggle', toggle]);
+          const button = pick(Array.from(card.querySelectorAll('button:not([disabled])')).filter(el => !el.classList.contains('hr-toggle') && !el.classList.contains('hr-i') && !el.classList.contains('pf')));
+          if (button) chosen.push(['button', button]);
+          const scroll = pick(Array.from(card.querySelectorAll('*')).filter(el => {
+            const s = getComputedStyle(el);
+            return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 4;
+          }));
+          if (scroll) chosen.push(['scroll', scroll]);
+          const hasTip = card.querySelector('.tip, [role="tooltip"]') !== null;
+          const svg = pick(Array.from(card.querySelectorAll('svg')).filter(el => hasTip || el.querySelector('title') !== null));
+          if (svg) chosen.push(['svg', svg]);
+          chosen.forEach(([kind, el], i) => { el.setAttribute('data-tile-qa-el', String(i)); el.setAttribute('data-tile-qa-kind', kind); });
+          return chosen.length;
+        }
+        """;
+
+    public async Task<TileCheckResult> FindIssuesAsync(string html, TileCheckRequest request, CancellationToken cancellationToken = default)
     {
         var findings = new List<TileFinding>();
+        var pageErrors = new List<string>();
+        var truncated = false;
+        var totalTokens = 0L;
+        var glitchReviews = 0;
+
+        CleanLabScreenshots(request.ScreenshotDirectory);
+        var callDirectory = request.ScreenshotDirectory is null ? null : Path.Combine(request.ScreenshotDirectory, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8]);
+
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, request.BudgetSeconds)));
+        var ct = budget.Token;
+
         var page = await browser.NewPageAsync(new BrowserNewPageOptions { ViewportSize = new ViewportSize { Width = ViewportWidth, Height = 900 } });
+        page.SetDefaultTimeout(DefaultActionTimeoutMs);
+        page.PageError += (_, e) => { lock (pageErrors) pageErrors.Add(e); };
         try
         {
-            await page.SetContentAsync(html, new PageSetContentOptions { WaitUntil = WaitUntilState.NetworkIdle });
+            await page.SetContentAsync(html, new PageSetContentOptions { WaitUntil = WaitUntilState.Load, Timeout = 30_000 });
             await page.EvaluateAsync("() => document.fonts ? document.fonts.ready : null");
             await page.WaitForTimeoutAsync(SettleMs);
 
-            // Stable per-run selectors, independent of DOM structure/nth-of-type ambiguity.
-            await page.EvaluateAsync("() => document.querySelectorAll('section.card').forEach((el, i) => el.setAttribute('data-tile-qa-index', String(i)))");
+            // Static ordinals (what the patcher can find later) matched to browser cards in order.
+            var staticCards = TileCards.Fingerprints(html);
+            var browserFingerprints = await page.EvaluateAsync<string[]>(
+                $"() => Array.from(document.querySelectorAll('{TileCards.CardSelector}')).map({TileCards.JsFingerprint})") ?? [];
+            await page.EvaluateAsync($"() => document.querySelectorAll('{TileCards.CardSelector}').forEach((el, i) => el.setAttribute('data-tile-qa-index', String(i)))");
 
-            var cardCount = await page.EvalOnSelectorAllAsync<int>("section.card", "els => els.length");
-            for (var cardIndex = 0; cardIndex < cardCount; cardIndex++)
+            var matches = MatchInOrder(staticCards, browserFingerprints);
+            var only = request.OnlyCardOrdinals is null ? null : new HashSet<int>(request.OnlyCardOrdinals);
+            var examined = 0;
+
+            foreach (var (ordinal, browserIndex, fingerprint) in matches)
             {
-                var cardSelector = $"section.card[data-tile-qa-index=\"{cardIndex}\"]";
+                ct.ThrowIfCancellationRequested();
+                if (only is not null && !only.Contains(ordinal)) continue;
+                if (examined++ >= Math.Max(1, request.MaxCards)) break;
+
+                var cardSelector = $"{TileCards.CardSelector}[data-tile-qa-index=\"{browserIndex}\"]";
                 var card = await page.QuerySelectorAsync(cardSelector);
                 if (card is null) continue;
-
-                var cardTitle = await card.EvaluateAsync<string>(
-                    "el => (el.querySelector('h1,h2,h3,h4,.card-title')?.textContent || el.textContent || '').trim().slice(0,80)");
                 await card.ScrollIntoViewIfNeededAsync();
-                var box = await card.BoundingBoxAsync();
-                if (box is null) continue;
-                var ownTileRegion = Rectangle.Inflate(new Rectangle((int)box.X, (int)box.Y, (int)box.Width, (int)box.Height), TileMargin, TileMargin);
+                // DOCUMENT coordinates, to match the full-page screenshots below. BoundingBoxAsync is
+                // viewport-relative and was the 2026-10-08 below-the-fold false-positive bug.
+                var rect = await card.EvaluateAsync<double[]>("el => { const r = el.getBoundingClientRect(); return [r.x + window.scrollX, r.y + window.scrollY, r.width, r.height]; }");
+                if (rect is not { Length: 4 }) continue;
+                var cardBox = new Rectangle((int)rect[0], (int)rect[1], (int)rect[2], (int)rect[3]);
 
-                // Tags every element this checker treats as "interactive": the four explicit
-                // selectors from the design spec's Section 2 table, PLUS any element whose
-                // COMPUTED overflow-y is auto/scroll (a scrollable register/list) - that last one
-                // cannot be expressed as a plain CSS selector, so it needs its own JS-side filter
-                // pass rather than being folded into the querySelectorAll string above.
-                //
-                // [FOUND LIVE 2026-10-08] A card's own "How to read this chart" help panel
-                // (.hr-panel/.pf-panel) is explanatory prose - it commonly carries 10+ purely
-                // illustrative <svg> icons with no handler of their own, and starts closed
-                // (visibility:hidden). The selector above runs over the WHOLE card, so it swept
-                // these up too, hovered them, and correctly observed "nothing happened" - true, but
-                // they were never real interactive elements. A real Motul Departments report
-                // produced 45 near-identical false "broken toggle" findings this way. Content
-                // nested inside .hr-panel/.pf-panel must never be tagged, whatever element type it
-                // is - the real triggers (.hr-toggle/.hr-i/.pf) always sit as SIBLINGS before the
-                // panel, never inside it, so this exclusion can never hide a genuine trigger.
-                await page.EvaluateAsync(
-                    """
-                    (sel) => {
-                      const card = document.querySelector(sel);
-                      if (!card) return;
-                      const inExplanatoryPanel = el => el.closest('.hr-panel, .pf-panel') !== null;
-                      const matches = new Set(
-                        Array.from(card.querySelectorAll('.hr-toggle, .hr-i, .pf, button, svg')).filter(el => !inExplanatoryPanel(el))
-                      );
-                      card.querySelectorAll('*').forEach(el => {
-                        if (inExplanatoryPanel(el)) return;
-                        const s = getComputedStyle(el);
-                        if (s.overflowY === 'auto' || s.overflowY === 'scroll') matches.add(el);
-                      });
-                      let i = 0;
-                      matches.forEach(el => el.setAttribute('data-tile-qa-el', String(i++)));
-                    }
-                    """,
-                    cardSelector);
-
-                var elementCount = await page.EvalOnSelectorAllAsync<int>($"{cardSelector} [data-tile-qa-el]", "els => els.length");
+                var elementCount = await page.EvaluateAsync<int>(TagSampleElementsJs, cardSelector);
                 for (var elIndex = 0; elIndex < elementCount; elIndex++)
                 {
+                    ct.ThrowIfCancellationRequested();
                     var elSelector = $"{cardSelector} [data-tile-qa-el=\"{elIndex}\"]";
+                    using var perElement = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    perElement.CancelAfter(TimeSpan.FromSeconds(Math.Max(5, request.PerElementSeconds)));
                     try
                     {
-                        var finding = await CheckOneElementAsync(page, cardSelector, cardTitle, elSelector, ownTileRegion, cancellationToken);
+                        var canReview = glitchReviews < request.MaxGlitchReviews;
+                        var (finding, tokens, reviewed) = await CheckOneElementAsync(
+                            page, cardSelector, ordinal, fingerprint, elSelector, cardBox, canReview, callDirectory, perElement.Token);
+                        totalTokens += tokens;
+                        if (reviewed) glitchReviews++;
                         if (finding is not null) findings.Add(finding);
                     }
-                    catch (Exception ex)
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                     {
-                        // Fails soft (design spec Section 1, closing paragraph): tooling flakiness on
-                        // one element never aborts the whole report's QA pass.
+                        logger.LogWarning("InteractiveTileChecker: element {Selector} exceeded its {Seconds}s budget - skipped.", elSelector, request.PerElementSeconds);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // Fails soft (design spec Section 1): tooling flakiness on one element never aborts the pass.
                         logger.LogWarning(ex, "InteractiveTileChecker: skipped element {Selector} after an error.", elSelector);
                     }
                 }
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            truncated = true;
+            logger.LogWarning("InteractiveTileChecker: pass budget of {Seconds}s exhausted - returning {Count} partial finding(s).", request.BudgetSeconds, findings.Count);
+        }
         finally
         {
-            await page.CloseAsync();
+            try { await page.CloseAsync(); } catch { /* closing a page that already died is not worth a response */ }
         }
-        return findings;
+
+        List<string> errorsSnapshot;
+        lock (pageErrors) errorsSnapshot = pageErrors.Distinct(StringComparer.Ordinal).ToList();
+        return new TileCheckResult(findings, totalTokens, errorsSnapshot, truncated);
     }
 
-    private async Task<TileFinding?> CheckOneElementAsync(
-        IPage page, string cardSelector, string cardTitle, string elSelector, Rectangle ownTileRegion, CancellationToken cancellationToken)
+    /// <summary>Walks both lists in order; a static card whose fingerprint never appears next in the browser list is skipped.</summary>
+    internal static List<(int Ordinal, int BrowserIndex, string Fingerprint)> MatchInOrder(
+        IReadOnlyList<(int Ordinal, string Fingerprint)> staticCards, string[] browserFingerprints)
+    {
+        var result = new List<(int, int, string)>();
+        var j = 0;
+        foreach (var (ordinal, fingerprint) in staticCards)
+        {
+            var k = j;
+            while (k < browserFingerprints.Length && browserFingerprints[k] != fingerprint) k++;
+            if (k >= browserFingerprints.Length) continue;
+            result.Add((ordinal, k, fingerprint));
+            j = k + 1;
+        }
+        return result;
+    }
+
+    private async Task<(TileFinding? Finding, long Tokens, bool Reviewed)> CheckOneElementAsync(
+        IPage page, string cardSelector, int ordinal, string cardTitle, string elSelector, Rectangle cardBox,
+        bool canReview, string? callDirectory, CancellationToken cancellationToken)
     {
         var element = await page.QuerySelectorAsync(elSelector);
-        if (element is null) return null;
-
-        // Class check FIRST: a <button class="hr-toggle"> must classify as 'toggle' (so it gets
-        // the Escape-key reset below), not 'button' (which has none) - tagName alone would pick
-        // 'button' and leave a real toggle open for every element checked after it.
-        //
-        // [FOUND LIVE 2026-10-08] `el.tagName === 'SVG'` never matches a real SVG element - SVG
-        // (XML-namespaced) elements report their tagName in source case, lowercase 'svg', not
-        // uppercased the way HTML elements are. Every genuine data-mark <svg> fell through to the
-        // 'toggle' default, got hovered AND clicked instead of hover-only, and (outside this test's
-        // own panel-exclusion fix) could still misreport a real hover-only chart mark as a broken
-        // toggle. Compare case-insensitively.
-        var kind = await element.EvaluateAsync<string>(
-            "el => (el.classList.contains('hr-toggle') || el.classList.contains('hr-i') || el.classList.contains('pf')) ? 'toggle' : " +
-            "el.tagName.toLowerCase() === 'svg' ? 'svg' : el.tagName === 'BUTTON' ? 'button' : " +
-            "(getComputedStyle(el).overflowY === 'auto' || getComputedStyle(el).overflowY === 'scroll') ? 'scroll' : 'toggle'");
+        if (element is null) return (null, 0, false);
+        var kind = await element.GetAttributeAsync("data-tile-qa-kind") ?? "toggle";
         var interaction = kind switch
         {
             "svg" => "hover on chart mark",
@@ -166,8 +249,15 @@ public sealed class InteractiveTileChecker(
             _ => "hover/click on toggle",
         };
 
-        var before = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
+        // Full-page captures, deliberately NOT clipped to the card: a help panel that opens as a
+        // position:fixed element lands wherever the viewport is, often far from its card in document
+        // coordinates, and a clip around the card turned every such real reveal into a false
+        // "control does nothing" finding (caught by the below-the-fold integration test). With one
+        // element per kind per card the capture count is already small; the decode/compare is span-based.
+        var ownTileRegion = Rectangle.Inflate(cardBox, TileMargin, TileMargin);
 
+        var before = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
+        cancellationToken.ThrowIfCancellationRequested();
         switch (kind)
         {
             case "svg":
@@ -184,67 +274,67 @@ public sealed class InteractiveTileChecker(
         }
         await page.WaitForTimeoutAsync(SettleMs);
         var after = await page.ScreenshotAsync(new PageScreenshotOptions { FullPage = true });
-
         try
         {
-            return await ClassifyAsync(cardSelector, cardTitle, interaction, before, after, ownTileRegion, cancellationToken);
+            return await ClassifyAsync(cardSelector, ordinal, cardTitle, kind, interaction, before, after, ownTileRegion, canReview, callDirectory, cancellationToken);
         }
         finally
         {
-            switch (kind)
+            try
             {
-                case "svg":
-                    await page.Mouse.MoveAsync(0, 0);
-                    break;
-                case "toggle":
-                    await page.Keyboard.PressAsync("Escape");
-                    break;
-                case "scroll":
-                    await element.EvaluateAsync("el => el.scrollTop = 0");
-                    break;
-                // "button": no reset defined by the design spec's selector table - a plain button
-                // click has no standard undo.
+                switch (kind)
+                {
+                    case "toggle":
+                        await page.Keyboard.PressAsync("Escape");
+                        break;
+                    case "scroll":
+                        await element.EvaluateAsync("el => el.scrollTop = 0");
+                        break;
+                }
+                await page.Mouse.MoveAsync(0, 0);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogDebug(ex, "InteractiveTileChecker: reset after {Selector} failed.", elSelector);
             }
         }
     }
 
-    private async Task<TileFinding?> ClassifyAsync(
-        string cardSelector, string cardTitle, string interaction, byte[] before, byte[] after, Rectangle ownTileRegion, CancellationToken cancellationToken)
+    private async Task<(TileFinding? Finding, long Tokens, bool Reviewed)> ClassifyAsync(
+        string cardSelector, int ordinal, string cardTitle, string kind, string interaction, byte[] before, byte[] after,
+        Rectangle ownTileRegion, bool canReview, string? callDirectory, CancellationToken cancellationToken)
     {
         var ownTileChange = PixelDiff.RegionChangeRatio(before, after, ownTileRegion);
-        var beforePath = SaveScreenshot(before);
-        var afterPath = SaveScreenshot(after);
-
-        // [FOUND LIVE] Always check for a cross-tile change BEFORE deciding "nothing happened" -
-        // a real own-card reveal inside a wide card can legitimately stay under OwnTileChangeThreshold
-        // (a one-line text reveal inside a 1240px-wide card measured 0.3% of the card's own region,
-        // confirmed live), so this alone is not reliable evidence nothing happened. More importantly:
-        // if the trigger's own tile shows no change but something ELSE on the page visibly changed,
-        // that is proof the interaction DID do something - just not where expected - which is a
-        // cross-tile bleed (Cosmetic), not "the control does nothing" (Functional). Only when NEITHER
-        // the own tile NOR anything else changed is this truly inert.
         var flagged = PixelDiff.FindChangedBlocksOutside(before, after, ownTileRegion, CrossTileBlockSize, CrossTileBlockThreshold);
 
         if (ownTileChange < OwnTileChangeThreshold && flagged.Count == 0)
         {
-            return new TileFinding(
+            // A hover on a chart mark with no visible tooltip is NOT a defect (native <title>
+            // tooltips never appear in screenshots) - only a toggle/button that does nothing is.
+            if (kind is "svg" or "scroll") return (null, 0, false);
+            var (b1, a1) = SaveForFinding(before, after, callDirectory);
+            return (new TileFinding(
                 cardSelector, cardTitle, interaction, TileFindingSeverity.Functional,
                 $"Triggering \"{interaction}\" on \"{cardTitle}\" produced no visible change at all - the control does not appear to do anything.",
-                beforePath, afterPath);
+                b1, a1, ordinal, kind), 0, false);
         }
-
-        if (flagged.Count == 0) return null;
+        if (flagged.Count == 0) return (null, 0, false);
+        if (!canReview)
+        {
+            logger.LogInformation("InteractiveTileChecker: cross-tile change on card {Ordinal} not reviewed - glitch-review cap reached.", ordinal);
+            return (null, 0, false);
+        }
 
         var region = Rectangle.Inflate(flagged[0], CropMargin, CropMargin);
         var beforeCrop = CropPng(before, region);
         var afterCrop = CropPng(after, region);
         var review = await glitchReviewAgent.ReviewAsync(beforeCrop, afterCrop, cancellationToken);
-        if (!review.Value.IsBroken) return null;
-
-        return new TileFinding(
+        if (!review.Value.IsBroken) return (null, review.TotalTokens, true);
+        var (b2, a2) = SaveForFinding(before, after, callDirectory);
+        return (new TileFinding(
             cardSelector, cardTitle, interaction, TileFindingSeverity.Cosmetic,
             review.Value.Explanation ?? $"Triggering \"{interaction}\" on \"{cardTitle}\" visibly changed an unrelated part of the page.",
-            beforePath, afterPath);
+            b2, a2, ordinal, kind), review.TotalTokens, true);
     }
 
     private static byte[] CropPng(byte[] png, Rectangle region)
@@ -263,11 +353,40 @@ public sealed class InteractiveTileChecker(
         return data.ToArray();
     }
 
-    private string SaveScreenshot(byte[] png)
+    private (string Before, string After) SaveForFinding(byte[] before, byte[] after, string? callDirectory)
     {
-        Directory.CreateDirectory(screenshotDirectory);
-        var path = Path.Combine(screenshotDirectory, $"{Guid.NewGuid()}.png");
-        File.WriteAllBytes(path, png);
-        return path;
+        if (callDirectory is null) return (string.Empty, string.Empty);
+        try
+        {
+            Directory.CreateDirectory(callDirectory);
+            var stem = Guid.NewGuid().ToString("N")[..12];
+            var b = Path.Combine(callDirectory, stem + "-before.png");
+            var a = Path.Combine(callDirectory, stem + "-after.png");
+            File.WriteAllBytes(b, before);
+            File.WriteAllBytes(a, after);
+            return (b, a);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "InteractiveTileChecker: could not write lab screenshots.");
+            return (string.Empty, string.Empty);
+        }
+    }
+
+    private void CleanLabScreenshots(string? directory)
+    {
+        if (directory is null || !Directory.Exists(directory)) return;
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddHours(-24);
+            foreach (var sub in Directory.EnumerateDirectories(directory))
+                if (Directory.GetLastWriteTimeUtc(sub) < cutoff) Directory.Delete(sub, recursive: true);
+            foreach (var file in Directory.EnumerateFiles(directory))
+                if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "InteractiveTileChecker: lab screenshot cleanup failed.");
+        }
     }
 }
