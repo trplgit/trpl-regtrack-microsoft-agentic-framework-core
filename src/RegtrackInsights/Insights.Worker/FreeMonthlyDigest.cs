@@ -40,11 +40,12 @@ public sealed class FreeMonthlySettings
     /// to the deterministic body; above 1, a rejected draft is handed its own failure list and
     /// rewritten, and each attempt is a billed call.
     ///
-    /// <para>1 is deliberate: [MEASURED 2026-09-21] the repair pass now fixes the style failures
-    /// that used to cause rejections, so a second attempt would double the spend to rescue a draft
-    /// that is already being rescued deterministically.</para>
+    /// <para>[CHANGED 2026-10-07: 1 -> 2] The validator now also rejects figures with the wrong
+    /// MEANING (licence pattern-vs-holding counts, a recent lapse tied to the expired total), which
+    /// no repair can fix - only a rewrite told what was wrong can. The second call is billed ONLY
+    /// when the first draft is rejected; an accepted draft still costs one call.</para>
     /// </summary>
-    public int MaxDraftAttempts { get; init; } = 1;
+    public int MaxDraftAttempts { get; init; } = 2;
 
     public int TokenCapFor(MonthlyDigestSlot slot) => TokenCaps[slot];
 
@@ -134,9 +135,15 @@ public sealed class FreeMonthlyDigestComposer(
     /// Same as <see cref="ComposeAsync"/>, plus what the model was given and what it wrote - for
     /// FreeMonthlyPreviewWorker, where tuning a prompt means reading exactly that.
     /// </summary>
+    /// <param name="clampToEditionSunday">
+    /// true (the pipeline, always): the as-at is capped at the edition's own Sunday, as the scheduler
+    /// would have seen it. false (preview AsOfToday only): capped at the edition's month end instead,
+    /// so every slot of the current month reports as at the same day and can be reconciled against
+    /// the Detailed Report exported that day. The edition itself is untouched either way.
+    /// </param>
     public async Task<MonthlyComposeDiagnostics> ComposeWithDiagnosticsAsync(
         int tenantId, int representativeUserId, MonthlyDigestEdition edition, string? asOfOverride,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool clampToEditionSunday = true)
     {
         // LangFuse (Insights Basic): every model call below is traced under this tenant's week.
         using var _ = FreeDigestTelemetry.Push(new FreeDigestTraceContext(
@@ -148,7 +155,8 @@ public sealed class FreeMonthlyDigestComposer(
         var localNow = string.IsNullOrWhiteSpace(asOfOverride)
             ? TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, digestSettings.ScheduleTimeZone)
             : DateTime.Parse(asOfOverride, CultureInfo.InvariantCulture);
-        var asOf = MonthlyDigestCalendar.AsOfWithinMonth(localNow, edition);
+        // AsOfWithinMonth reads only Sunday / CurrMonthStart / CurrMonthEnd, so the widened copy is never used for anything else.
+        var asOf = MonthlyDigestCalendar.AsOfWithinMonth(localNow, clampToEditionSunday ? edition : edition with { Sunday = edition.CurrMonthEnd });
 
         var data = await repository.GetSlotAsync(edition, tenantId, representativeUserId, asOf, monthlySettings.AllowPersonNames, cancellationToken);
 
@@ -208,7 +216,10 @@ public sealed class FreeMonthlyDigestComposer(
             if (validation.IsValid)
             {
                 // The validated text is what the reader gets.
-                var body = FreeMonthlyPlaceholderBinder.Bind(prepared.Body, prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition);
+                // [2026-10-07] Reader wording ("compliance", never "obligation") - applied after every check.
+                // [2026-10-08] Then a sentence that only repeats the one before it is dropped.
+                var body = FreeTierReaderTerms.WithoutRepeatedFigures(
+                    FreeTierReaderTerms.Apply(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(prepared.Body, prompt), prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition)));
 
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body accepted on attempt {Attempt}. Tokens: {InputTokens} in / {OutputTokens} out.",
@@ -255,7 +266,7 @@ public sealed class FreeMonthlyDigestComposer(
         }
 
         return new MonthlyComposeDiagnostics(
-            new ComposeDigestOutput(fallback.Body, "Fallback", reason, inputTokens, outputTokens),
+            new ComposeDigestOutput(FreeTierReaderTerms.Apply(fallback.Body), "Fallback", reason, inputTokens, outputTokens),
             prompt.Data, prompt.UserMessage, rawDraft, fallback.UsedFloor);
     }
 }

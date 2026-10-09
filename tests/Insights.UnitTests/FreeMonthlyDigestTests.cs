@@ -719,7 +719,7 @@ public sealed class FreeMonthlyDigestValidatorTests
             "Good morning,\n\nAcross your organisation, 18 of the 24 locations with overdue work hold obligations that have been overdue for more than 90 days, including {{EG_1}} and {{EG_2}}, and none of that work has been closed as at {{AS_AT}}.",
             prompt);
 
-        Assert.Contains(result.FailedChecks, f => f.Contains("names none of the"));
+        Assert.Contains(result.FailedChecks, f => f.Contains("names 0 of 2 findings"));
         Assert.DoesNotContain(result.FailedChecks, f => f.Contains("{{EG_1}}"));
         Assert.Contains(result.Advisories, a => a.Contains("uses 2 of 3 examples") && a.Contains("{{EG_3}}"));
     }
@@ -801,14 +801,15 @@ public sealed class FreeMonthlyDigestValidatorTests
         Assert.DoesNotContain("rests with named individuals", withMonth.Body, StringComparison.Ordinal);
     }
 
-    /// <summary>In a sentence that opens with a number word, a small bare digit becomes a word too: "Three of the 8" reads as a misprint.</summary>
+    /// <summary>[CHANGED 2026-10-07, product owner] Every figure is digits, even a sentence's first word: "Three of the 8" becomes "3 of the 8", never "Three of the eight".</summary>
     [Fact]
-    public void SpellsASmallDigitInASentenceThatOpensWithANumberWord()
+    public void ConvertsASentenceOpeningNumberWordToDigits()
     {
         var repaired = FreeMonthlyDraftRepair.Apply(
             "Good morning,\n\nAcross your organisation, 27 of the 62 locations are above the average. Three of the 8 compliance categories are above it too, with 619 of 1,556 obligations overdue in the largest, and 12% is the rate.");
 
-        Assert.Contains("Three of the eight compliance categories", repaired.Body, StringComparison.Ordinal);
+        Assert.Contains("3 of the 8 compliance categories", repaired.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("eight", repaired.Body, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("619 of 1,556", repaired.Body, StringComparison.Ordinal);
         Assert.Contains("12% is the rate", repaired.Body, StringComparison.Ordinal);
         Assert.Contains("27 of the 62 locations", repaired.Body, StringComparison.Ordinal);
@@ -869,25 +870,135 @@ public sealed class FreeMonthlyDigestValidatorTests
         Assert.Contains("No licences are tracked", repaired.Body, StringComparison.Ordinal);
     }
 
-    /// <summary>[FOUND LIVE on PROD tenant 1008, 2026-09-23] A sentence never opens with a digit: the opening word stays spelled, and the validator checks it by value.</summary>
+    /// <summary>
+    /// [CHANGED 2026-10-07, product owner] A sentence-opening number word is converted like any other
+    /// (was: kept spelled, 2026-09-23), and the validator no longer exempts it - a number word that
+    /// survives the repair is a failure. "one person" is the pronoun-like idiom and stays a word.
+    /// </summary>
     [Fact]
-    public void KeepsASentenceOpeningNumberWord_AndTheValidatorChecksItsValue()
+    public void ConvertsEveryNumberWord_AndTheValidatorExemptsNone()
     {
         var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.Location());   // loc_single_performer = 3 is in the closed set
         var repaired = FreeMonthlyDraftRepair.Apply(
             "Good morning,\n\nAt your {{NAME_1}} site, 13 of the 48 obligations that fell due in {{PREV_MONTH}} remain open. Three locations depend on one person for all their open work, and 4 of them hold most of it.",
             prompt);
 
-        Assert.Contains("Three locations depend", repaired.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain(FreeMonthlyDigestValidator.Validate(repaired.Body, prompt).FailedChecks, f => f.Contains("Three"));
+        Assert.Contains("3 locations depend on one person", repaired.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain(FreeMonthlyDigestValidator.Validate(repaired.Body, prompt).FailedChecks, f => f.Contains("spells the number"));
 
-        // "Three of the four locations" keeps BOTH words - "Three of the 4" is worse than either - and checks both by value.
         var mixed = FreeMonthlyDraftRepair.Apply("Good morning,\n\nAt your {{NAME_1}} site, 13 of the 48 obligations that fell due in {{PREV_MONTH}} remain open. Three of the fifteen locations with overdue work depend on one person for all of it.", prompt);
-        Assert.Contains("Three of the fifteen locations", mixed.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain(FreeMonthlyDigestValidator.Validate(mixed.Body, prompt).FailedChecks, f => f.Contains("spells the number"));
+        Assert.Contains("3 of the 15 locations", mixed.Body, StringComparison.Ordinal);
 
-        var rejected = FreeMonthlyDigestValidator.Validate("Good morning,\n\nAt your {{NAME_1}} site, 13 of the 48 obligations that fell due in {{PREV_MONTH}} remain open. Seventeen locations depend on one person for all their open work today.", prompt);
-        Assert.Contains(rejected.FailedChecks, f => f.Contains("Seventeen"));
+        // The validator alone (no repair) rejects a sentence-opening number word - no exemption any more.
+        var rejected = FreeMonthlyDigestValidator.Validate("Good morning,\n\nAt your {{NAME_1}} site, 13 of the 48 obligations that fell due in {{PREV_MONTH}} remain open. Three locations depend on one person for all their open work today.", prompt);
+        Assert.Contains(rejected.FailedChecks, f => f.Contains("Three"));
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-07] Real figures with the wrong meaning: the pattern
+    /// count (16) stated as the locations holding an expired licence (18), and a July lapse that is
+    /// renewing tied to the 19 unrenewed with "Of these". Both reject; the correct wordings pass.
+    /// </summary>
+    [Fact]
+    public void LicenceFiguresMustKeepTheirMeaning()
+    {
+        var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.LicenceMinda());
+        const string lead = "Good morning,\n\nAs at {{AS_AT}}, 19 licences are currently expired across your organisation, and all 19 have no renewal in progress. ";
+
+        var wrongPattern = FreeMonthlyDigestValidator.Validate(lead + "Across your organisation, 16 of 64 locations have licences currently expired with no renewal in progress.", prompt);
+        Assert.Contains(wrongPattern.FailedChecks, f => f.Contains("a comparison this email never states", StringComparison.Ordinal));
+
+        // [2026-10-08, owner] The comparison itself is never stated either, however it is worded.
+        var statedComparison = FreeMonthlyDigestValidator.Validate(lead + "18 locations hold at least 1 such licence, and 16 of the 64 locations have an unusually high share of licences expired with no renewal.", prompt);
+        Assert.Contains(statedComparison.FailedChecks, f => f.Contains("a comparison this email never states", StringComparison.Ordinal));
+
+        var rightPattern = FreeMonthlyDigestValidator.Validate(lead + "18 of the 64 locations that hold licences have at least 1 expired licence with no renewal in progress.", prompt);
+        Assert.DoesNotContain(rightPattern.FailedChecks, f => f.Contains("a comparison this email never states", StringComparison.Ordinal));
+
+        var wrongSubset = FreeMonthlyDigestValidator.Validate(lead + "Of these 19 licences, 1 expired during {{PREV_MONTH}}.", prompt);
+        Assert.Contains(wrongSubset.FailedChecks, f => f.Contains("NOT part of the expired total", StringComparison.Ordinal));
+
+        var rightSubset = FreeMonthlyDigestValidator.Validate(lead + "Separately, 1 licence reached its end date in {{PREV_MONTH}} and has a renewal in progress.", prompt);
+        Assert.DoesNotContain(rightSubset.FailedChecks, f => f.Contains("NOT part of the expired total", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1926, 2026-10-07] In the shared "context" section the first base is
+    /// t_lm_due, so "of those carry personal criminal liability" (t_rm_liability) was sent with last
+    /// month's total and t_rm_due was never sent. Each "of those" line now travels with its own parent.
+    /// </summary>
+    [Fact]
+    public void AnOfThoseFactIsSentWithItsOwnParent()
+    {
+        MonthlyFact F(string key, int value, string label, int order, string window, int tier) =>
+            new(key, value, label, "context", order, window, "volume", tier, false, false);
+
+        var facts = new[]
+        {
+            F("t_lm_due", 557, "items fell due last month across your scope", 800, "prev", 5),
+            F("t_od_total", 18397, "items are overdue today across your scope, whatever their due date", 820, "stock", 3),
+            F("t_rm_due", 259, "items fall due between today and the end of the month across your scope", 840, "curr", 5),
+            F("t_rm_liability", 63, "of those carry personal criminal liability", 845, "curr", 2),
+        };
+
+        var sent = FreeMonthlyDigestPrompt.ForTheModel(facts, MonthlyDigestSlot.Users).Select(f => f.FactKey).ToList();
+
+        Assert.Contains("t_rm_liability", sent);
+        Assert.Contains("t_rm_due", sent);
+        Assert.Equal("t_rm_due", FreeMonthlyDigestPrompt.ParentOf(facts[3], facts)?.FactKey);
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-08] Two different Acts that shorten to the same first
+    /// statute ("Factories Act, 1948") read as one name written twice; both keep their full names.
+    /// </summary>
+    [Fact]
+    public void TwoDifferentActsThatShortenAlikeKeepTheirFullNames()
+    {
+        var data = MonthlyExamples.Act() with
+        {
+            Candidates =
+            [
+                MonthlyExamples.Candidate(1, "overdue_concentration", "act", "Factories Act, 1948 & Maharashtra Factories Rules, 1963", 1, 20, item: 9, baseCount: 120),
+                MonthlyExamples.Candidate(2, "overdue_concentration", "act", "Factories Act, 1948 and Uttar Pradesh Factories Rules, 1950", 2, 20, item: 8, baseCount: 120),
+            ],
+        };
+        var prompt = FreeMonthlyDigestPrompt.Build(data);
+
+        var names = prompt.NamedFindings.Select(n => prompt.Bindings[n.NamePlaceholder!]).ToList();
+        Assert.Equal(2, names.Count);
+        Assert.Equal(2, names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains("Factories Act, 1948 & Maharashtra Factories Rules, 1963", names);
+    }
+
+    /// <summary>[FOUND LIVE on PROD tenant 1008, 2026-10-08] "So far in October" on TODAY's figures (overdue from any month) is rejected; on this month's figures it passes.</summary>
+    [Fact]
+    public void SoFarThisMonthOnlyCarriesThisMonthsFigures()
+    {
+        var data = MonthlyExamples.Data(new DateOnly(2026, 10, 4), "fact",
+        [
+            MonthlyExamples.Fact("tm_due_so_far", 4537, window: "curr"), MonthlyExamples.Fact("tm_open_past_due", 3133, window: "curr"),
+            MonthlyExamples.Fact("od_total", 14656), MonthlyExamples.Fact("lm_due", 2047, window: "prev"),
+        ],
+        []);
+        var prompt = FreeMonthlyDigestPrompt.Build(data);
+
+        Assert.NotEmpty(FreeMonthlyDigestValidator.WrongPeriodProblems("So far in {{CURR_MONTH}}, 14,656 compliances are overdue across your organisation.", prompt));
+        Assert.Empty(FreeMonthlyDigestValidator.WrongPeriodProblems("So far in {{CURR_MONTH}}, 4,537 compliances have fallen due. 3,133 of them are already overdue.", prompt));
+        Assert.Empty(FreeMonthlyDigestValidator.WrongPeriodProblems("Today, 14,656 compliances are overdue across your organisation, from any month.", prompt));
+    }
+    /// <summary>[2026-10-07, product owner] "one" as a quantity becomes 1; as a pronoun or idiom it stays a word.</summary>
+    [Fact]
+    public void ConvertsOneOnlyWhereItIsAQuantity()
+    {
+        var repaired = FreeMonthlyDraftRepair.Apply(
+            "Good morning,\n\nAcross your organisation, 3 obligations are overdue. One has been overdue for 31 to 60 days, one for 61 to 90 days, and one for more than 90 days.\n\n"
+            + "{{NAME_1}} holds 2,034 of the 17,155 overdue obligations and is one of 18 people who each hold a large part of the backlog.\n\n"
+            + "At your {{NAME_2}} site, 4 obligations are open and no one else is assigned to that work in RegTrack.");
+
+        Assert.Contains("1 has been overdue for 31 to 60 days, 1 for 61 to 90 days, and 1 for more than 90 days", repaired.Body, StringComparison.Ordinal);
+        Assert.Contains("is 1 of 18 people", repaired.Body, StringComparison.Ordinal);
+        Assert.Contains("no one else is assigned", repaired.Body, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1062,8 +1173,14 @@ public sealed class FreeMonthlyDraftRepairTests
     {
         var repaired = FreeMonthlyDraftRepair.Apply("Good morning,\n\n{{NAME_1}} holds 2,034 of the 17,155 overdue obligations and is one of 18 people who each hold a large part of the backlog, with 17 others in the same position.");
 
-        Assert.Contains("one of 18 people who each hold a large part of the backlog.", repaired.Body, StringComparison.Ordinal);
+        // [2026-10-07] "one" as a quantity is now a digit; the residual is still stated once.
+        Assert.Contains("1 of 18 people who each hold a large part of the backlog.", repaired.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("17 others", repaired.Body, StringComparison.Ordinal);
+
+        // The prompt's residual wording since 2026-10-07: "among N people".
+        var among = FreeMonthlyDraftRepair.Apply("Good morning,\n\n{{NAME_1}} holds 2,034 of the 17,155 overdue obligations and is among 18 people who each hold a large part of the backlog, with 17 others in the same position.");
+        Assert.Contains("among 18 people who each hold a large part of the backlog.", among.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("17 others", among.Body, StringComparison.Ordinal);
     }
 
     /// <summary>[FOUND LIVE on PROD tenant 1008, 2026-09-24] "Across your organisation,, 125 licences" reached the final body.</summary>
@@ -2207,7 +2324,7 @@ public sealed class FreeMonthlySettingsTests
         var settings = Build(values);
 
         Assert.True(settings.AllowPersonNames);
-        Assert.Equal(1, settings.MaxDraftAttempts);
+        Assert.Equal(2, settings.MaxDraftAttempts);   // [2026-10-07] 1 -> 2: a meaning failure needs a rewrite
     }
 
     /// <summary>No defaults in code: every missing key stops startup, and the message names the key.</summary>
@@ -2443,7 +2560,7 @@ internal static class MonthlyExamples
     private static string RealMetric(string detector) =>
         DetectorSentences.KnownMetrics.TryGetValue(detector, out var metric) ? metric : "metric";
 
-    private static MonthlyCandidate Candidate(
+    internal static MonthlyCandidate Candidate(
         int slot, string detector, string kind, string label, int problem, int population,
         int? item = null, int? baseCount = null, int? metricPct = null, int? tenantPct = null,
         string? context = null, DateTime? eventDate = null, bool asAt = false) =>
@@ -2485,7 +2602,7 @@ internal static class MonthlyExamples
         new(detector, patternFactKey, rank, "location", entityId, label, context is null ? null : "location", context,
             item, baseCount, "overdue items more than 90 days late");
 
-    private static MonthlyDigestData Data(DateOnly sunday, string headlineSource, MonthlyFact[] facts, MonthlyCandidate[] candidates) =>
+    internal static MonthlyDigestData Data(DateOnly sunday, string headlineSource, MonthlyFact[] facts, MonthlyCandidate[] candidates) =>
         new(MonthlyDigestCalendar.For(sunday), AsOf.AddDays(sunday.DayNumber - new DateOnly(2026, 10, 4).DayNumber), headlineSource, facts, [], candidates, []);
 
     public static MonthlyDigestData Overview() => Data(new DateOnly(2026, 10, 4), "fact",
@@ -2552,6 +2669,18 @@ internal static class MonthlyExamples
         Candidate(1, "licence_expiring_unrenewed", "licence", "Trade Licence", 3, 5, context: "Pune Plant", eventDate: new DateTime(2026, 11, 30)),
         Candidate(2, "licence_lapsed_recent_unrenewed", "licence", "Shops Licence", 3, 5, context: "Thane Office", eventDate: new DateTime(2026, 10, 12), asAt: true),
     ]);
+
+    /// <summary>[PROD tenant 1008 / user 85876, 2026-10-07] The real licence facts behind the two mis-stated sentences.</summary>
+    public static MonthlyDigestData LicenceMinda() => Data(new DateOnly(2026, 8, 30), "fact",
+    [
+        Fact("lic_total", 199), Fact("lic_valid", 59), Fact("lic_expiring_rest_of_month", 0),
+        Fact("lic_lapsed_last_month", 1, asAt: true), Fact("lic_lapsed_last_month_unrenewed", 0, asAt: true),
+        Fact("lic_lapsed_this_month", 0), Fact("lic_lapsed_this_month_unrenewed", 0),
+        Fact("lic_expired_total", 19), Fact("lic_expired_unrenewed", 19), Fact("lic_expired_renewing", 0),
+        Fact("loc_with_licences", 64), Fact("loc_with_expired_unrenewed", 18),
+        Fact("pat_expired_unrenewed_location", 16), Fact("pat_expired_unrenewed_location_of", 64),
+    ],
+    []);
 
     /// <summary>
     /// The "Output:" blockquote of a prompt file, as the model would send it: quote markers removed,

@@ -83,8 +83,8 @@ public static partial class FreeMonthlyFallbackBody
         var title = MonthlyDigestCalendar.Title(slot).ToLowerInvariant();
         var sentences = new List<Line>
         {
-            // No "as at" here: every figure that needs one carries its own, and the lead said it twice.
-            new(Period.Lead, $"Here is your {title} for {{{{CURR_MONTH}}}}.", Priority: 0, Removable: false),
+            // [2026-10-08] The same introduction as the written email: topic, then the date line, once.
+            new(Period.Lead, $"Here is your {title} for {{{{CURR_MONTH}}}}. The figures below are as of {{{{AS_AT}}}}.", Priority: 0, Removable: false),
         };
 
         var leadSectionName = headlineFact?.Section;
@@ -108,7 +108,7 @@ public static partial class FreeMonthlyFallbackBody
         {
             var isLead = section[0].Section == leadSectionName && leadFinding is null;
             var period = isLead ? Period.Lead : PeriodOf(section[0]);
-            var baseStated = false;
+            string? lastBaseKey = null;
             var shown = 0;
             var backlogShown = 0;
 
@@ -120,8 +120,11 @@ public static partial class FreeMonthlyFallbackBody
 
                 if (!f.IsHeadline)
                 {
-                    if (nests && !baseStated)
-                        continue;                                   // an "of those" line with no "those" before it
+                    /*  [2026-10-07] "of those" must sit under ITS OWN parent - the base line stated
+                        last in this section - not merely under some base. In the shared "context"
+                        section t_rm_liability followed t_lm_due and read as last month's.        */
+                    if (nests && (lastBaseKey is null || FreeMonthlyDigestPrompt.ParentOf(f, facts)?.FactKey != lastBaseKey))
+                        continue;                                   // an "of those" line with no (or the wrong) "those" before it
                     if (i > 0 && (f.FactValue == 0 || shown >= MaxLinesPerSection))
                         continue;
                     if (isBacklog && backlogShown >= MaxBacklogLinesPerSection)
@@ -133,7 +136,7 @@ public static partial class FreeMonthlyFallbackBody
                     continue;
 
                 if (!nests)
-                    baseStated = true;
+                    lastBaseKey = f.FactKey;
                 shown++;
                 if (isBacklog)
                     backlogShown++;
@@ -314,6 +317,12 @@ public static partial class FreeMonthlyFallbackBody
                 var f = section[i];
                 var matters = f.FactValue > 0 && f.SeverityTier <= 3;
                 var isBacklog = FreeMonthlyDigestPrompt.IsBacklogFact(f);
+
+                // [2026-10-07] An "of those" line only directly under its own parent (see Draft).
+                if (i > 0 && !f.IsHeadline && f.DisplayLabel.StartsWith("of those", StringComparison.OrdinalIgnoreCase)
+                    && shown.LastOrDefault(s => !s.DisplayLabel.StartsWith("of those", StringComparison.OrdinalIgnoreCase))?.FactKey
+                       != FreeMonthlyDigestPrompt.ParentOf(f, section)?.FactKey)
+                    continue;
 
                 if (i == 0 || f.IsHeadline)
                     shown.Add(f);
