@@ -219,6 +219,15 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-27] v3 - same "How to read" / interactive-chart change as Act.
                 // Lab-verified on real Minda data.
                 ["Users"] = Build("Users", "02_composition_freehand_users_v4.md"),
+                // [ADDED 2026-10-04] Five new standalone freehand dimensions - see
+                // docs/superpowers/specs/2026-10-04-five-dimensions-freehand-design.md. SQL audit
+                // confirmed zero proc changes needed (all 5 already RegTrack-parity via shared
+                // infra; ForwardPipeline/ForwardRisk already occurrence-split by original design).
+                ["TimelinessFY"] = Build("TimelinessFY", "02_composition_freehand_timelinessfy.md"),
+                ["ForwardPipeline"] = Build("ForwardPipeline", "02_composition_freehand_forwardpipeline.md"),
+                ["EvidenceIntegrity"] = Build("EvidenceIntegrity", "02_composition_freehand_evidenceintegrity.md"),
+                ["ForwardRisk"] = Build("ForwardRisk", "02_composition_freehand_forwardrisk.md"),
+                ["CoverageGaps"] = Build("CoverageGaps", "02_composition_freehand_coveragegaps.md"),
             };
         });
 
@@ -275,6 +284,13 @@ public static class PaidReportAgentsRegistration
             visionQaEndpoint, visionQaModel, visionQaApiKey, "VisionQaAgent", "Checks a real screenshot of the rendered report for overlap or broken layout only.",
             LoadPromptSync(sp, "06_vision_qa.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
+        // [ADDED 2026-10-07] Stage 2 of InteractiveTileChecker's cross-tile glitch detection - same
+        // Llm:VisionQa:* deployment as IVisionQaAgent above, different prompt/call shape (two small
+        // crops, not a whole-page screenshot set) - see ITileGlitchReviewAgent's own doc comment.
+        services.AddSingleton<ITileGlitchReviewAgent>(sp => new MafTileGlitchReviewAgent(MafAgentFactory.CreateJsonAgent(
+            visionQaEndpoint, visionQaModel, visionQaApiKey, "TileGlitchReviewAgent", "Judges whether a flagged before/after region of a report looks broken or legitimate.",
+            LoadPromptSync(sp, "07_tile_glitch_review.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
+
         // [ADDED 2026-09-26] Reasoning-trace explainer, same Llm:Maf endpoint/apikey as the other
         // non-freehand agents in this file.
         // [CHANGED 2026-09-27] gpt-4o-mini -> the standard Llm:Maf model (user decision). Side-by-side
@@ -291,6 +307,13 @@ public static class PaidReportAgentsRegistration
             "Explains one report's real reasoning trace - claims, formulas, raw data behind every number - as a well-structured Markdown QA document.",
             LoadPromptSync(sp, "08_reasoning_explainer_v3.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(),
             ResponseReasoningEffortLevel.Medium, LlmLogger(sp))));
+
+        // [ADDED 2026-10-07] Design spec Section 4's patch loop - report-type-agnostic (the same
+        // plain endpoint/model/apiKey every non-freehand render call already uses, not
+        // freehandEndpoint), so one registration covers every report type.
+        services.AddSingleton<IPatchRenderAgent>(sp => new MafPatchRenderAgent(MafAgentFactory.CreateTextAgent(
+            endpoint, model, apiKey, "PatchRenderAgent", "Fixes only the named real problem(s) in an already-rendered report, leaving everything else unchanged.",
+            LoadPromptSync(sp, "10_patch_render_defect.md"), sp.GetRequiredService<ILlmUsageRecorder>(), maxTokensPerCall, enableSensitiveTelemetry, sp.GetService<LlmConcurrencyGate>(), logger: LlmLogger(sp))));
 
         // [CHANGED 2026-09-01] Was 05_report_html.md ("compliance_health" - dynamic, no fixed
         // tabs, composition-agent-decided structure) - that file and report type were removed
@@ -436,6 +459,23 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
                     "05_report_html_dimension_selection_event_v4.md", freehandModel),
+                // [ADDED 2026-10-04] Five new standalone freehand dimensions - see
+                // docs/superpowers/specs/2026-10-04-five-dimensions-freehand-design.md.
+                ["dimension_selection:TimelinessFY"] = Build(
+                    "DimensionSelectionTimelinessFYReportHtmlAgent", "Renders a freehand-composed TimelinessFY insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_timelinessfy.md", freehandModel),
+                ["dimension_selection:ForwardPipeline"] = Build(
+                    "DimensionSelectionForwardPipelineReportHtmlAgent", "Renders a freehand-composed ForwardPipeline insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_forwardpipeline.md", freehandModel),
+                ["dimension_selection:EvidenceIntegrity"] = Build(
+                    "DimensionSelectionEvidenceIntegrityReportHtmlAgent", "Renders a freehand-composed EvidenceIntegrity insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_evidenceintegrity.md", freehandModel),
+                ["dimension_selection:ForwardRisk"] = Build(
+                    "DimensionSelectionForwardRiskReportHtmlAgent", "Renders a freehand-composed ForwardRisk insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_forwardrisk.md", freehandModel),
+                ["dimension_selection:CoverageGaps"] = Build(
+                    "DimensionSelectionCoverageGapsReportHtmlAgent", "Renders a freehand-composed CoverageGaps insight as self-contained HTML.",
+                    "05_report_html_dimension_selection_coveragegaps.md", freehandModel),
             };
         });
 
@@ -451,6 +491,14 @@ public static class PaidReportAgentsRegistration
         services.AddSingleton<IReportQaRunner>(sp => new PlaywrightReportQa(sp.GetRequiredService<IBrowser>()));
         // [ADDED 2026-09-28] Layout gate on the final page - see LayoutCollisionChecker.
         services.AddSingleton<ILayoutChecker>(sp => new LayoutCollisionChecker(sp.GetRequiredService<IBrowser>()));
+
+        // [ADDED 2026-10-07] Screenshots saved to disk, not kept in memory/serialized through DTFx -
+        // see InteractiveTileChecker's own doc comment on TileFinding's *Path fields.
+        services.AddSingleton<IInteractiveTileChecker>(sp => new InteractiveTileChecker(
+            sp.GetRequiredService<IBrowser>(),
+            sp.GetRequiredService<ITileGlitchReviewAgent>(),
+            Path.Combine(Path.GetTempPath(), "insights-tile-qa"),
+            sp.GetRequiredService<ILogger<InteractiveTileChecker>>()));
 
         return services;
     }

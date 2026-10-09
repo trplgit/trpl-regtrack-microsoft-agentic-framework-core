@@ -97,7 +97,7 @@ public sealed record EntityControlTotals(
     int ScopedInstances, int SumOfRows, bool Reconciled,
     int OverdueInstances, decimal TenantOverduePct,
     int NodesReported, int ActiveBranchesInTenant, int ApexEntityCount,
-    EntityCountShape TenantShape, decimal LargestApexSharePct,
+    EntityCountShape TenantShape, int? LargestApexInstances, decimal LargestApexSharePct,
     ComparisonGrain ComparisonGrain, string GrainReason);
 
 /// <summary>
@@ -139,6 +139,7 @@ public sealed record RiskControlTotals
     public int RiskLevelsWithObligations { get; init; }
     public int CriticalRiskType { get; init; }
     public int ImprisonmentInstances { get; init; }
+    public int? ImprisonmentOnCriticalInstances { get; init; }
     public decimal? ImprisonmentOnCriticalPct { get; init; }
 }
 
@@ -189,6 +190,7 @@ public sealed record NatureControlTotals
     public bool Reconciled { get; init; }
     public int OverdueInstances { get; init; }
     public decimal TenantOverduePct { get; init; }
+    public int TenantImprisonmentInstances { get; init; }
     public decimal TenantImprisonmentSharePct { get; init; }
     public int NaturesReported { get; init; }
     public int NaturesWithObligations { get; init; }
@@ -267,6 +269,7 @@ public sealed record DepartmentsControlTotals
     /// prompt or other C# code, so no report ever visibly showed a wrong number from it, but it
     /// would have been a landmine the moment anything started reading it).
     /// </summary>
+    public int TenantNoInstanceOwnerInstances { get; init; }
     public decimal TenantNoInstanceOwnerPct { get; init; }
 }
 
@@ -312,6 +315,7 @@ public sealed record ActControlTotals
     public int UnlinkedInstances { get; init; }
     public decimal UnlinkedPct { get; init; }
     public int? LargestRegulatorId { get; init; }
+    public int? LargestRegulatorInstances { get; init; }
     public decimal? LargestRegulatorSharePct { get; init; }
 }
 
@@ -386,6 +390,24 @@ public sealed record UsersControlTotals
     public int PerformerUserCount { get; init; }
     /// <summary>[ADDED 2026-09-15] See <see cref="PerformerUserCount"/>.</summary>
     public int ReviewerUserCount { get; init; }
+    /// <summary>
+    /// [ADDED 2026-10-07, BUG FOUND LIVE] sql/43's own A-CONC assertion already gives a real,
+    /// SQL-computed percentage (top10_share_of_assigned_pct - "the top ten users by load touch
+    /// X% of all assigned obligations") - but the RAW COUNT behind that percentage was never
+    /// exposed as its own field, only buried inside the assertion's Value/OfN pair. A real render
+    /// (Motul tenant 1926, Users run insights-1926-D6FB04C2F0D4C4DAB49C27383555F8DB039A628D203
+    /// 73F0EB52F1E3FDDEA88A2, 2026-10-07) wrote "10 users touch 92.2% of 1,122 distinct assigned
+    /// obligations" - the 92.2% and 1,122 are both real/traceable, but the implied headcount of
+    /// obligations touched (percentage x denominator) is not a value that appears anywhere in the
+    /// typed data, so ReportNumberTracer correctly refused it (UNTRACEABLE_NUMBERS). Cite this
+    /// field verbatim for that number instead of deriving it - same bug class, same fix pattern,
+    /// as Act/Entity/Nature/Risk/Departments/Internal's own LargestXInstances-style fields.
+    /// </summary>
+    public int Top10ConcentrationInstances { get; init; }
+    /// <summary>[ADDED 2026-10-07] The real headcount behind "the top ten users" - 10 unless fewer
+    /// than 10 users have any assignment at all (a small tenant). See
+    /// <see cref="Top10ConcentrationInstances"/> - cite this instead of the prompt hardcoding "10".</summary>
+    public int Top10ConcentrationUserCount { get; init; }
 }
 
 /// <summary>
@@ -474,7 +496,9 @@ public sealed record InternalControlTotals
     /// agent has been reading dead branch-level ownership data on every row, every run, since this
     /// dimension shipped.
     /// </summary>
+    public int? StatutoryNoInstanceOwnerInstances { get; init; }
     public decimal? StatutoryNoInstanceOwnerPct { get; init; }
+    public int? InternalNoInstanceOwnerInstances { get; init; }
     public decimal? InternalNoInstanceOwnerPct { get; init; }
     public int BranchesWithStatutory { get; init; }
     public int BranchesWithInternal { get; init; }
@@ -758,5 +782,53 @@ public sealed record ForwardRiskRow
     public decimal? CleanAtRiskPct { get; init; }
     public decimal? CarriedForwardPct { get; init; }
     public int? CleanAtRiskRank { get; init; }
+    public string? Flags { get; init; }
+}
+
+// ── Coverage gaps (sql/27) ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Peer-comparison review candidates, not violations - a branch is flagged when its labour
+/// obligation count sits well below its peer group's median (peer key = state x establishment
+/// class). Grain is the leaf branch. Deployed proc, live in prod - never modified from here.
+/// </summary>
+public sealed record CoverageGapsControlTotals
+{
+    public int LeafBranchesInScope { get; init; }
+    public int PeerSetBranches { get; init; }
+    public int PeerGroupsQualifying { get; init; }
+    public int PeerGroupsTooSmall { get; init; }
+    public int NearUniversalObligations { get; init; }
+    public int Gaps { get; init; }
+    public int SumOfRowGaps { get; init; }
+    public bool Reconciled { get; init; }
+    public int GapsFullConfidence { get; init; }
+    public int GapsReducedConfidence { get; init; }
+    public int BranchesWithGaps { get; init; }
+    public int UnderConfiguredBranches { get; init; }
+    public int UnknownNodeType { get; init; }
+    public int ThresholdObligationsExcluded { get; init; }
+    public decimal CoverageThreshold { get; init; }
+    public int MinPeers { get; init; }
+    public string? Method { get; init; }
+}
+
+public sealed record CoverageGapsRow
+{
+    public int BranchID { get; init; }
+    public string? BranchName { get; init; }
+    public int? StateID { get; init; }
+    public int? NodeTypeId { get; init; }
+    public string? Class { get; init; }
+    public bool InPeerSet { get; init; }
+    public int? PeerSetSize { get; init; }
+    public int LabourObligations { get; init; }
+    public decimal? PeerMedianObligations { get; init; }
+    public decimal? PctOfPeerMedian { get; init; }
+    public int Gaps { get; init; }
+    public int GapsFullConfidence { get; init; }
+    public int GapsReducedConfidence { get; init; }
+    public bool UnderConfigured { get; init; }
+    public int? GapRank { get; init; }
     public string? Flags { get; init; }
 }

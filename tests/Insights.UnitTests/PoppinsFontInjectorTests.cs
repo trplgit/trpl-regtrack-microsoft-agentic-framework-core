@@ -88,4 +88,47 @@ public class PoppinsFontInjectorTests
 
         Assert.False(PoppinsFontInjector.HasHeadTag(html));
     }
+
+    // [ADDED 2026-10-08, FOUND LIVE] A real Motul BacklogAging report shipped with its self-hosted
+    // font silently broken: PatchRenderActivity re-sends the WHOLE document (by this point already
+    // carrying the ~30KB of real, opaque base64 glyph data Inject() embeds) through an LLM call
+    // that is asked to "patch the findings, preserve everything else" - LLMs cannot reliably copy
+    // tens of thousands of characters of binary data byte-for-byte. The real report that shipped
+    // was missing 2 of 3 weight blocks, and the ONE it kept was itself corrupted (one character
+    // short of the real file, enough to break WOFF2 decoding) - the exact trap this class's own
+    // top doc comment already named for the FIRST render, reopened by the patch loop. Strip() lets
+    // the orchestrator remove the font block before a patch call (so the LLM never has to touch it
+    // at all) and re-inject a guaranteed-correct copy via Inject() afterward.
+    [Fact]
+    public void Strip_DocumentWithInjectedFont_RemovesTheWholeFontStyleBlock()
+    {
+        var injected = PoppinsFontInjector.Inject(ValidDocument);
+
+        var stripped = PoppinsFontInjector.Strip(injected);
+
+        Assert.DoesNotContain("@font-face", stripped);
+        Assert.DoesNotContain("Poppins", stripped);
+        // Everything else the injected document carried must survive untouched.
+        Assert.Contains("<h1>Compliance Health Report</h1>", stripped);
+    }
+
+    [Fact]
+    public void Strip_ThenInject_ProducesByteIdenticalFontBlockToASingleInject()
+    {
+        // The real guarantee this round-trip exists for: strip-then-reinject must never leave a
+        // degraded or duplicated font behind - it must come back out EXACTLY as if Inject() had
+        // only ever been called once, on the original document.
+        var oneShot = PoppinsFontInjector.Inject(ValidDocument);
+        var roundTripped = PoppinsFontInjector.Inject(PoppinsFontInjector.Strip(PoppinsFontInjector.Inject(ValidDocument)));
+
+        Assert.Equal(oneShot, roundTripped);
+    }
+
+    [Fact]
+    public void Strip_DocumentWithNoInjectedFont_ReturnsInputUnchanged()
+    {
+        var result = PoppinsFontInjector.Strip(ValidDocument);
+
+        Assert.Equal(ValidDocument, result);
+    }
 }

@@ -385,7 +385,13 @@ numbers, no invented causes, caveats travel with their numbers).
    - work carrying a possible prison term → personal criminal liability for
      the officer responsible;
    - work with one reviewer or one owner → if that person is away, the work
-     stalls;
+     stalls. This only applies when the NUMBER of reviewers/owners is a real,
+     variable fact about this tenant's data — never when the field is
+     structurally always one for every tenant regardless of data (e.g.
+     Users' `InstancesWithSoleReviewer` — a reviewer-role assignment is a
+     single slot per instance by the data model itself, so this sits at or
+     near 100% everywhere and is never a finding, never state it as a risk
+     or dependency, on any dimension);
    - licences marked Expired → state the count plainly ("1 licence is Expired, in Transport"); never
      speculate that it "may no longer be valid" or that the business may be operating without a licence,
      and never name the source system ("RegTrack") in the prose;

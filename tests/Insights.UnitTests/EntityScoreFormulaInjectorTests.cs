@@ -183,4 +183,34 @@ public sealed class EntityScoreFormulaInjectorTests
 
         Assert.DoesNotMatch("""class="hr-i[^"]*"[^>]*\stitle=""", result);
     }
+
+    // [ADDED 2026-10-08, user-reported clarity gap] The composite panel showed the 5 (or however
+    // many) weighted-contribution rows but never the final /weightSum step - a reader doing the
+    // obvious thing (adding the rows) landed on the raw numerator, not the real displayed score,
+    // with zero explanation of the gap when a pillar's weight isn't counted this run. The real
+    // displayed compositeScore is reused verbatim as the stated answer - never recomputed here,
+    // so this can never drift from what the donut actually shows.
+    [Fact]
+    public void CompositePanel_ShowsTheRenormalizationStep_WhenNotEveryPillarScored()
+    {
+        // Risk(0.3) + Licence(0.2) = 0.5 of a notional full weight set - deliberately not 1.0,
+        // same shape as a real run missing some pillars.
+        var result = EntityScoreFormulaInjector.Inject(HeroHtml, compositeScore: 52, [Risk, Licence]);
+
+        Assert.Contains("0.5", result); // the weight actually counted this run
+        Assert.Contains("pf-diff-result", result);
+        // The stated final answer is the real passed-in score, not a value re-derived here.
+        Assert.Contains("pf-diff-value\">52</span><span class=\"pf-diff-label\">Composite score", result);
+    }
+
+    // [ADDED 2026-10-08, user-reported] "why does Risk get more weight than Evidence" - each
+    // pillar's own popup should say what it measures, not just restate the arithmetic.
+    [Fact]
+    public void ComponentPanel_StatesWhatThePillarMeasures()
+    {
+        var result = EntityScoreFormulaInjector.Inject(HeroHtml, compositeScore: 52, [Risk, Licence]);
+
+        Assert.Contains("pf-what", result);
+        Assert.Contains("overdue", result); // Risk's definition mentions overdue critical-risk obligations
+    }
 }

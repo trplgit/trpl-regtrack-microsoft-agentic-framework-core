@@ -25,6 +25,14 @@
   shift from this redefinition, not a defect.
 
   Error block: unchanged (51030-51039, same as the prior version).
+
+  [FOUND LIVE 2026-10-05] #rows.BranchName NVARCHAR(300)/ApexName NVARCHAR(400)
+  too narrow for the real source: CustomerBranch.Name is varchar(500), and one
+  real branch in production is already 319 chars (over the 300 cap right now).
+  Same bug class as the 2026-09-23 Caveat truncation (CLAUDE.md Sec.5) - widened
+  both to NVARCHAR(600) defensively. Same fix applied the same day to
+  Internal/Entity/CoverageGaps (same BranchName/ApexName source), Act (ActName),
+  and Licence (LicenseTypeName).
 ===========================================================================*/
 SET NOCOUNT ON;
 GO
@@ -96,16 +104,40 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM #occ o WHERE o.ComplianceInstanceID = i.ComplianceInstanceID);
 
     /*===================================================================
-      2. OVERDUE - OCCURRENCE-LEVEL [CHANGED 2026-10-01]
-         tvfInsightsOverdueSchedules already carries ComplianceScheduleOnID
-         per real occurrence - join on that directly, no DISTINCT collapse.
+      2. OVERDUE - OCCURRENCE-LEVEL [OPTIMIZED 2026-10-06, same fix as Act's
+         sql/v2/41 - found live via a real execution-plan review there]
+         tvfInsightsOverdueSchedules re-derives scope (branch+category) and
+         active-performer membership for the WHOLE TENANT, before being
+         filtered down to #occ's already-scoped rows here - #occ already
+         guarantees both, inherited from #inst (tvfInsightsScopedInstances).
+         Replaced with the latest transaction per in-scope schedule, fetched
+         once per INSTANCE from #inst directly instead of re-deriving scope
+         inside a shared function. Semantics unchanged: a schedule with NO
+         transaction ever is NOT counted as overdue, same as the TVF's own
+         inner join to vInsightsStatusCurrent did before.
     ===================================================================*/
+    IF OBJECT_ID('tempdb..#lt') IS NOT NULL DROP TABLE #lt;
+    SELECT x.ComplianceScheduleOnID, x.StatusId, x.ID
+    INTO #lt
+    FROM (
+        SELECT t.ComplianceScheduleOnID, t.StatusId, t.ID,
+               ROW_NUMBER() OVER (PARTITION BY t.ComplianceScheduleOnID
+                                  ORDER BY t.Dated DESC, t.ID DESC) AS rn
+        FROM #inst i
+        JOIN dbo.ComplianceTransaction t
+              ON t.ComplianceInstanceId = i.ComplianceInstanceID
+    ) x
+    WHERE x.rn = 1;
+    CREATE CLUSTERED INDEX IX_lt ON #lt (ComplianceScheduleOnID);
+
     IF OBJECT_ID('tempdb..#ovdocc') IS NOT NULL DROP TABLE #ovdocc;
-    SELECT o.ComplianceScheduleOnID
+    SELECT o.ScheduleOnID AS ComplianceScheduleOnID
     INTO #ovdocc
-    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
-    JOIN #occ x ON x.ScheduleOnID = o.ComplianceScheduleOnID
-    WHERE o.ScheduleOn >= @WindowStart AND o.ScheduleOn < @WindowEnd;
+    FROM #occ o
+    JOIN #lt lt                       ON lt.ComplianceScheduleOnID = o.ScheduleOnID
+    JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = lt.StatusId
+    WHERE d.OverdueEligible = 1
+      AND o.ScheduleOn < CAST(@AsOf AS DATE);
 
     CREATE CLUSTERED INDEX IX_ovdocc ON #ovdocc (ComplianceScheduleOnID);
 
@@ -151,10 +183,10 @@ BEGIN
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         BranchID              INT            NOT NULL PRIMARY KEY,
-        BranchName            NVARCHAR(300)  NULL,
+        BranchName            NVARCHAR(600)  NULL,
         NodeType              VARCHAR(20)    NULL,
         RootKind              VARCHAR(20)    NULL,
-        ApexName              NVARCHAR(400)  NULL,
+        ApexName              NVARCHAR(600)  NULL,
         StateID               INT            NULL,
         StateName             NVARCHAR(200)  NULL,
         Instances             INT            NOT NULL,
@@ -665,7 +697,7 @@ BEGIN
         FROM #rows WHERE NodeType = 'intermediate' HAVING SUM(Instances) > 0
     ) q;
 
-    DROP TABLE #ownership; DROP TABLE #inst; DROP TABLE #occ; DROP TABLE #ovdocc; DROP TABLE #owned; DROP TABLE #people;
+    DROP TABLE #ownership; DROP TABLE #inst; DROP TABLE #occ; DROP TABLE #lt; DROP TABLE #ovdocc; DROP TABLE #owned; DROP TABLE #people;
     DROP TABLE #closures; DROP TABLE #rows; DROP TABLE #assert; DROP TABLE #find;
 END
 GO

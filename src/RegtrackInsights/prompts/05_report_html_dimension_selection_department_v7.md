@@ -108,34 +108,6 @@ above the table and clickable per-column sort are a real, approved enhancement f
 register - not mandatory, but worth doing when the composition plan's emphasis calls for the
 register being genuinely explorable rather than just present.
 
-## Required: plain-English opening summary
-
-**[ADDED 2026-09-20]** Real feedback on an early render: the page led straight into charts and
-tables — numbers first, meaning never. A reader who does not already know this platform's
-vocabulary (`overdue rate`, `instance-level owner`, `imprisonment exposure`) has nothing to orient
-on before the data starts.
-
-The FIRST thing inside `<main>`, before the header eyebrow/title or any hero/chart/table, is a
-short plain-English summary:
-
-- 2–4 sentences. No jargon, no acronyms, no platform-specific terms (`overdue`, `ownerless`,
-  `instance-level`, etc.) without immediately explaining what they mean in plain words.
-- Near-zero raw numbers — a single anchoring figure is fine if it is the one fact the reader most
-  needs ("most department compliances aren't tracked back to a department"), but this is NOT where
-  the report cites `83.4%`, `3,115`, or any other precise value. Precision belongs in the
-  hero/sections below, which this summary sets up, not repeats.
-  - Answers, in order: what did we look at, what is the one thing most worth knowing, why does it
-    matter. Written the way you would explain the finding out loud to someone who has never opened
-    this report before, not the way you would write a section heading.
-  - Synthesize across every real narrative block you were given (`narrative.blocks[].prose`) — this
-    is the "so what" for the WHOLE report, not a restatement of any one section.
-
-Example shape (illustrative only — write your own from THIS tenant's real findings, never copy
-this text): "This report looks at where compliance work is tracked to a specific department. Most
-of it currently isn't — so the department comparisons below only describe a small, particular
-slice of the real workload, not the whole picture. Within that slice, one department carries
-meaningfully more overdue risk than the rest."
-
 **7. The "i" button and the "How to read this chart" panel (NEW in v3, required on EVERY chart).**
 Every chart, graph, heatmap, distribution, scatter, dot strip or other visual gets a small round
 "i" button right after its title. Hovering the "i" opens a panel on the right side of the screen
@@ -635,7 +607,12 @@ already-reconciled SQL output. Everything you state must trace to it.
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`,
 `AssignedInstances`, `UnassignedInstances`, `UnassignedPct`, `DepartmentsReported` (defined),
 `DepartmentsWithObligations` (active — dormant = defined minus active), `OverdueInstances`,
-`TenantOverduePct`, `TenantNoInstanceOwnerPct`.
+`TenantOverduePct`, `TenantNoInstanceOwnerInstances`, `TenantNoInstanceOwnerPct`.
+
+**[FOUND LIVE 2026-10-06]** If you build a number-formula breakdown for `TenantNoInstanceOwnerPct`,
+the numerator is `TenantNoInstanceOwnerInstances` cited verbatim — never multiply the percentage
+by `ScopedInstances` yourself; that produced an unverifiable number and got a real report (Act)
+refused by the untraceable-number gate.
 
 | Fact | Status |
 |---|---|
@@ -712,10 +689,22 @@ chart must follow these rules, whatever its shape:
   smaller shows its name and value on hover/focus only. Never break a word into single letters,
   never stack letters vertically, and never put a badge on a tile narrower than the badge; mark such
   a tile with its colour or outline instead and explain it in the legend.
-- **Crowded points (timelines, dot plots, scatter).** When labels of nearby points would collide,
-  stagger them into rows or connect them with short leader lines. If they still collide, label
-  only the most important points (the ones the text above discusses) and put the rest in a list
-  or legend under the chart.
+- **Crowded points (timelines, dot plots, scatter, bubble charts).** [FOUND LIVE 2026-10-08] This
+  covers two different collisions - the MARKS themselves (circles/dots stacking on top of each
+  other so only one is visible) and their LABELS (text overlapping text) - fix both, not just the
+  second. A real Departments bubble chart shipped with 4-5 low-volume department marks stacked
+  exactly on top of each other with only one label visible - the others were not just unlabeled,
+  they were not even visible as separate marks.
+  - **Marks:** before drawing, compute each mark's natural (x,y). If a mark's own radius overlaps
+    an already-placed mark's radius plus a small gap, search outward in a spiral/ring pattern
+    (step the angle, grow the radius each full turn) for the nearest free spot, clamp inside the
+    chart's plot area, and draw a short thin connector line from the real (x,y) to the displaced
+    position so the point's true value is never misread from its moved position. Never let two
+    marks render at the same pixel - a user cannot distinguish or hover a mark fully hidden under
+    another one.
+  - **Labels:** when labels of nearby points would collide, stagger them into rows or connect
+    them with short leader lines. If they still collide, label only the most important points
+    (the ones the text above discusses) and put the rest in a list or legend under the chart.
 - **Axis labels.** Prefer horizontal labels on a horizontal bar chart (names on the left) over
   rotated labels under vertical bars. If labels must rotate, measure the longest one and reserve
   that much space below the axis so nothing is clipped; otherwise shorten with "…".
@@ -751,9 +740,6 @@ chart must follow these rules, whatever its shape:
   digit, `=`, `/`, `!` or `?`.
 - Any complete-register/all-members table sits inside `.table-scroll` (fixed max-height, its own
   internal scroll, sticky header) - the page itself never grows to fit every row.
-- The plain-English opening summary is the FIRST thing in `<main>`, 2-4 sentences, near-zero raw
-  numbers, no unexplained jargon, synthesizes across every narrative block - not copy-pasted from
-  any one section's own prose.
 - Every real department row is represented somewhere on the page — none silently dropped.
 - Every number on the page exists in `assertions`, `dimension_rows`, or `dimension_control_totals`.
 - No "top-owner load %" and no cross-department "Concentration" section.

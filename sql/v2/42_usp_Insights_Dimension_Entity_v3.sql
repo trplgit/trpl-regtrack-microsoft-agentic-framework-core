@@ -28,6 +28,14 @@
   never a member of #occ to begin with).
 
   Error block: unchanged (51050-51059, same as the prior version).
+
+  [FOUND LIVE 2026-10-05] #rows.BranchName NVARCHAR(300)/ApexName NVARCHAR(400)
+  too narrow for the real source: CustomerBranch.Name is varchar(500), and one
+  real branch in production is already 319 chars. Same bug class as the
+  2026-09-23 Caveat truncation (CLAUDE.md Sec.5) - widened both to
+  NVARCHAR(600) defensively. Same fix applied the same day to
+  Location/Internal/CoverageGaps (same source), Act (ActName), Licence
+  (LicenseTypeName).
 ===========================================================================*/
 SET NOCOUNT ON;
 GO
@@ -94,16 +102,40 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM #occ o WHERE o.ComplianceInstanceID = i.ComplianceInstanceID);
 
     /*=====================================================================
-      2. OVERDUE - OCCURRENCE-LEVEL [CHANGED 2026-10-01]
-         tvfInsightsOverdueSchedules already carries ComplianceScheduleOnID
-         per real occurrence - join on that directly, no DISTINCT collapse.
+      2. OVERDUE - OCCURRENCE-LEVEL [OPTIMIZED 2026-10-06, same fix as Act's
+         sql/v2/41 - found live via a real execution-plan review there]
+         tvfInsightsOverdueSchedules re-derives scope (branch+category) and
+         active-performer membership for the WHOLE TENANT, before being
+         filtered down to #occ's already-scoped rows here - #occ already
+         guarantees both, inherited from #inst (tvfInsightsScopedInstances).
+         Replaced with the latest transaction per in-scope schedule, fetched
+         once per INSTANCE from #inst directly instead of re-deriving scope
+         inside a shared function. Semantics unchanged: a schedule with NO
+         transaction ever is NOT counted as overdue, same as the TVF's own
+         inner join to vInsightsStatusCurrent did before.
     =====================================================================*/
+    IF OBJECT_ID('tempdb..#lt') IS NOT NULL DROP TABLE #lt;
+    SELECT x.ComplianceScheduleOnID, x.StatusId, x.ID
+    INTO #lt
+    FROM (
+        SELECT t.ComplianceScheduleOnID, t.StatusId, t.ID,
+               ROW_NUMBER() OVER (PARTITION BY t.ComplianceScheduleOnID
+                                  ORDER BY t.Dated DESC, t.ID DESC) AS rn
+        FROM #inst i
+        JOIN dbo.ComplianceTransaction t
+              ON t.ComplianceInstanceId = i.ComplianceInstanceID
+    ) x
+    WHERE x.rn = 1;
+    CREATE CLUSTERED INDEX IX_lt ON #lt (ComplianceScheduleOnID);
+
     IF OBJECT_ID('tempdb..#ovdocc') IS NOT NULL DROP TABLE #ovdocc;
-    SELECT o.ComplianceScheduleOnID
+    SELECT o.ScheduleOnID AS ComplianceScheduleOnID
     INTO #ovdocc
-    FROM dbo.tvfInsightsOverdueSchedules(@CustomerID, @AsOf) o
-    JOIN #occ x ON x.ScheduleOnID = o.ComplianceScheduleOnID
-    WHERE o.ScheduleOn >= @WindowStart AND o.ScheduleOn < @WindowEnd;
+    FROM #occ o
+    JOIN #lt lt                       ON lt.ComplianceScheduleOnID = o.ScheduleOnID
+    JOIN dbo.vInsightsStatusCurrent d ON d.StatusId = lt.StatusId
+    WHERE d.OverdueEligible = 1
+      AND o.ScheduleOn < CAST(@AsOf AS DATE);
 
     CREATE CLUSTERED INDEX IX_ovdocc ON #ovdocc (ComplianceScheduleOnID);
 
@@ -209,10 +241,10 @@ BEGIN
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         BranchID            INT            NOT NULL PRIMARY KEY,
-        BranchName          NVARCHAR(300)  NULL,
+        BranchName          NVARCHAR(600)  NULL,
         ParentID            INT            NULL,
         ApexId              INT            NULL,
-        ApexName            NVARCHAR(400)  NULL,
+        ApexName            NVARCHAR(600)  NULL,
         RootKind            VARCHAR(20)    NULL,   -- apex | orphan
         NodeType            VARCHAR(20)    NULL,   -- leaf | intermediate
         Depth               INT            NULL,
@@ -309,6 +341,13 @@ BEGIN
     =====================================================================*/
     DECLARE @apexCount INT = (SELECT COUNT(*) FROM #rows WHERE Depth = 0);
     DECLARE @maxApexShare DECIMAL(5,1) = (SELECT MAX(ApexSharePct) FROM #rows WHERE Depth = 0);
+    -- [FOUND LIVE 2026-10-06, same class as Act's LargestRegulatorInstances fix] The real count
+    -- behind LargestApexSharePct (ApexSharePct = 100.0 * SubtreeInstances / @scopedTotal, see its
+    -- own computation below) - added so the render agent cites this directly instead of deriving
+    -- it from the percentage and a total, which produces an unverifiable number and gets the whole
+    -- report refused by the untraceable-number gate (CLAUDE.md non-negotiable #5).
+    DECLARE @maxApexInstances INT =
+        (SELECT TOP 1 SubtreeInstances FROM #rows WHERE Depth = 0 ORDER BY ApexSharePct DESC, SubtreeInstances DESC);
     DECLARE @childlessShell BIT =
         CASE WHEN EXISTS (SELECT 1 FROM #rows
                           WHERE Depth = 0 AND ActiveChildren = 0 AND SubtreeInstances = 0)
@@ -396,6 +435,7 @@ BEGIN
           WHERE CustomerID = @CustomerID AND IsDeleted = 0 AND Status = 1) AS ActiveBranchesInTenant,
         @apexCount                         AS ApexEntityCount,
         @tenantShape                       AS TenantShape,
+        @maxApexInstances                  AS LargestApexInstances,
         ISNULL(@maxApexShare,0)            AS LargestApexSharePct,
         @comparisonGrain                   AS ComparisonGrain,
         @grainReason                       AS GrainReason;
@@ -726,7 +766,7 @@ BEGIN
         WHERE @hasAnyObligations = 1
     ) q;
 
-    DROP TABLE #inst; DROP TABLE #occ; DROP TABLE #ovdocc; DROP TABLE #ownership; DROP TABLE #owned;
+    DROP TABLE #inst; DROP TABLE #occ; DROP TABLE #lt; DROP TABLE #ovdocc; DROP TABLE #ownership; DROP TABLE #owned;
     DROP TABLE #directOcc; DROP TABLE #directInst; DROP TABLE #direct;
     DROP TABLE #closure; DROP TABLE #rows; DROP TABLE #detector;
     DROP TABLE #assert; DROP TABLE #find;

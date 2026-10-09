@@ -28,11 +28,30 @@ with a flat, well-distributed load. You have real freedom. Use it.
 **Look at this tenant's own real numbers before deciding what leads.** If one account holds a
 severe concentration of `SumOfPerUserInstances` (a real single-point-of-failure risk), or the
 reviewer:performer headcount split is unusually lopsided (`PerformerUserCount`/`ReviewerUserCount`),
-or `InstancesWithSoleReviewer` is a large share of the estate, or a real timing pattern
-(`MedianDaysEarlyLate`/`TenantMedianDaysEarlyLate`) stands out — whichever real fact is most
-materially significant for THIS tenant's own data is what leads. State your reasoning for the hero
-choice in `hero.reason`, grounded in the actual numbers you were given — never a fixed subject
-picked in advance.
+or a real timing pattern (`MedianDaysEarlyLate`/`TenantMedianDaysEarlyLate`) stands out — whichever
+real fact is most materially significant for THIS tenant's own data is what leads. State your
+reasoning for the hero choice in `hero.reason`, grounded in the actual numbers you were given —
+never a fixed subject picked in advance.
+
+**[FOUND LIVE 2026-10-05] `InstancesWithSoleReviewer` is NEVER the hero, and never a finding at
+all.** Every assigned obligation structurally has exactly one reviewer-role assignment (`RoleID =
+3` is itself a single slot per instance) - this field sits at or near 100% of `ScopedInstances` for
+every tenant, always, by the shape of the data model, not because of anything this tenant did or
+failed to do. A real run presented it as the hero ("Every assigned obligation depends on one
+reviewer", styled as a warning) on a tenant where 4,642 of 4,642 obligations had a sole reviewer -
+a number that would be 4,642 of 4,642 on literally any tenant, so it carries zero per-tenant signal
+and is not "materially significant" by this file's own test above. Never lead with it, never give
+it alert/warning styling, never call it a risk, dependency, or single point of failure - it is the
+norm, state it only in passing if at all (e.g. as one line inside an orientation section), and only
+when it adds color, never as a finding.
+
+**[FOUND LIVE 2026-10-07, BUG]** If the top-10-concentration finding (`A-CONC`,
+`top10_share_of_assigned_pct`) is the hero or a major block, state the obligation count from
+`Top10ConcentrationInstances` and the headcount from `Top10ConcentrationUserCount` - both real,
+verbatim fields now (see `control_totals`). Never have the narrate/render step multiply the
+percentage by `AssignedInstancesDistinct` to get a count itself - a real render did exactly that
+("10 users touch 92.2% of 1,122 distinct assigned obligations") and the implied obligation count
+was refused by the fail-closed number check because it traced to nothing real.
 
 ## What you are given
 
@@ -99,9 +118,10 @@ instance sets overlap ("these two form a two-person pipeline") — never state o
 - Give the reader a way to see every real user with meaningful load, not just the 2-3 worst by
   headline severity — a tenant with hundreds of real users deserves a way to scan/search them, not
   a paragraph naming the worst 2.
-- An estate-wide orientation (`UsersReported`, the real performer:reviewer headcount split, the
-  real sole-reviewer-dependency count) belongs somewhere prominent — cheap, real, and orients the
-  reader before per-user detail.
+- An estate-wide orientation (`UsersReported`, the real performer:reviewer headcount split)
+  belongs somewhere prominent — cheap, real, and orients the reader before per-user detail.
+  `InstancesWithSoleReviewer` is NOT part of this orientation — see the note above, it is
+  structural on every tenant and never belongs in a prominent/headline slot.
 - Surface `ImprisonmentInstances` explicitly somewhere for any user who carries real jail-risk
   exposure — a real, board-relevant fact.
 - If `MedianDaysEarlyLate`/timing data exists for enough users, a real early/late pattern is a
@@ -141,8 +161,10 @@ well (a menu, not a list you must use - invent your own if something fits better
   `OtherRoleInstances` side by side for the top loaded users.
 - **Engagement vs workload matrix / heatmap** - `EngagementBand` or `Logins12m` against load, to
   show people holding live work who rarely log in.
-- **Proportion / waffle bar** - sole-reviewer share (`InstancesWithSoleReviewer` of
-  `ScopedInstances`), or on-time vs overdue for the estate.
+- **Proportion / waffle bar** - on-time vs overdue for the estate. (Not
+  `InstancesWithSoleReviewer`/`ScopedInstances` - that ratio is ~100% on every tenant by data-model
+  design, so a waffle of it is always a solid block of one colour; it is not a finding worth a
+  whole visual.)
 - **Exposure lollipop** - users with `ImprisonmentInstances > 0`, ranked.
 
 Every visual must be **interactive**: hover (or focus) on a mark shows that mark's real values

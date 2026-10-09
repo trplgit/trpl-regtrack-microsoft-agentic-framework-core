@@ -49,7 +49,7 @@ public sealed class FetchDimensionsActivityTests
             .ReturnsAsync(new DimensionResult<LocationControlTotals, LocationRow>("Location", new LocationControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetEntityAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<EntityControlTotals, EntityRow>("Entity",
-                new EntityControlTotals(0, 0, true, 0, 0, 0, 0, 0, EntityCountShape.SingleEntity, 0, ComparisonGrain.Locations, ""), [], [], [], [], []));
+                new EntityControlTotals(0, 0, true, 0, 0, 0, 0, 0, EntityCountShape.SingleEntity, null, 0, ComparisonGrain.Locations, ""), [], [], [], [], []));
         repo.Setup(r => r.GetRiskAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<RiskControlTotals, RiskRow>("Risk", new RiskControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetNatureAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
@@ -76,18 +76,20 @@ public sealed class FetchDimensionsActivityTests
             .ReturnsAsync(new DimensionResult<EvidenceIntegrityControlTotals, EvidenceIntegrityRow>("EvidenceIntegrity", new EvidenceIntegrityControlTotals(), [], [], [], [], []));
         repo.Setup(r => r.GetForwardRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DimensionResult<ForwardRiskControlTotals, ForwardRiskRow>("ForwardRisk", new ForwardRiskControlTotals(), [], [], [], [], []));
+        repo.Setup(r => r.GetCoverageGapsAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DimensionResult<CoverageGapsControlTotals, CoverageGapsRow>("CoverageGaps", new CoverageGapsControlTotals(), [], [], [], [], []));
         return repo;
     }
 
     [Fact]
-    public async Task RunAsync_AllFifteenSucceed_ReturnsEmptyFailedDimensions()
+    public async Task RunAsync_AllSixteenSucceed_ReturnsEmptyFailedDimensions()
     {
         var repo = BuildHealthyRepository();
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd));
 
-        Assert.Equal(15, result.DimensionResults.Count);
+        Assert.Equal(16, result.DimensionResults.Count);
         Assert.Empty(result.FailedDimensions);
     }
 
@@ -108,7 +110,7 @@ public sealed class FetchDimensionsActivityTests
 
         var result = await activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd));
 
-        Assert.Equal(14, result.DimensionResults.Count);
+        Assert.Equal(15, result.DimensionResults.Count);
         Assert.DoesNotContain("Risk", result.DimensionResults.Keys);
         Assert.Equal(["Risk"], result.FailedDimensions);
         recorder.Verify(r => r.RecordBlockFailure("Risk"), Times.Once);
@@ -161,9 +163,9 @@ public sealed class FetchDimensionsActivityTests
         await Assert.ThrowsAsync<DimensionDictionaryGapException>(() => activity.RunAsync(new FetchDimensionsInput(UserId, TenantId, WindowStart: WindowStart, WindowEnd: WindowEnd)));
     }
 
-    /// <summary>[TRAP this guards] All fifteen failing is total failure, not a fifteen-placeholder "partial" report with nothing real in it.</summary>
+    /// <summary>[TRAP this guards] All sixteen failing is total failure, not a sixteen-placeholder "partial" report with nothing real in it.</summary>
     [Fact]
-    public async Task RunAsync_AllFifteenDimensionsFail_ThrowsRatherThanReturningAnEmptyReport()
+    public async Task RunAsync_AllSixteenDimensionsFail_ThrowsRatherThanReturningAnEmptyReport()
     {
         var repo = new Mock<IDimensionRepository>();
         repo.Setup(r => r.GetLocationAsync(UserId, TenantId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
@@ -196,6 +198,8 @@ public sealed class FetchDimensionsActivityTests
             .ThrowsAsync(new DimensionReconciliationException("EvidenceIntegrity", TenantId, new Exception("inner")));
         repo.Setup(r => r.GetForwardRiskAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DimensionReconciliationException("ForwardRisk", TenantId, new Exception("inner")));
+        repo.Setup(r => r.GetCoverageGapsAsync(UserId, TenantId, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DimensionReconciliationException("CoverageGaps", TenantId, new Exception("inner")));
 
         var activity = new FetchDimensionsActivity(repo.Object, NullLogger<FetchDimensionsActivity>.Instance);
 

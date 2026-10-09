@@ -57,9 +57,16 @@ half the estate.
   (null for the Others row and anything below the materiality floor), `Flags`.
 - `dimension_control_totals`: `ScopedInstances`, `CategorisedInstances` (rows alone do NOT sum to
   `ScopedInstances` — see the trap below), `Reconciled`,
-  `OverdueInstances`, `TenantOverduePct`, `TenantImprisonmentSharePct`, `NaturesReported`,
+  `OverdueInstances`, `TenantOverduePct`, `TenantImprisonmentInstances`,
+  `TenantImprisonmentSharePct`, `NaturesReported`,
   `NaturesWithObligations`, `RetiredNaturesStillInUse`, `OthersBucketInstances`,
   `UntaggedInstances`, `UncategorisedInstances`, `UncategorisedPct`.
+
+**[FOUND LIVE 2026-10-06] If you build a number/formula breakdown for `TenantImprisonmentSharePct`,
+the numerator is `TenantImprisonmentInstances` - cite it verbatim, never compute it yourself from
+the percentage and `ScopedInstances`.** The same mistake on Act's `LargestRegulatorSharePct` got a
+real report refused by the untraceable-number gate - a derived number is not a value from any real
+field, however arithmetically correct.
 
 Every number you use must come from one of these four pools. Nothing else exists.
 

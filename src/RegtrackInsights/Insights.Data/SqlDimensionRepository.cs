@@ -25,6 +25,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
     private const int InternalErrorBase    = 51110;
     private const int EventErrorBase       = 51120;
     private const int LicenceErrorBase     = 51160;
+    private const int CoverageGapsErrorBase = 51200;
 
     /*  Measured: 30s on a large tenant, and the largest tenant in the estate carries ~1.49M
         past-due schedules and has not been timed. The default 30s command timeout would fail
@@ -294,6 +295,20 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
             dictionaryGapCodes: [],
             userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
 
+    /*  sql/27 owns block 51200-51209: 51200 SCOPE DENIED, 51201/51202 RECONCILIATION FAILED
+        (per-branch gap counts not tying to the gap set; rows not covering every leaf branch). No
+        dictionary-gap code of its own - EXEC dbo.usp_Insights_AssertStatusCoverage (sql/01) covers
+        that path, same as every other dimension. Deployed and live in production; never modified
+        from this repo.                                                                            */
+    public Task<DimensionResult<CoverageGapsControlTotals, CoverageGapsRow>> GetCoverageGapsAsync(
+        int userId, int customerId, DateTime? asOf = null, CancellationToken cancellationToken = default) =>
+        ExecuteAsync<CoverageGapsControlTotals, CoverageGapsRow>(
+            "CoverageGaps", "dbo.usp_Insights_Dimension_CoverageGaps",
+            scopeDeniedCode: CoverageGapsErrorBase,
+            reconciliationCodes: [CoverageGapsErrorBase + 1, CoverageGapsErrorBase + 2],
+            dictionaryGapCodes: [],
+            userId, customerId, new { UserID = userId, CustomerID = customerId, AsOf = asOf }, null, cancellationToken);
+
     /// <summary>
     /// Reads the five result sets positionally and translates the proc's THROWs into typed
     /// exceptions. ORDER IS THE CONTRACT - the procs emit no result-set names, so reading these
@@ -427,7 +442,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         return new EntityControlTotals(
             r.ScopedInstances, r.SumOfRows, r.Reconciled, r.OverdueInstances, r.TenantOverduePct,
             r.NodesReported, r.ActiveBranchesInTenant, r.ApexEntityCount,
-            ParseShape(r.TenantShape), r.LargestApexSharePct,
+            ParseShape(r.TenantShape), r.LargestApexInstances, r.LargestApexSharePct,
             ParseGrain(r.ComparisonGrain), r.GrainReason);
     }
 
@@ -546,6 +561,7 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
         public int ActiveBranchesInTenant { get; init; }
         public int ApexEntityCount { get; init; }
         public string TenantShape { get; init; } = string.Empty;
+        public int? LargestApexInstances { get; init; }
         public decimal LargestApexSharePct { get; init; }
         public string ComparisonGrain { get; init; } = string.Empty;
         public string GrainReason { get; init; } = string.Empty;

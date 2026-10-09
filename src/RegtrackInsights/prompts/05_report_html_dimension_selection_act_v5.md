@@ -172,6 +172,15 @@ a "HOW IT IS CALCULATED" fraction box with the real numbers on it.
 write one of these percentages in your prose this run, this section produces nothing - never invent
 one to have something to wrap.
 
+**[FOUND LIVE 2026-10-06] A bare "Regulator ID {N}" next to the percentage means nothing to a
+reader - nobody knows what regulator 79 is.** When the `LargestRegulatorSharePct` row applies,
+wrap the WHOLE phrase - the "ID {N}" text AND the percentage together, e.g. `ID 79 &middot;
+40.9%` - in the one `.pf` hover trigger, not the percentage alone. The panel's own description
+sentence already names it "Regulator ID {LargestRegulatorId}" in plain words ("the single largest
+regulator"), so hovering either half of the headline explains the whole fact: this is an internal
+reference number, not a public name (no regulator name exists in this data - see the NOT AVAILABLE
+table below), and here is the real count behind it.
+
 Reuse the SAME `.hr` mechanism section 7 already requires (same checkbox/label/panel, same
 hover-to-preview / click-to-pin / Escape-to-close) - just styled and triggered differently: the
 trigger is the percentage text itself (dotted underline, not a round "i" badge), and the panel body
@@ -261,15 +270,26 @@ percentage or a new formula:**
 | `OverduePct` (an act row) | Overdue percentage | "The percentage of {ActName}'s compliances counted this period that are overdue." | Overdue compliances (this law) | Compliances counted (this law) |
 | `TenantOverduePct` | Overdue percentage | "The percentage of all compliances counted this period that are overdue." | Overdue compliances (across all laws) | Compliances counted (across all laws) |
 | `UnlinkedPct` | Unlinked percentage | "The percentage of all compliances counted this period that are not correctly linked to their law." | Unlinked compliances | Compliances counted (across all laws) |
-| `LargestRegulatorSharePct` (numerator = `LargestRegulatorSharePct` / 100 x `SumOfRows`, rounded to a whole number - compute it, never invent it; dividing it back by `SumOfRows` and multiplying by 100 must reproduce `LargestRegulatorSharePct`) | Largest single-regulator share | "The percentage of all compliances counted this period that fall under the single largest regulator (Regulator ID {LargestRegulatorId})." | Compliances under the largest regulator (Regulator ID {LargestRegulatorId}) | Compliances counted (across all laws) |
+| `LargestRegulatorSharePct` (numerator = `LargestRegulatorInstances`, [FIXED 2026-10-06] cited VERBATIM from the real field - never computed from the percentage, see the note right below) | Largest single-regulator share | "The percentage of all compliances counted this period that fall under the single largest regulator (Regulator ID {LargestRegulatorId})." | Compliances under the largest regulator (Regulator ID {LargestRegulatorId}) | Compliances counted (across all laws) |
+
+**[FIXED 2026-10-06] The `LargestRegulatorSharePct` numerator is `LargestRegulatorInstances` - cite it
+verbatim, never calculate it from the percentage and a total.** A real render computed it itself
+(percentage x total, rounded) instead of citing this real field - arithmetically correct, but not a
+value that exists anywhere in the data, and the whole report was refused over it (the untraceable-
+number gate, CLAUDE.md non-negotiable #5: comparatives are computed in SQL, never derived by the
+model). This happened on this exact table row, so re-reading this note before writing this one row
+matters more than any other row above.
 
 **[FIXED 2026-10-01] "Compliances counted" in every row above means `SumOfRows`, never `ScopedInstances`.**
-`ScopedInstances` is the distinct-OBLIGATION count; `OverduePct`/`UnlinkedPct`/`LargestRegulatorSharePct`
-are all computed against `SumOfRows`, the scoped OCCURRENCE total (one obligation recurring 3 times
-in the period counts as 3). The two numbers differ on a real tenant (e.g. 142 vs 280) - if you
-back-compute a numerator from the wrong one, it matches no real data and the report gets refused as
-fabricated. When a numerator/denominator pair must multiply back to a shown percentage, the "total
-compliances" side of that pair is `SumOfRows`.
+Think of it like a monthly return that comes due three times in the 90-day window: `SumOfRows`
+counts that THREE times (once per real due-date - "how much work actually happened"), while
+`ScopedInstances` counts the SAME obligation ONCE (the real, distinct thing you have to comply with
+- "how many different compliance obligations exist"). Both numbers are real; they just answer
+different questions, and they differ on a real tenant (e.g. 142 vs 280). `OverduePct`/`UnlinkedPct`/
+`LargestRegulatorSharePct` are all computed against `SumOfRows` (the due-date count) - if you
+back-compute a numerator from `ScopedInstances` (the distinct-obligation count) instead, it matches
+no real data and the report gets refused as fabricated. When a numerator/denominator pair must
+multiply back to a shown percentage, the "total compliances" side of that pair is `SumOfRows`.
 
 Rules:
 - **Only `span` tags inside `.hr`, ever** - never `aside`, `div`, `h4`, or `p`.
@@ -583,13 +603,13 @@ only — no regulator name is available), `CategoryId`, `Instances`, `Overdue`, 
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `SumOfRows`,
 `Reconciled`, `OverdueInstances`, `TenantOverduePct`, `ActsReported`, `DistinctActNames`,
 `StatesCovered`, `ActsSpanningMultipleStates`, `UnlinkedInstances`, `UnlinkedPct`,
-`LargestRegulatorId`, `LargestRegulatorSharePct`.
+`LargestRegulatorId`, `LargestRegulatorInstances`, `LargestRegulatorSharePct`.
 
 | Fact | Status |
 |---|---|
 | "Tasks come from {N} laws across {M} states" | **REAL** — `DistinctActNames`/`ActsReported` and `StatesCovered`. |
 | "Every task is correctly linked to its law" | **REAL only when `UnlinkedPct` == 0** — otherwise state the real `UnlinkedInstances`/`UnlinkedPct` plainly. Never claim full linkage when `UnlinkedInstances > 0`. |
-| "The single largest regulator accounts for {X}% of all tasks" | **REAL as a %** — `LargestRegulatorSharePct`. **The regulator's NAME is NOT AVAILABLE** — say "the single largest regulator," never name it. |
+| "The single largest regulator accounts for {X}% of all tasks" | **REAL as a %** — `LargestRegulatorSharePct`. **The regulator's NAME is NOT AVAILABLE** — say "the single largest regulator," never name it. **If you build a number-formula breakdown for this %, the numerator is `LargestRegulatorInstances` cited verbatim — [FOUND LIVE 2026-10-06] never multiply the percentage by a total yourself; that produced an unverifiable number and got the whole report refused.** |
 | A per-regulator or per-category rollup | **NOT AVAILABLE** — rows are per-act; no aggregation beyond `LargestRegulatorSharePct` exists. |
 | "Fire safety stands out twice" / any subject-clustering claim | **NOT AVAILABLE as an analytic claim.** Note factually only what is literally visible in the real escaped names — never infer a root cause. |
 | "Store reach %" for an act | **NOT AVAILABLE as a %** — `BranchesCovered` is a real raw count only. |
@@ -650,15 +670,33 @@ chart must follow these rules, whatever its shape:
   that would touch another label, a mark it does not belong to, or the chart edge is shortened with
   "…" (full name kept in its hover/focus detail and `aria-label`) or hidden - never left
   overlapping. Leave 4px between labels.
-- **Small tiles and thin bars carry no text inside.** Print a name or value inside a tile or bar
-  only when it fits on at most two lines at full size (roughly 64px wide and 36px tall). Anything
-  smaller shows its name and value on hover/focus only. Never break a word into single letters,
-  never stack letters vertically, and never put a badge on a tile narrower than the badge; mark such
-  a tile with its colour or outline instead and explain it in the legend.
-- **Crowded points (timelines, dot plots, scatter).** When labels of nearby points would collide,
-  stagger them into rows or connect them with short leader lines. If they still collide, label
-  only the most important points (the ones the text above discusses) and put the rest in a list
-  or legend under the chart.
+- **Small tiles and thin bars carry no text inside - but never leave a tile completely blank.**
+  Print the full name or value inside a tile or bar only when it fits on at most two lines at full
+  size (roughly 64px wide and 36px tall). [FOUND LIVE 2026-10-06] A tile too small for the name but
+  still big enough for a short id (`ActID`, roughly 24px wide) prints the id alone, small and
+  centered, instead of being left empty - a reader looking at a wall of blank coloured boxes has no
+  way in at all, while an id at least gives them something to search or ask about. Only when the
+  tile is too small even for that short id does it fall back to colour/outline only, explained in
+  the legend. Every tile, whatever it shows on its face - full name, id-only, or nothing - gets the
+  SAME real name/value on hover/focus (never skip the hover just because the tile already shows the
+  id). Never break a word into single letters, never stack letters vertically, and never put a badge
+  on a tile narrower than the badge.
+- **Crowded points (timelines, dot plots, scatter, bubble charts).** [FOUND LIVE 2026-10-08] This
+  covers two different collisions - the MARKS themselves (circles/dots stacking on top of each
+  other so only one is visible) and their LABELS (text overlapping text) - fix both, not just the
+  second. A real Departments bubble chart shipped with 4-5 low-volume department marks stacked
+  exactly on top of each other with only one label visible - the others were not just unlabeled,
+  they were not even visible as separate marks.
+  - **Marks:** before drawing, compute each mark's natural (x,y). If a mark's own radius overlaps
+    an already-placed mark's radius plus a small gap, search outward in a spiral/ring pattern
+    (step the angle, grow the radius each full turn) for the nearest free spot, clamp inside the
+    chart's plot area, and draw a short thin connector line from the real (x,y) to the displaced
+    position so the point's true value is never misread from its moved position. Never let two
+    marks render at the same pixel - a user cannot distinguish or hover a mark fully hidden under
+    another one.
+  - **Labels:** when labels of nearby points would collide, stagger them into rows or connect
+    them with short leader lines. If they still collide, label only the most important points
+    (the ones the text above discusses) and put the rest in a list or legend under the chart.
 - **Axis labels.** Prefer horizontal labels on a horizontal bar chart (names on the left) over
   rotated labels under vertical bars. If labels must rotate, measure the longest one and reserve
   that much space below the axis so nothing is clipped; otherwise shorten with "…".

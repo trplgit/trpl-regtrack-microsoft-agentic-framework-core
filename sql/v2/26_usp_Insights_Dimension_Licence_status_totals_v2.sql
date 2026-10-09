@@ -45,6 +45,14 @@
   licence_v8.md (prompt change tracked separately from this SQL change).
 
   IDEMPOTENT. ASCII only. Target: SQL Server (vitComplianceSystem)
+
+  [FOUND LIVE 2026-10-05] #rows.LicenseTypeName NVARCHAR(300) too narrow for
+  the real source: Lic_tbl_LicenseType_Master.Name is varchar(MAX), unbounded
+  (current real max seen: 212 chars, safe for now but structurally unbounded).
+  Same bug class as the 2026-09-23 Caveat truncation (CLAUDE.md Sec.5) -
+  widened defensively to NVARCHAR(600). Same fix applied the same day to
+  Location/Internal/Entity/CoverageGaps (BranchName/ApexName) and Act
+  (ActName).
 ===========================================================================*/
 
 SET NOCOUNT ON;
@@ -247,7 +255,7 @@ BEGIN
     IF OBJECT_ID('tempdb..#rows') IS NOT NULL DROP TABLE #rows;
     CREATE TABLE #rows (
         LicenseTypeID          INT            NOT NULL PRIMARY KEY,
-        LicenseTypeName        NVARCHAR(300)  NULL,
+        LicenseTypeName        NVARCHAR(600)  NULL,
         IsRetired              BIT            NOT NULL,
         TotalLicences          INT            NOT NULL,
         ActiveLicences         INT            NOT NULL,

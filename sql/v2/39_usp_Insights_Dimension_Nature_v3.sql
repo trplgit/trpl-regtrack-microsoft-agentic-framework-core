@@ -184,9 +184,16 @@ BEGIN
     DECLARE @hasAnyObligations BIT = CASE WHEN @scopedTotal > 0 THEN 1 ELSE 0 END;
     DECLARE @tenantOverduePct DECIMAL(5,1) =
         CASE WHEN @scopedTotal = 0 THEN 0 ELSE 100.0 * (SELECT COUNT(*) FROM #ovdocc) / @scopedTotal END;
+    -- [FOUND LIVE 2026-10-06, same class as Act's LargestRegulatorInstances fix] Real count behind
+    -- TenantImprisonmentSharePct, exposed below so the render agent cites it directly instead of
+    -- deriving it from the percentage and @scopedTotal - a derived number is not a value from any
+    -- real field and gets the whole report refused by the untraceable-number gate (CLAUDE.md
+    -- non-negotiable #5).
+    DECLARE @tenantImprisonmentInstances INT =
+        (SELECT COUNT(*) FROM #occ x JOIN #inst i ON i.ComplianceInstanceID = x.ComplianceInstanceID WHERE i.Imprisonment = 1);
     DECLARE @tenantImpSharePct DECIMAL(5,1) =
         CASE WHEN @scopedTotal = 0 THEN 0
-             ELSE 100.0 * (SELECT COUNT(*) FROM #occ x JOIN #inst i ON i.ComplianceInstanceID = x.ComplianceInstanceID WHERE i.Imprisonment = 1) / @scopedTotal END;
+             ELSE 100.0 * @tenantImprisonmentInstances / @scopedTotal END;
 
     DECLARE @othersInstances INT =
         (SELECT ISNULL(SUM(Instances),0) FROM #rows WHERE NatureName LIKE N'Other%');
@@ -225,6 +232,7 @@ BEGIN
         CAST(1 AS BIT)               AS Reconciled,
         (SELECT COUNT(*) FROM #ovdocc) AS OverdueInstances,
         @tenantOverduePct            AS TenantOverduePct,
+        @tenantImprisonmentInstances AS TenantImprisonmentInstances,
         @tenantImpSharePct           AS TenantImprisonmentSharePct,
         (SELECT COUNT(*) FROM #rows) AS NaturesReported,
         (SELECT COUNT(*) FROM #rows WHERE Instances > 0) AS NaturesWithObligations,

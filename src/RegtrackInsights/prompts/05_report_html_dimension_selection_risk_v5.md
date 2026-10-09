@@ -419,12 +419,12 @@ imply it orders severity), `RiskLabel` (the real name — always use this), `Ins
 **Every real tenant-level total** (`dimension_control_totals`): `ScopedInstances`, `SumOfRows`,
 `Reconciled`, `OverdueInstances`, `TenantOverduePct`, `RiskLevelsReported`,
 `RiskLevelsWithObligations`, `CriticalRiskType`, `ImprisonmentInstances`,
-`ImprisonmentOnCriticalPct`.
+`ImprisonmentOnCriticalInstances`, `ImprisonmentOnCriticalPct`.
 
 | Fact | Status |
 |---|---|
 | "The Critical tier runs {better/worse} than the tenant average" | **REAL, with a computed direction** — `A-CRIT`'s `Direction` field. Never assume "Critical" means "worst-performing" — state whichever way the real number points. |
-| "Critical items and imprisonment exposure are basically the same thing here" | **REAL** — `A-IMP-OVERLAP`'s `ImprisonmentOnCriticalPct`. State it ONCE as one fact; never present Critical-tier volume and imprisonment exposure as two separate findings when this assertion is present — see its `narrative_guard`. |
+| "Critical items and imprisonment exposure are basically the same thing here" | **REAL** — `A-IMP-OVERLAP`'s `ImprisonmentOnCriticalPct`. State it ONCE as one fact; never present Critical-tier volume and imprisonment exposure as two separate findings when this assertion is present — see its `narrative_guard`. **If you build a number-formula breakdown for it, the numerator is `ImprisonmentOnCriticalInstances` cited verbatim — [FOUND LIVE 2026-10-06] never multiply the percentage by `ImprisonmentInstances` yourself; that produced an unverifiable number and got a real report (Act) refused.** |
 | Any ownership / "ownership gap" claim | **NOT AVAILABLE** — every compliance has an active performer (see the note at the top). Ignore any `A-OWNGAP-*` assertion. |
 | "Risk level 3 is the most severe" or any severity claim from the raw `RiskType` number | **NOT AVAILABLE as a numeric ordering** — `RiskType` values are 3=Critical, 0=High, 1=Medium, 2=Low, not severity-ordered. Use `RiskLabel` only, never the raw integer. |
 | A root cause for why a tier is better/worse-managed | **NOT AVAILABLE** — state the pattern, never infer why. |
@@ -490,10 +490,22 @@ chart must follow these rules, whatever its shape:
   smaller shows its name and value on hover/focus only. Never break a word into single letters,
   never stack letters vertically, and never put a badge on a tile narrower than the badge; mark such
   a tile with its colour or outline instead and explain it in the legend.
-- **Crowded points (timelines, dot plots, scatter).** When labels of nearby points would collide,
-  stagger them into rows or connect them with short leader lines. If they still collide, label
-  only the most important points (the ones the text above discusses) and put the rest in a list
-  or legend under the chart.
+- **Crowded points (timelines, dot plots, scatter, bubble charts).** [FOUND LIVE 2026-10-08] This
+  covers two different collisions - the MARKS themselves (circles/dots stacking on top of each
+  other so only one is visible) and their LABELS (text overlapping text) - fix both, not just the
+  second. A real Departments bubble chart shipped with 4-5 low-volume department marks stacked
+  exactly on top of each other with only one label visible - the others were not just unlabeled,
+  they were not even visible as separate marks.
+  - **Marks:** before drawing, compute each mark's natural (x,y). If a mark's own radius overlaps
+    an already-placed mark's radius plus a small gap, search outward in a spiral/ring pattern
+    (step the angle, grow the radius each full turn) for the nearest free spot, clamp inside the
+    chart's plot area, and draw a short thin connector line from the real (x,y) to the displaced
+    position so the point's true value is never misread from its moved position. Never let two
+    marks render at the same pixel - a user cannot distinguish or hover a mark fully hidden under
+    another one.
+  - **Labels:** when labels of nearby points would collide, stagger them into rows or connect
+    them with short leader lines. If they still collide, label only the most important points
+    (the ones the text above discusses) and put the rest in a list or legend under the chart.
 - **Axis labels.** Prefer horizontal labels on a horizontal bar chart (names on the left) over
   rotated labels under vertical bars. If labels must rotate, measure the longest one and reserve
   that much space below the axis so nothing is clipped; otherwise shorten with "…".

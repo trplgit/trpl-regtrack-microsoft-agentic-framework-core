@@ -610,6 +610,8 @@ already-reconciled SQL output. Everything you state must trace to it.
 | A joint "imprisonment AND overdue" figure | **NOT AVAILABLE as a joint %.** `ImprisonmentInstances` and `Overdue` are separate real marginals on each row; never multiply them together and present the product as real. |
 | A two-account pairing/overlap claim ("99% overlap between these two") | **NOT AVAILABLE.** No real field measures instance-set overlap between specific accounts — never state or imply one. |
 | A real early/late timing pattern | **REAL when `MedianDaysEarlyLate`/`TimingSampleSize` exist for enough real users** — negative is typically early, positive typically late; never treat a `null` reading as 0. |
+| "Every obligation depends on one reviewer" / sole-reviewer risk, dependency, or single-point-of-failure framing | **NEVER A FINDING, NEVER ALERT STYLING.** [FOUND LIVE 2026-10-05] `InstancesWithSoleReviewer` sits at or near 100% of `ScopedInstances` on every tenant — a reviewer-role assignment is structurally one slot per instance, not a per-tenant fact. A real render made this the hero headline with `card--alert`/warning-tag styling; it carries zero per-tenant signal and must never be the hero, never styled as a warning/alert, never called a risk or dependency. If mentioned at all, one neutral line in passing, nothing more. |
+| "The N busiest users touch X% of assigned obligations" / top-10 concentration, reach, or coverage framing | **The percentage (`A-CONC` assertion's `Value`) is real and traceable - cite it verbatim. [FOUND LIVE 2026-10-07, BUG] The OBLIGATION COUNT this implies (percentage x denominator) is NOT traceable - a real render wrote "10 users touch 92.2% of 1,122 distinct assigned obligations" and the 1,122 obligations figure got refused (`UNTRACEABLE_NUMBERS`) because no field actually holds it. Use `Top10ConcentrationInstances` verbatim for the obligation count, and `Top10ConcentrationUserCount` verbatim for the headcount (not a hardcoded "10" or "ten") - never multiply the percentage by `AssignedInstancesDistinct` yourself.** |
 
 ## The `window` data_quality entry — read this before writing the scope line, ADDED 2026-09-25
 
@@ -674,10 +676,22 @@ chart must follow these rules, whatever its shape:
   smaller shows its name and value on hover/focus only. Never break a word into single letters,
   never stack letters vertically, and never put a badge on a tile narrower than the badge; mark such
   a tile with its colour or outline instead and explain it in the legend.
-- **Crowded points (timelines, dot plots, scatter).** When labels of nearby points would collide,
-  stagger them into rows or connect them with short leader lines. If they still collide, label
-  only the most important points (the ones the text above discusses) and put the rest in a list
-  or legend under the chart.
+- **Crowded points (timelines, dot plots, scatter, bubble charts).** [FOUND LIVE 2026-10-08] This
+  covers two different collisions - the MARKS themselves (circles/dots stacking on top of each
+  other so only one is visible) and their LABELS (text overlapping text) - fix both, not just the
+  second. A real Departments bubble chart shipped with 4-5 low-volume department marks stacked
+  exactly on top of each other with only one label visible - the others were not just unlabeled,
+  they were not even visible as separate marks.
+  - **Marks:** before drawing, compute each mark's natural (x,y). If a mark's own radius overlaps
+    an already-placed mark's radius plus a small gap, search outward in a spiral/ring pattern
+    (step the angle, grow the radius each full turn) for the nearest free spot, clamp inside the
+    chart's plot area, and draw a short thin connector line from the real (x,y) to the displaced
+    position so the point's true value is never misread from its moved position. Never let two
+    marks render at the same pixel - a user cannot distinguish or hover a mark fully hidden under
+    another one.
+  - **Labels:** when labels of nearby points would collide, stagger them into rows or connect
+    them with short leader lines. If they still collide, label only the most important points
+    (the ones the text above discusses) and put the rest in a list or legend under the chart.
 - **Axis labels.** Prefer horizontal labels on a horizontal bar chart (names on the left) over
   rotated labels under vertical bars. If labels must rotate, measure the longest one and reserve
   that much space below the axis so nothing is clipped; otherwise shorten with "…".

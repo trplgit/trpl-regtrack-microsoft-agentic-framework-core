@@ -108,6 +108,22 @@ public sealed class NumberFormulaInjectorTests
         Assert.Contains("&lt;script&gt;", result);
     }
 
+    // [ADDED 2026-10-08, user-reported] A real rendered panel ("Company-wide overdue percentage
+    // (across all departments with scheduled work)") ran past the panel's own right edge instead
+    // of wrapping - `.pf-diff-label` was `white-space:nowrap`, and flex items default to
+    // `min-width:auto`, so a row holding unbreakable text is never clamped to its flex container's
+    // width even when that container has a fixed max-width. Both halves of the fix are required:
+    // `min-width:0` on the row (lets it actually shrink) and dropping `nowrap` on the label (lets
+    // the now-shrinkable text wrap instead of overflowing).
+    [Fact]
+    public void PfDiffLabel_WrapsLongText_InsteadOfOverflowingThePanel()
+    {
+        var result = NumberFormulaInjector.Inject("<html><body></body></html>", [ActiveFigure]);
+
+        Assert.Contains(".pf-diff-row{display:flex;align-items:baseline;gap:8px;justify-content:center;min-width:0;max-width:100%}", result);
+        Assert.Contains(".pf-diff-label{font-size:11px;color:#585858;white-space:normal;overflow-wrap:break-word;text-align:left}", result);
+    }
+
     /// <summary>A freehand render's real shape varies (status-strip/bubbles/heat-table layouts,
     /// varying outer container class names - see this injector's own doc comment on the 3 real
     /// tenant-1285 trials that motivated it) but always has multiple scripts, inline styles and a

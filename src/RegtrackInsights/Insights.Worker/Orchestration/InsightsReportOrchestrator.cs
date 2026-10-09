@@ -456,8 +456,45 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
         INSTEAD OF DimensionRowsJson/DimensionControlTotalsJson when present; DimensionName is passed
         as "Entity" for this path (matches ReportTypeRouter's own redirect naming). [VERIFY BEFORE
         DEPLOY] in-flight 4.4 instances not checked this session - the frozen 4.4 class is what lets
-        them keep running unaffected regardless. */
-    public const string Version = "4.5";
+        them keep running unaffected regardless.
+
+        Bumped 4.5 -> 4.6: new ScheduleTask call sequence after PlaywrightQaActivity and before
+        SetStage(Complete) - InteractiveTileQaActivity (tile-by-tile interactive-element check) and,
+        only when it finds something, a new bounded patch loop (PatchRenderActivity -> Normalize ->
+        Sanitize -> InteractiveTileQaActivity again, up to maxPatchAttempts=3), independent of the
+        existing maxRenderAttempts full-regenerate loop above. On exhaustion: Cosmetic-only findings
+        ship with the last patched HTML (same posture as LAYOUT_OVERLAP's own last-attempt exception);
+        any surviving Functional finding refuses under a new reason code, INTERACTIVE_ELEMENT_BROKEN.
+        See docs/superpowers/specs/2026-10-07-interactive-tile-qa-design.md. [VERIFY BEFORE DEPLOY]
+        in-flight 4.5 instances not checked this session - the frozen 4.5 class is what lets them keep
+        running unaffected regardless.
+
+        Bumped 4.6 -> 4.7: removed the whole-page VisionQaActivity gate (its ScheduleTask call and
+        its own VISUAL_DEFECT_DETECTED retry-the-whole-render check) from inside the render-retry
+        loop - user decision, superseded by InteractiveTileQaActivity's tile-by-tile check further
+        down (unconditional, already present since 4.6). A real lab run against a live report found
+        genuine defects (a broken pagination counter, inert hover/scroll controls) the whole-page
+        gate's own framing was never positioned to catch; keeping both was judged redundant.
+        VisionQaActivity.cs/MafVisionQaAgent/IVisionQaAgent are left in place, just no longer
+        scheduled from here. [VERIFY BEFORE DEPLOY] in-flight 4.6 instances not checked this
+        session - the frozen 4.6 class is what lets them keep running unaffected regardless.
+
+        Bumped 4.7 -> 4.8: new ScheduleTask call (InjectFontActivity, already used once for the
+        initial render) now also runs inside the patch loop, right after PatchRenderActivity and
+        before Normalize, on every patch attempt - up to 3 extra calls mid-sequence, load-bearing
+        like every prior mid-sequence insertion in this file. Found live: a real Motul BacklogAging
+        report shipped with its self-hosted font silently broken - PatchRenderActivity re-sends the
+        WHOLE document (by that point already carrying the ~30KB of real, opaque base64 glyph data
+        InjectFontActivity embeds) through an LLM call asked to "patch the findings, preserve
+        everything else"; the LLM dropped 2 of the 3 weight blocks entirely and corrupted the one
+        it kept (one character short of the real file - enough to break WOFF2 decoding, so the
+        browser fell back to a system font with no visible error). The font block is now stripped
+        (PoppinsFontInjector.Strip, a pure string transform, same determinism treatment as
+        PartialDimensionPlaceholder.InsertPlaceholders above) before each patch call, so the LLM
+        never has to touch it, and re-injected via this new ScheduleTask call right after. [VERIFY
+        BEFORE DEPLOY] in-flight 4.7 instances not checked this session - the frozen 4.7 class is
+        what lets them keep running unaffected regardless. */
+    public const string Version = "4.8";
 
     // KNOWN LIMITATION, not an oversight: input.Scope (entity-level sub-scoping) is used for
     // persistence's index row (ScopeDescriptor) but not threaded into the dimension queries
@@ -984,10 +1021,10 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             const int maxRenderAttempts = 3;
             ValidateFixedHolisticStructureOutput? structureChecked = null;
 
-            // [ADDED 2026-09-14] Set from VisionQaActivity's own OUTPUT (a real ScheduleTask
-            // result, safely replayable) right before throwing on a real visual defect below -
-            // deliberately NOT read back out of the caught exception on the next iteration, per
-            // the [BUG FOUND LIVE, 2026-09-07] note further down: a custom exception's own content
+            // [ADDED 2026-09-14, UPDATED 2026-10-07] Set from the relevant gate's own activity
+            // OUTPUT (a real ScheduleTask result, safely replayable) right before throwing on a
+            // real defect below - deliberately NOT read back out of the caught exception on the
+            // next iteration, per the [BUG FOUND LIVE, 2026-09-07] note further down: a custom exception's own content
             // does not reliably survive a DTFx replay pass, so deriving this value from it would
             // be a real non-determinism risk. Reading it from the activity output instead is safe
             // because that is exactly what DTFx replay re-derives identically from history.
@@ -1231,44 +1268,16 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                     // (UserDimensionStructureGate.cs), its activity (ValidateUserDimensionStructure
                     // Activity.cs) and their tests - dead code for every real dimension now.
 
-                    // [ADDED 2026-09-14] Real vision-model gate - runs inside this SAME
-                    // render-retry loop, same "structural defect the render agent can plausibly
-                    // fix on a fresh attempt" reasoning the structure gate above already
-                    // documents. Deliberately AFTER the structure gate (cheaper, deterministic
-                    // checks run first) and still inside the try, so a real visual defect reuses
-                    // the exact same catch-and-retry mechanism.
-                    //
-                    // [ADDED 2026-09-15] input.RunVisionQa - see InsightsReportOrchestrationInput's
-                    // own doc comment. When false, this whole gate is skipped - PlaywrightQaActivity
-                    // below is advisory-only already, so with this off NOTHING checks the rendered
-                    // HTML for a real visual defect before it ships. Explicit opt-out, not a default.
-                    if (input.RunVisionQa)
-                    {
-                        var visionResult = await context.ScheduleTask<VisionQaOutput>(
-                            typeof(VisionQaActivity).Name, "1.0", new VisionQaInput(structureChecked.Html));
-                        ChargeAndCheck(visionResult.TotalTokens);
-
-                        // [CHANGED 2026-10-02] `&& renderAttempt < maxRenderAttempts` - same rule the
-                        // layout gate above already follows: a visual defect is cosmetic, so on the
-                        // LAST attempt the report ships (the defect is still logged by
-                        // VisionQaActivity) instead of refusing a report whose numbers all passed
-                        // the untraceable-number gate. Found live: two prod Location runs (tenants
-                        // 1008 and 1300) with zero untraced numbers were refused only because the
-                        // vision model read a deliberately sideways-scrolling table as "cut off".
-                        // The number gate above still refuses on every attempt, the last included.
-                        // Read from the activity OUTPUT, so replay takes the same path; a run that
-                        // already refused here has terminated and is never replayed.
-                        if (visionResult.HasVisualDefect && renderAttempt < maxRenderAttempts)
-                        {
-                            // Set from the ACTIVITY OUTPUT above, not from the exception thrown below -
-                            // see this loop's own doc comment on why that matters for replay safety.
-                            previousVisualIssue = visionResult.Issue;
-                            throw new OrchestrationRefusedException(
-                                "VISUAL_DEFECT_DETECTED",
-                                "We couldn't generate this report to our accuracy standard. Our team has been notified.",
-                                internalDiagnostics: [visionResult.Issue ?? "Vision QA flagged a defect with no issue text."]);
-                        }
-                    }
+                    // [REMOVED 2026-10-07, bump 4.6 -> 4.7] The whole-page VisionQaActivity gate
+                    // (its own retry-the-whole-render VISUAL_DEFECT_DETECTED check) is gone - user
+                    // decision: InteractiveTileQaActivity's tile-by-tile check (below, after this
+                    // loop) supersedes it. A single whole-page screenshot review was both coarser
+                    // (one verdict for the entire page) and, in practice, less reliable than the
+                    // tile-by-tile mechanism - a real lab run against a live report found genuine
+                    // defects (a broken pagination counter, inert hover/scroll controls) that this
+                    // gate's own whole-page framing was never positioned to catch. VisionQaActivity.cs/
+                    // MafVisionQaAgent/IVisionQaAgent are deliberately left in place (not deleted) -
+                    // only this call site is removed; see InsightsReportOrchestrator's own changelog.
 
                     break;
                 }
@@ -1291,6 +1300,62 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
             // [TRAP]: Playwright is cosmetic QA, never a security control). Item 17 (cost/observability,
             // not this slice) is where this result gets logged/alerted on instead of discarded.
             _ = await context.ScheduleTask<PlaywrightQaOutput>(typeof(PlaywrightQaActivity).Name, "1.0", new PlaywrightQaInput(finalStructureChecked.Html));
+
+            // [ADDED 2026-10-07] Design spec Section 4's patch loop. Runs on every report, after
+            // both the structure gate and the vision gate (when enabled) have already passed - see
+            // this file's own "Where this sits in the real pipeline" discussion above each gate.
+            var tileQaResult = await context.ScheduleTask<InteractiveTileQaOutput>(
+                typeof(InteractiveTileQaActivity).Name, "1.0", new InteractiveTileQaInput(finalStructureChecked.Html));
+
+            if (tileQaResult.Findings.Count > 0)
+            {
+                const int maxPatchAttempts = 3;
+                var currentHtml = finalStructureChecked.Html;
+                var remainingFindings = tileQaResult.Findings;
+
+                for (var patchAttempt = 1; patchAttempt <= maxPatchAttempts && remainingFindings.Count > 0; patchAttempt++)
+                {
+                    // [ADDED 2026-10-08, FOUND LIVE] Strip the self-hosted font block before
+                    // handing the document to the patch LLM call, and re-inject a guaranteed-
+                    // correct copy right after - a real Motul BacklogAging report shipped with its
+                    // font silently broken (2 of 3 weight blocks dropped, the third corrupted one
+                    // character short of the real file) because this call was asking the LLM to
+                    // faithfully reproduce ~30KB of opaque base64 glyph data in its own output
+                    // while "preserving everything else". See PoppinsFontInjector.Strip's own doc
+                    // comment. The LLM now never sees that block at all.
+                    var strippedForPatch = PoppinsFontInjector.Strip(currentHtml);
+                    var patchResult = await context.ScheduleTask<PatchRenderOutput>(
+                        typeof(PatchRenderActivity).Name, "1.0", new PatchRenderInput(strippedForPatch, remainingFindings));
+                    ChargeAndCheck(patchResult.TotalTokens);
+
+                    var refonted = await context.ScheduleTask<InjectFontOutput>(typeof(InjectFontActivity).Name, "1.0", new InjectFontInput(patchResult.Html));
+
+                    var patchNormalized = await context.ScheduleTask<NormalizeOutput>(typeof(NormalizeActivity).Name, "1.0", new NormalizeInput(refonted.Html));
+                    var patchSanitized = await context.ScheduleTask<SanitizeOutput>(typeof(SanitizeActivity).Name, "1.0", new SanitizeInput(patchNormalized.Html));
+                    currentHtml = patchSanitized.Html;
+
+                    var reverified = await context.ScheduleTask<InteractiveTileQaOutput>(
+                        typeof(InteractiveTileQaActivity).Name, "1.0", new InteractiveTileQaInput(currentHtml));
+                    remainingFindings = reverified.Findings;
+
+                    if (remainingFindings.Count == 0) break;
+
+                    // [CHANGED 2026-10-08, user decision] Any finding still standing after
+                    // maxPatchAttempts - Cosmetic OR Functional - ships with the last patched HTML,
+                    // same posture LAYOUT_OVERLAP's own last-attempt exception already used for
+                    // Cosmetic alone. Previously a surviving Functional finding refused the whole
+                    // run under INTERACTIVE_ELEMENT_BROKEN; changed after a real false-positive
+                    // incident (InteractiveTileChecker tagging decorative content inside closed help
+                    // panels as testable, refusing real customer reports outright for something that
+                    // was never actually broken). A refused report delivers nothing; a shipped report
+                    // with one stale tile still delivers everything else correctly - judged the
+                    // better failure mode. InteractiveTileQaActivity's own LogWarning on this final
+                    // re-verification call already records the finding for ops to review - nothing
+                    // further to do here.
+                }
+
+                finalStructureChecked = finalStructureChecked with { Html = currentHtml };
+            }
 
             SetStage(InsightsRunStage.Complete, final: true);
             var persistResult = await context.ScheduleTask<PersistOutput>(typeof(PersistActivity).Name, "1.0",
