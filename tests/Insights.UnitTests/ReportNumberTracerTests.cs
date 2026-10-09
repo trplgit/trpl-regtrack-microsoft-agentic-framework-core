@@ -152,6 +152,27 @@ public sealed class ReportNumberTracerTests
     }
 
     [Fact]
+    public void EvenlySpacedAxisTicks_AreNotClaims()
+    {
+        // Departments 1271 (after the first fix): a model-typed axis "0 256 512 768 1,024" - equal
+        // steps from zero to the axis end. The steps between 0 and the end are scale marks.
+        var html = Page("""
+            <div class="axis"><span>Department</span><div class="axis-track"><span>0</span><span>256</span>
+            <span>512</span><span>768</span><span>1,024</span></div></div><p>28 of 40 overdue.</p>
+            """);
+
+        Assert.Equal(["1,024"], ReportNumberTracer.FindUntraced(html, Rows, Totals, [], []));
+    }
+
+    [Fact]
+    public void ARunThatIsNotEvenlySpaced_IsStillChecked()
+    {
+        var html = Page("<p>0</p><p>256</p><p>530</p><p>768</p>");
+
+        Assert.Equal(["256", "530", "768"], ReportNumberTracer.FindUntraced(html, Rows, Totals, [], []));
+    }
+
+    [Fact]
     public void AnInventedNumberInTheHowToReadText_IsStillCaught()
     {
         // Only the illustration is exempt - the panel's written explanation is still checked.
