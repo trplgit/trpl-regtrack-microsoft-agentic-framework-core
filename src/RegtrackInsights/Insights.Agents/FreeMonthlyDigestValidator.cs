@@ -56,6 +56,32 @@ public static partial class FreeMonthlyDigestValidator
         "requires immediate attention", "immediate attention", "crucial", "pressing",
         "risk of non-compliance", "operational challenges", "further complications",
         "mitigate", "swiftly", "heightening", "serious backlog",
+
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] A signal VALUE quoted to the reader: "The
+            mixed close to September left 249 of those compliances rated critical" - "mixed" is the
+            input hint signals.last_month_closing, meaningless in an email. Now that a rejected draft
+            is rewritten once (MaxDraftAttempts = 2), a leak costs a redraft, not the email.      */
+        "mixed close", "a mixed close", "the mixed",
+
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] "37% of all overdue compliances sit at the
+            locations holding the most ...; 9 other locations share that level of overdue work" - the
+            37% is the TOP 3, the 9 is a different detector, and "that level" welded them together.
+            A tester could not match it. Each figure states its own base instead.               */
+        "that level", "share that level",
+        "consequences reach beyond", "reach beyond the company",
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] "Each is among 9 locations with a higher
+            share ... with 8 other locations sharing that position" - a paragraph pointing back at
+            sites named in another paragraph. Each paragraph stands alone (shared Rule 11).         */
+        "sharing that position", "in that position", "the same position", "each is among", "these sites are among",
+        "placing that liability",
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] "Your overdue work is concentrated across the
+            3 locations holding the most" - the label's own words, with no figure. The prompt forbids
+            "holding the most"; a tester cannot match a sentence without a number.                */
+        "holding the most", "is concentrated", "are concentrated",
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08, Users] "Personal liability rests heavily with
+            {{NAME_1}}." / "Personal liability is high for {{NAME_3}}." - a verdict tail after a figure
+            that already said it, with no number a tester can match.                              */
+        "rests heavily", "liability is high for", "a large share rests", "is heavily",
     ];
 
     /*  [MEASURED 2026-09-20] This list is anti-fabrication ONLY - claims no result set supports.
@@ -212,18 +238,243 @@ public static partial class FreeMonthlyDigestValidator
             if (Regex.IsMatch(stripped, $@"\b{Regex.Escape(phrase)}\b", RegexOptions.IgnoreCase))
                 problems.Add($"contains the banned word '{phrase}'");
 
+        // [2026-10-07] No "three" exemption any more - every figure is digits (see Validate).
         foreach (Match m in NumberWord().Matches(stripped))
-            if (!(m.Value.Equals("three", StringComparison.OrdinalIgnoreCase) && prompt.AllowedNumbers.Contains(3)))
-                problems.Add($"spells the number '{m.Value}' as a word - figures must be digits");
+            problems.Add($"spells the number '{m.Value}' as a word - figures must be digits");
 
         return problems.Distinct().ToList();
     }
 
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-07] Two licence sentences where every figure was real
+    /// but attached to the wrong MEANING, so the closed-set check passed:
+    /// <list type="bullet">
+    /// <item>"16 of 64 locations have licences currently expired with no renewal" - 16 is
+    /// <c>pat_expired_unrenewed_location</c> (locations with an UNUSUALLY HIGH share); the locations
+    /// holding such a licence were <c>loc_with_expired_unrenewed</c> = 18.</item>
+    /// <item>"Of these 19 licences, 1 expired during July" - <c>lic_lapsed_last_month</c> counts end
+    /// dates in that month whatever the status today; that licence was renewing, so it is not one of
+    /// the 19 (<c>lic_lapsed_last_month_unrenewed</c> = 0).</item>
+    /// </list>
+    /// Each rule fires only on the exact confusion, so a correctly-worded sentence is never rejected.
+    /// </summary>
+    internal static IEnumerable<string> LicenceMeaningProblems(string text, FreeMonthlyDigestPrompt prompt)
+    {
+        var facts = prompt.Data.Facts
+            .GroupBy(f => f.FactKey, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().FactValue, StringComparer.Ordinal);
+        int? Fact(string key) => facts.TryGetValue(key, out var v) ? v : null;
+
+        var sentences = Regex.Split(text, @"(?<=[.!?])\s+").Where(s => s.Trim().Length > 0).ToList();
+        IReadOnlySet<int> NumbersIn(string s) =>
+            NumberToken().Matches(WithoutOrdinals(Placeholder().Replace(s, "ph")))
+                .Select(m => int.TryParse(m.Value.Replace(",", string.Empty), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1)
+                .Where(n => n >= 0)
+                .ToHashSet();
+
+        // Rule 1 - the pattern count presented as the count of locations holding such a licence.
+        if (Fact("pat_expired_unrenewed_location") is { } pattern
+            && Fact("loc_with_expired_unrenewed") is { } holding
+            && pattern != holding)
+        {
+            /*  [2026-10-08, owner] The comparison itself ("16 of the 64 locations have a higher share
+                of licences expired") is never stated either - it confused readers, so the Licence
+                prompt forbids it, and this now rejects it whatever the wording around the number. */
+            foreach (var s in sentences)
+                if (NumbersIn(s).Contains(pattern)
+                    && Regex.IsMatch(s, @"\b(locations?|sites?)\b", RegexOptions.IgnoreCase)
+                    && Regex.IsMatch(s, @"\bexpired\b", RegexOptions.IgnoreCase))
+                    yield return $"states {pattern} locations with expired licences - {pattern} is the locations with an unusually high share, a comparison this email never states; "
+                                 + $"write only the locations holding an expired licence with no renewal = {holding} (loc_with_expired_unrenewed)";
+        }
+
+        // Rule 1b - [FOUND LIVE on PROD tenant 1008, 2026-10-08] "18 of your 199 locations that hold
+        // licences" - 199 is lic_total (licences), the locations holding licences were 64.
+        if (Fact("loc_with_licences") is { } locBase && Fact("lic_total") is { } licTotal && licTotal != locBase)
+            foreach (var s in sentences)
+                if (Regex.IsMatch(s, $@"\bof (?:your|the) {licTotal:#,0} (?:locations?|sites?)\b", RegexOptions.IgnoreCase)
+                    || Regex.IsMatch(s, $@"\bof (?:your|the) {licTotal} (?:locations?|sites?)\b", RegexOptions.IgnoreCase))
+                    yield return $"says {licTotal} locations - {licTotal} is the number of LICENCES (lic_total); the locations that hold licences are {locBase} (loc_with_licences)";
+
+        // Rule 1c - [FOUND LIVE on PROD tenant 1008, 2026-10-08] "2 licences reached their end date." and
+        // nothing after it: the reader is left to assume they lapsed. Say what became of them.
+        foreach (var (allKey, unrenewedKey) in new[] { ("lic_lapsed_last_month", "lic_lapsed_last_month_unrenewed"), ("lic_lapsed_this_month", "lic_lapsed_this_month_unrenewed") })
+            if (Fact(allKey) is > 0 && (Fact(unrenewedKey) ?? 0) == 0
+                && Regex.IsMatch(text, @"\bend date\b", RegexOptions.IgnoreCase)
+                && !Regex.IsMatch(text, @"\bend date\b[^.]*\.?\s*[^.]*\b(?:since been renewed|renewal (?:filed|in progress)|been renewed|are renewed)\b", RegexOptions.IgnoreCase))
+                yield return $"states licences that reached their end date ({allKey} = {Fact(allKey)}) without saying what became of them - write \"All of them have since been renewed or have a renewal filed.\"";
+
+        // Rule 2 - a recent lapse tied to the expired total with a subset word, when the recent lapse
+        // is not part of it. Only the matching _unrenewed fact may be linked to the expired total.
+        var expiredTotals = new[] { Fact("lic_expired_total"), Fact("lic_expired_unrenewed") }
+            .Where(v => v is > 0).Select(v => v!.Value).ToHashSet();
+        var recent = new[]
+        {
+            (All: Fact("lic_lapsed_last_month"), Unrenewed: Fact("lic_lapsed_last_month_unrenewed")),
+            (All: Fact("lic_lapsed_this_month"), Unrenewed: Fact("lic_lapsed_this_month_unrenewed")),
+        };
+        foreach (var s in sentences)
+        {
+            var numbers = NumbersIn(s);
+            if (!numbers.Overlaps(expiredTotals))
+                continue;
+            if (!Regex.IsMatch(s, @"\b(of (these|those|them|the \d[\d,]*)|including|among (them|these|those)|which include)\b", RegexOptions.IgnoreCase))
+                continue;
+            if (!Regex.IsMatch(s, @"\{\{(PREV|CURR)_MONTH\}\}|\b(last|this) month\b|\b(January|February|March|April|May|June|July|August|September|October|November|December)\b", RegexOptions.IgnoreCase))
+                continue;
+
+            foreach (var (all, unrenewed) in recent)
+                if (all is { } a && a > 0 && a != unrenewed && numbers.Contains(a))
+                    yield return $"ties {a} recent lapse(s) to the expired total with a subset word - those {a} reached their end date in that month whatever "
+                                 + $"their status today and are NOT part of the expired total; only the still-unrenewed {unrenewed ?? 0} may be linked to it";
+        }
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-08] "So far in October, 14,656 compliances are overdue"
+    /// and "So far in October, 19 licences are currently expired" - both are TODAY's figures from any
+    /// month (WindowScope stock). A sentence that opens with "So far in {{CURR_MONTH}}" may only carry
+    /// this month's figures; a number that is a stock fact's value and no curr fact's value fails.
+    /// </summary>
+    internal static IEnumerable<string> WrongPeriodProblems(string text, FreeMonthlyDigestPrompt prompt)
+    {
+        var curr = prompt.Data.Facts.Where(f => f.WindowScope == "curr").Select(f => f.FactValue).ToHashSet();
+        var stockOnly = prompt.Data.Facts.Where(f => f.WindowScope == "stock" && f.FactValue > 1).Select(f => f.FactValue).ToHashSet();
+        stockOnly.ExceptWith(curr);
+        // [2026-10-08] No longer excuses a value that is ALSO last month's: "So far in October, 52 of your 79
+        // locations have overdue compliances with personal liability" passed because 52 was a September figure
+        // too - and a September figure under "So far in October" is just as wrong.
+        if (stockOnly.Count == 0)
+            yield break;
+
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08] Checked per PARAGRAPH, not per sentence: "So far
+            in October, 4,537 ... 14,435 compliances are currently overdue." - the all-months total sat
+            in the October paragraph, in a sentence of its own, and read as October's. A paragraph that
+            opens "So far in {{CURR_MONTH}}" carries only this month's figures.                     */
+        foreach (var paragraph in text.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!SoFarThisMonth().IsMatch(paragraph))
+                continue;
+            foreach (Match m in NumberToken().Matches(WithoutOrdinals(Placeholder().Replace(paragraph, "ph"))))
+                if (int.TryParse(m.Value.Replace(",", string.Empty), NumberStyles.None, CultureInfo.InvariantCulture, out var v) && stockOnly.Contains(v))
+                    yield return $"puts {m.Value} in the \"So far in this month\" paragraph - {m.Value} counts ALL months, so it belongs in its own paragraph starting \"In total, from all months,\" (or \"Currently,\" for licences)";
+        }
+    }
+
+    [GeneratedRegex(@"^\W*so far (?:in|this)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SoFarThisMonth();
+
+    /// <summary>A sentence boundary followed by a lowercase word (bold marker allowed in between).</summary>
+    [GeneratedRegex(@"(?<=[.!?]\s+)(?:\*\*)?[a-z]")]
+    private static partial Regex LowercaseSentenceStart();
+
+    [GeneratedRegex(@"^\W*(?:each|both|these|those|they|it|this|that|of (?:these|those|them|that)|among (?:these|those|them)|the (?:same|other|rest|remaining)|such)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex BackReferenceOpener();
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-08] "37% of all overdue compliances sit at the locations
+    /// holding the most, including your MVASPL site with 2,240" - 37% is the share of the TOP 3
+    /// (<c>*_top3_overdue_share_pct</c>), but the sentence never said 3 and went on to a different
+    /// finding. The top-3 share must say "3" and must not carry a name or another count in the same
+    /// sentence. Skipped when that percentage is also some other figure's value - then a "37%" may
+    /// legitimately be about something else.
+    /// </summary>
+    internal static IEnumerable<string> TopThreeProblems(string text, FreeMonthlyDigestPrompt prompt)
+    {
+        var top = prompt.Data.Facts.FirstOrDefault(f => f.FactKey.Contains("_top3_overdue_share_pct", StringComparison.Ordinal));
+        if (top is null)
+            yield break;
+
+        var pct = top.FactValue;
+        var elsewhere = prompt.Data.Facts.Any(f => !ReferenceEquals(f, top) && f.FactKey.EndsWith("_pct", StringComparison.Ordinal) && f.FactValue == pct)
+                        || prompt.NamedFindings.Any(n => n.Candidate.MetricPct == pct || n.Candidate.TenantPct == pct);
+        if (elsewhere)
+            yield break;
+
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+"))
+        {
+            if (!Regex.IsMatch(sentence, $@"\b{pct}\s*%"))
+                continue;
+            if (!Regex.IsMatch(sentence, @"\b3\s+(?:\w+\s+)?(?:locations?|sites?|people|persons?|users?|Acts?|laws?)\b", RegexOptions.IgnoreCase))
+                yield return $"states {pct}% without saying it is the share of the 3 holding the most overdue work - write \"your 3 locations with the most overdue compliances hold {pct}%\"";
+            if (Regex.IsMatch(sentence, @"\{\{(?:NAME|EG)_\d+\}\}"))
+                yield return $"puts a name in the same sentence as the top-3 share ({pct}%) - give the named one its own sentence with its own count";
+        }
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-08] "In September, 611 compliances were due across your
+    /// organisation, and 611 of them are still open" - 611 is <c>t_lm_still_open</c>; the Location slot has
+    /// no last-month DUE total at all, so the model used the open count as the due count. A figure that
+    /// is only ever an OPEN count must not be stated as what was due.
+    /// </summary>
+    internal static IEnumerable<string> OpenCountAsDueProblems(string text, FreeMonthlyDigestPrompt prompt)
+    {
+        var openOnly = prompt.Data.Facts
+            .Where(f => f.FactKey.Contains("open", StringComparison.Ordinal) && f.FactValue > 1)
+            .Select(f => f.FactValue)
+            .ToHashSet();
+        openOnly.ExceptWith(prompt.Data.Facts.Where(f => !f.FactKey.Contains("open", StringComparison.Ordinal)).Select(f => f.FactValue));
+        openOnly.ExceptWith(prompt.NamedFindings.SelectMany(n => new[] { n.Candidate.ItemCount ?? -1, n.Candidate.BaseCount ?? -1 }));
+        if (openOnly.Count == 0)
+            yield break;
+
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+"))
+            foreach (Match m in DueCount().Matches(WithoutOrdinals(Placeholder().Replace(sentence, "ph"))))
+                if (int.TryParse(m.Groups["n"].Value.Replace(",", string.Empty), NumberStyles.None, CultureInfo.InvariantCulture, out var v) && openOnly.Contains(v))
+                    yield return $"says {m.Groups["n"].Value} were due - {m.Groups["n"].Value} is the count still OPEN, not the count that fell due; this email has no last-month due total, so say only \"{m.Groups["n"].Value} compliances from last month are still open\"";
+    }
+
+    /// <summary>"611 compliances were due", "all 611 compliances due in September", "the 611 that fell due".</summary>
+    [GeneratedRegex(@"\b(?<n>\d[\d,]*)\s+(?:\w+\s+){0,3}?(?:(?:were|was|fell|fall|falls|came|become|became)\s+due|due\s+in\s+ph)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex DueCount();
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-08, insight card] "The total includes licences that fell
+    /// due in earlier months and remain overdue" and "2 licences expired during September and remain
+    /// overdue". A licence is expired, expiring or renewed - never "overdue" or "due"; those words
+    /// belong to compliances, and testers read them against the wrong report.
+    /// </summary>
+    internal static IEnumerable<string> LicenceOverdueProblems(string text)
+    {
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+"))
+            if (Regex.IsMatch(sentence, @"\blicen[cs]es?\b", RegexOptions.IgnoreCase)
+                && !Regex.IsMatch(sentence, @"\bcompliances?\b|\bobligations?\b", RegexOptions.IgnoreCase)
+                && Regex.IsMatch(sentence, @"\boverdue\b|\b(?:fell|falls?) due\b|\bdue in\b", RegexOptions.IgnoreCase))
+                yield return "calls licences overdue or due - a licence is expired (with or without a renewal in progress) or expiring, never overdue";
+    }
+
+    /// <summary>
+    /// [FOUND LIVE on PROD tenant 1008, 2026-10-08] "Of the 614 compliances still open from September."
+    /// reached a draft: a figure with no verb, so the reader cannot tell what is being said about it.
+    /// Every number in it was real, so no other check noticed. A sentence that states a figure must
+    /// have a verb; the list is the verbs these emails actually use, plus any word ending in -ed.
+    ///
+    /// <para>Only a sentence that OPENS like the first half of another ("Of ...", "Among ...",
+    /// "Including ...") is checked. A bare count line - "79 locations in your organisation." - is the
+    /// deterministic fallback's own fact form: readable, and it must never push the fallback to its floor.</para>
+    /// </summary>
+    internal static IEnumerable<string> FragmentProblems(string text)
+    {
+        foreach (var raw in Regex.Split(text.Replace("\r\n", "\n"), @"(?<=[.!?])\s+|\n+"))
+        {
+            var sentence = Placeholder().Replace(raw, "ph").Replace("**", string.Empty).Trim();
+            if (sentence.Length == 0 || !Regex.IsMatch(sentence, @"\d") || HasVerb().IsMatch(sentence)
+                || !Regex.IsMatch(sentence, @"^(?:of|among|including|with|from|across|under|within|and|but|while|which|whereas|plus|along with|together with)\b", RegexOptions.IgnoreCase))
+                continue;
+            yield return $"has a sentence with no verb (\"{(sentence.Length > 80 ? sentence[..80] + "..." : sentence)}\") - every sentence must be complete";
+        }
+    }
+
+    [GeneratedRegex(@"\b(?:is|are|was|were|be|been|has|have|had|do|does|did|can|could|will|would|may|might|must|should|\w+ed|remains?|falls?|fell|carr(?:y|ies)|holds?|held|sits?|sat|shows?|includes?|covers?|accounts?|rests?|expires?|lapses?|stands?|stood|makes?|made|needs?|comes?|came|goes|went|runs?|keeps?|kept|lies?|shares?|depends?|performs?|reviews?|closes?|reaches|leaves?|left|gives?|gave|takes?|took|sees?|saw|gets?|got|owes?|appl(?:y|ies)|stays?|continues?|grows?|grew|rises?|rose|drops?|exceeds?|contains?|counts?|means?|meant|ends?|begins?|began|starts?|trails?|lags?|belongs?|represents?|sees|totals?|equals?|hits?|spans?|tops?|leads?|outnumbers?)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex HasVerb();
+
     public static int MaxWordsFor(MonthlyDigestSlot slot) => slot switch
     {
-        MonthlyDigestSlot.Overview => 700,
-        MonthlyDigestSlot.Licence => 560,
-        _ => 620,
+        // [2026-10-08, owner] The free email is a teaser: about 300 words, these are the hard ceilings.
+        MonthlyDigestSlot.Overview => 450,
+        MonthlyDigestSlot.Licence => 330,
+        _ => 450,
     };
 
     /// <summary>
@@ -248,6 +499,15 @@ public static partial class FreeMonthlyDigestValidator
 
         if (!text.StartsWith("Good morning,", StringComparison.Ordinal))
             failures.Add("does not start with 'Good morning,'");
+
+        // [FOUND LIVE on PROD tenant 1008, 2026-10-08, Licence] The introduction dropped the date line.
+        if (!text.Contains("{{AS_AT}}", StringComparison.Ordinal))
+            failures.Add("does not state the date of the figures - the introduction must end \"The figures below are as of {{AS_AT}}.\"");
+
+        // [FOUND LIVE on PROD tenant 1008, 2026-10-08, Users] "... still open. all 611 compliances due in
+        // September are still open today." - a sentence left starting in lowercase after a clause was cut.
+        foreach (Match m in LowercaseSentenceStart().Matches(text))
+            failures.Add($"a sentence starts in lowercase (\"{text[m.Index..Math.Min(text.Length, m.Index + 30)]}...\") - it has lost its opening words");
 
         // -- placeholders: only ones we supplied, each name/date at most once ------------------
         var placeholderCounts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -282,11 +542,21 @@ public static partial class FreeMonthlyDigestValidator
             [MEASURED 2026-09-21] demanding all of them was the single largest source of rejections -
             9 of 19 - each one costing a true email. The model tends to describe the second finding
             in words ("one location has all its work with one person") rather than name it.       */
-        if (findingNames.Count > 0 && namesUsed == 0)
-            failures.Add($"names none of the {findingNames.Count} finding(s) it was given - the email points at nothing specific");
+        /*  [CHANGED 2026-10-08, product owner: "do not skip insights"] Every named finding is now
+            REQUIRED, not advisory. On PROD tenant 1008 the Location email dropped 2 of its 4 named
+            sites and shipped with only a log line. A rejected draft is redrafted once
+            (MaxDraftAttempts = 2), so the cost is a second call, not the email.                */
+        /*  [REFINED 2026-10-08, same day] The free email is the teaser: the first two named findings
+            are REQUIRED in full, the rest are counted and pointed at RegInsights Ultimate (shared
+            rules Sec.6). So {{NAME_1}} and {{NAME_2}} missing is a failure; {{NAME_3}}+ is advisory. */
+        var requiredNames = findingNames.Where(p => p is "{{NAME_1}}" or "{{NAME_2}}").ToList();
+        var requiredMissing = requiredNames.Where(p => !placeholderCounts.ContainsKey(p)).ToList();
+        if (requiredMissing.Count > 0)
+            failures.Add($"names {namesUsed} of {findingNames.Count} findings - {string.Join(", ", requiredMissing)} went unused; "
+                         + "the first two named findings always get their own sentence with their own figure");
         else if (namesUsed < findingNames.Count)
             advisories.Add($"names {namesUsed} of {findingNames.Count} findings - "
-                           + string.Join(", ", findingNames.Where(p => !placeholderCounts.ContainsKey(p))) + " went unused");
+                           + string.Join(", ", findingNames.Where(p => !placeholderCounts.ContainsKey(p))) + " counted, not named (teaser)");
 
         /*  Examples are colour, never a gate - but an email handed five and using none is the
             "18 locations" count the owner asked to see names beside, so it is logged for tuning. */
@@ -321,21 +591,13 @@ public static partial class FreeMonthlyDigestValidator
             model could write any quantity it liked and nothing would notice. Number words are a
             truth failure for that reason. "three" is the documented exception, allowed only where a
             label says "the 3 holding the most".                                                 */
+        /*  [CHANGED 2026-10-07, product owner] No exceptions any more: every figure is digits. The
+            2026-09-23 exemptions ("three" for top-3 labels, and every number word in a sentence
+            that opens with one) let "Nineteen licences ...", "Three of the eight categories ..."
+            reach testers. FreeMonthlyDraftRepair converts number words before this runs, so a
+            word still here (a compound such as "thirty-two") is a genuine miss and redrafts.   */
         foreach (Match m in NumberWord().Matches(stripped))
-        {
-            var word = m.Value.ToLowerInvariant();
-            if (word == "three" && prompt.AllowedNumbers.Contains(3))
-                continue;
-
-            /*  [2026-09-23] A sentence that OPENS with a number word - "Three of the eight
-                compliance categories ..." - keeps every number word in it as a word, because a
-                sentence never opens with a digit and "Three of the 8" is worse than either. Each
-                is still checked: its value must be in the closed set exactly as a digit would. */
-            if (SentenceOpensWithNumberWord(stripped, m.Index) && NumberWordValues.TryGetValue(word, out var value) && prompt.AllowedNumbers.Contains(value))
-                continue;
-
             failures.Add($"spells the number '{m.Value}' as a word - figures must be digits, or they cannot be checked against the data");
-        }
 
         // -- percentages: only _pct facts and MetricPct/TenantPct -------------------------------
         foreach (Match m in Percentage().Matches(stripped))
@@ -369,6 +631,110 @@ public static partial class FreeMonthlyDigestValidator
             if (!factValues.Contains(value))
                 failures.Add($"says {m.Groups["n"].Value} {m.Groups["phrase"].Value} - that number counts one entity, not the whole scope");
         }
+
+        if (prompt.Data.Edition.Slot == MonthlyDigestSlot.Licence)
+        {
+            failures.AddRange(LicenceMeaningProblems(text, prompt));
+            failures.AddRange(LicenceOverdueProblems(text));
+        }
+
+        failures.AddRange(WrongPeriodProblems(text, prompt));
+        failures.AddRange(TopThreeProblems(text, prompt));
+
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-08, Overview] "2 of the 8 compliance categories have
+            a higher overdue rate ..., including Spark Minda-Toyodenso India - Factory and Co" - a
+            LOCATION example written as a category. Every example and finding carries its EntityKind;
+            a sentence that says "categor(y|ies)" may only name a category, and one that says
+            "location(s)"/"site(s)" may only name a location, person or whatever it is about.      */
+        /*  [FOUND LIVE on PROD tenant 1008, 2026-10-09, Act] "Under {{EG_2}}, 21 of the 22 sites where it
+            applies have it overdue" - 21 of 22 is that Act's COMPLIANCES still open from September (the
+            slippage example), not sites. Only a multi_location_pattern example or finding counts sites. */
+        var countsCompliances = prompt.Examples
+            .Where(e => !(e.Example.Detector ?? string.Empty).Contains("multi_location", StringComparison.Ordinal)
+                        && !(e.Example.PatternFactKey ?? string.Empty).Contains("multi_location", StringComparison.Ordinal))
+            .Select(e => e.Placeholder)
+            .Concat(prompt.NamedFindings.Where(n => n.NamePlaceholder is not null && !n.Candidate.Detector.Contains("multi_location", StringComparison.Ordinal)).Select(n => n.NamePlaceholder!))
+            .ToList();
+        // [FOUND LIVE 2026-10-09, twice] The bold markers sit INSIDE the phrase ("**21 of the 22 sites** where
+        // it applies"), so the match runs on the text with "**" removed.
+        foreach (var sentence in Regex.Split(text.Replace("**", string.Empty), @"(?<=[.!?])\s+"))
+            foreach (var placeholder in countsCompliances)
+                if (sentence.Contains(placeholder, StringComparison.Ordinal)
+                    && Regex.IsMatch(sentence, @"\b(?:sites?|locations?)\b[^.]{0,20}\bwhere\s+it\s+applies\b|\b(?:sites?|locations?)\s+have\s+it\s+overdue\b|\boverdue at \d[\d,]* of (?:the |its )?\d[\d,]* (?:sites?|locations?)\b|\bof (?:the |its )?\d[\d,]* (?:sites?|locations?)\b", RegexOptions.IgnoreCase))
+                    failures.Add($"writes {placeholder}'s figure as sites where it applies - that figure counts COMPLIANCES, not sites; only a multi_location_pattern finding or example counts sites");
+
+        // [FOUND LIVE 2026-10-09] "60-1 of the 210 Acts" - a malformed figure the closed-set check reads as 60 and 1.
+        if (Regex.IsMatch(stripped, @"\d-\d"))
+            failures.Add("contains a malformed figure like \"60-1\" - write one whole number");
+
+        var kinds = prompt.Examples.Select(e => (e.Placeholder, e.Example.EntityKind))
+            .Concat(prompt.NamedFindings.Where(n => n.NamePlaceholder is not null).Select(n => (n.NamePlaceholder!, n.Candidate.EntityKind)))
+            .ToList();
+        foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+"))
+            foreach (var (placeholder, kind) in kinds)
+            {
+                if (!sentence.Contains(placeholder, StringComparison.Ordinal))
+                    continue;
+                var saysCategory = Regex.IsMatch(sentence, @"\bcategor(?:y|ies)\b", RegexOptions.IgnoreCase);
+                var isCategory = kind.Contains("categor", StringComparison.OrdinalIgnoreCase);
+                if (saysCategory && !isCategory && !Regex.IsMatch(sentence, @"\b(?:locations?|sites?|people|person|Acts?)\b", RegexOptions.IgnoreCase))
+                    failures.Add($"writes {placeholder} (a {kind}) as a compliance category - an example is only ever given for its own pattern");
+                if (!saysCategory && isCategory && Regex.IsMatch(sentence, @"\byour " + Regex.Escape(placeholder) + @" site\b", RegexOptions.IgnoreCase))
+                    failures.Add($"writes {placeholder} (a category) as a site");
+            }
+        failures.AddRange(OpenCountAsDueProblems(text, prompt));
+
+        /*  [2026-10-08, shared Rule 11] Each paragraph is its own story. A paragraph that OPENS by
+            pointing at the previous one ("Each is among 9 locations...", "These sites...", "Of
+            those, ...") cannot be read or checked on its own - and after the repair step removes a
+            sentence, "these" may point at nothing at all.                                        */
+        foreach (var paragraph in text.Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Skip(1))
+        {
+            if (BackReferenceOpener().IsMatch(paragraph))
+                failures.Add($"a paragraph opens by pointing at another paragraph (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - each paragraph must name its own subject and figures in full");
+
+            /*  [OWNER, 2026-10-08] "10,396 of the 14,618 ... 90 days." / "5,182 of the 14,618 ... liability."
+                / "96 of the 332 Acts ..." - each on its own line. Figures about one subject sit in one
+                paragraph with their meaning sentence (shared rules Sec.4); a one-line paragraph is a
+                dashboard row. The introduction is exempt (it is two sentences anyway).             */
+            if (Regex.IsMatch(paragraph, @"\d")
+                && !paragraph.StartsWith("Before the end of", StringComparison.OrdinalIgnoreCase)   // the Licence slot can have a single future figure
+                && Regex.Split(paragraph, @"(?<=[.!?])\s+(?=[A-Z0-9*{])").Count(s => s.Trim().Length > 0) < 2)
+                // [2026-10-08, later] Advisory, not a failure: a one-line "strongest pattern" paragraph is
+                // cosmetic, and as a failure it cost the Act email its written version (fallback shipped).
+                advisories.Add($"a paragraph of one sentence (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - figures about the same subject read better together with their meaning sentence");
+
+            /*  [OWNER, 2026-10-08] "...14,435 overdue. 10,234 of those ... 5,071 of those ... 137 of the 332
+                Acts ... 3 Acts ... 20% ... 37 of the 161 ... 62 of the 210 ..." - fourteen numbers in one
+                paragraph is a dashboard row, whatever the sentence count. 2 or 3 figures per paragraph
+                (a finding with its base and comparison is one figure, so up to ~8 number tokens).  */
+            var numberTokens = NumberToken().Matches(WithoutOrdinals(Placeholder().Replace(paragraph, "ph"))).Count
+                               + Percentage().Matches(paragraph).Count;
+            /*  [OWNER, 2026-10-09] "597 compliances remained open ... still have compliances from September
+                still open today ... 41 of its 47 ... are still open today. ... has still not been completed."
+                - one state, said four times in one paragraph. The state is said once; the other sentences
+                carry figure and base only. And "overdue compliances are overdue" says nothing twice.     */
+            if (Regex.Matches(paragraph, @"\bstill\b", RegexOptions.IgnoreCase).Count > 2)
+                failures.Add($"says \"still\" {Regex.Matches(paragraph, @"\bstill\b", RegexOptions.IgnoreCase).Count} times in one paragraph (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - say the state once, then give figure and base only");
+            if (Regex.IsMatch(paragraph, @"\boverdue compliances\b[^.]{0,60}\b(?:are|is) overdue\b", RegexOptions.IgnoreCase))
+                failures.Add("writes \"overdue compliances ... are overdue\" - say it once: \"N of the M overdue compliances, or P%\"");
+
+            /*  [OWNER, 2026-10-09] A paragraph that ENDS on a figure is data with no insight - the Act email
+                came out as five paragraphs of numbers because the redraft dropped every closing line. Every
+                figure paragraph ends with its closing line (shared rules Sec.4a): a sentence with no number. */
+            var sentencesInParagraph = Regex.Split(paragraph, @"(?<=[.!?])\s+(?=[A-Z0-9*{])").Where(s => s.Trim().Length > 0).ToList();
+            if (numberTokens > 0 && sentencesInParagraph.Count > 0
+                && Regex.IsMatch(WithoutOrdinals(Placeholder().Replace(sentencesInParagraph[^1], "ph")), @"\d"))
+                failures.Add($"a paragraph ends on a figure (\"...{sentencesInParagraph[^1][..Math.Min(50, sentencesInParagraph[^1].Length)]}\") - every paragraph ends with its closing line from section 4a, saying what the figures mean");
+
+            // 12: two named findings (count, base, %) plus a top-3 share and a residual count - the Act prompt's Sec.3.
+            if (numberTokens > 12)
+                failures.Add($"a paragraph with {numberTokens} numbers (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - keep 2 or 3 figures per paragraph, the ones with personal liability or a name, and leave the rest to RegInsights Ultimate");
+        }
+
+        // [2026-10-08] A figure in a sentence with no verb - rewritten, never sent.
+        failures.AddRange(FragmentProblems(text));
+
 
         // -- banned words ----------------------------------------------------------------------
         foreach (var phrase in BannedPhrases)
@@ -461,17 +827,6 @@ public static partial class FreeMonthlyDigestValidator
         return i < 0 || text[i] is '\n' or '.' or '!' or '?' or ':';
     }
 
-    /// <summary>True when the sentence containing <paramref name="index"/> opens with a number word.</summary>
-    private static bool SentenceOpensWithNumberWord(string text, int index)
-    {
-        var start = index;
-        while (start > 0 && text[start - 1] is not ('\n' or '.' or '!' or '?' or ':'))
-            start--;
-
-        var first = FirstWord().Match(text[start..]);
-        return first.Success && NumberWordValues.ContainsKey(first.Groups[1].Value.ToLowerInvariant());
-    }
-
     /// <summary>
     /// An ordinal is a date or a position, never a quantity. [FOUND LIVE on PROD tenant 1008,
     /// 2026-09-23] The model quoted the label "between the 1st of this month and today"; "1st" was
@@ -521,18 +876,6 @@ public static partial class FreeMonthlyDigestValidator
 
     [GeneratedRegex(@"\b\d{1,2}(st|nd|rd|th)\b", RegexOptions.IgnoreCase)]
     private static partial Regex OrdinalToken();
-
-    [GeneratedRegex(@"^[\s""'(]*([A-Za-z]+)\b")]
-    private static partial Regex FirstWord();
-
-    /// <summary>The value of a number word that may open a sentence. Compounds ("thirty-two") are not here and still reject.</summary>
-    private static readonly Dictionary<string, int> NumberWordValues = new(StringComparer.Ordinal)
-    {
-        ["two"] = 2, ["three"] = 3, ["four"] = 4, ["five"] = 5, ["six"] = 6, ["seven"] = 7, ["eight"] = 8, ["nine"] = 9,
-        ["ten"] = 10, ["eleven"] = 11, ["twelve"] = 12, ["thirteen"] = 13, ["fourteen"] = 14, ["fifteen"] = 15,
-        ["sixteen"] = 16, ["seventeen"] = 17, ["eighteen"] = 18, ["nineteen"] = 19, ["twenty"] = 20,
-        ["thirty"] = 30, ["forty"] = 40, ["fifty"] = 50, ["sixty"] = 60, ["seventy"] = 70, ["eighty"] = 80, ["ninety"] = 90,
-    };
 
     [GeneratedRegex(@"\*\*(.+?)\*\*", RegexOptions.Singleline)]
     private static partial Regex FirstBold();

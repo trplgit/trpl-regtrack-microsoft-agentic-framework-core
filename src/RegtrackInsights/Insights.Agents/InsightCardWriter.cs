@@ -103,8 +103,8 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
     /// <summary>A validated placeholder-form card, bound and made plain for the hub.</summary>
     public static InsightCardText Finish(InsightCardInput input, string headline, string narrative, int inputTokens, int outputTokens, string rawDraft) =>
         // The binder emphasises names for the email ("**A**"); the hub renders plain text.
-        new(PlainText(FreeMonthlyPlaceholderBinder.Bind(headline.Trim(), input.Guardrails.Bindings)),
-            PlainText(FreeMonthlyPlaceholderBinder.Bind(narrative.Trim(), input.Guardrails.Bindings)),
+        new(PlainText(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(headline.Trim(), input.Guardrails), input.Guardrails.Bindings)),
+            PlainText(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(narrative.Trim(), input.Guardrails), input.Guardrails.Bindings)),
             "llm", null, NumbersVerified: true, inputTokens, outputTokens, rawDraft);
 
     /// <summary>The deterministic card text, with the given reason. Never throws.</summary>
@@ -131,6 +131,9 @@ public sealed partial class InsightCardWriter(IClaudeClient client, IPromptLoade
 
         if (headline.Trim().Length == 0 || narrative.Trim().Length == 0)
             problems.Add("headline or narrative is empty");
+
+        problems.AddRange(FreeMonthlyDigestValidator.LicenceOverdueProblems(headline + " " + narrative).Select(p => "card " + p));
+        problems.AddRange(FreeMonthlyDigestValidator.FragmentProblems(headline + " " + narrative).Select(p => "card " + p));
 
         var sentences = SentenceCount(narrative);
         if (sentences is < MinNarrativeSentences or > MaxNarrativeSentences)
@@ -300,7 +303,7 @@ public static class InsightCardFallback
 
         // Never below the card's two-sentence floor: the date the figures stand at is always true.
         if (narrative.Count < InsightCardWriter.MinNarrativeSentences)
-            Add("These figures are as at {{AS_AT}}.");
+            Add("These figures are as of {{AS_AT}}.");
         if (narrative.Count < InsightCardWriter.MinNarrativeSentences)
             Add("Your monthly email for {{CURR_MONTH}} carries the full picture behind this card.");
 
@@ -319,10 +322,12 @@ public static class InsightCardFallback
 
         var lead = fact.WindowScope switch
         {
-            "prev" => "For {{PREV_MONTH}}, ",
-            "curr" when fact.Section == "rest_of_month" || fact.FactKey.StartsWith("rm_", StringComparison.Ordinal) => "Before {{CURR_MONTH}} ends, ",
+            // [2026-10-08] The email's own section phrases, so card and email read alike.
+            "prev" => "In {{PREV_MONTH}}, ",
+            "curr" when fact.Section == "rest_of_month" || fact.FactKey.StartsWith("rm_", StringComparison.Ordinal) => "Before the end of {{CURR_MONTH}}, ",
             "curr" => "So far in {{CURR_MONTH}}, ",
-            _ => "As at {{AS_AT}}, ",
+            _ when fact.FactKey.StartsWith("lic", StringComparison.Ordinal) => "Currently, ",
+            _ => "In total, from all months, ",
         };
         return lead + sentence;
     }
@@ -334,8 +339,8 @@ public static class InsightCardFallback
 
         if (label.StartsWith("of those", StringComparison.OrdinalIgnoreCase))
         {
-            var sectionBase = facts.FirstOrDefault(o => o.Section == fact.Section && o.DisplayOrder < fact.DisplayOrder
-                                                        && !o.DisplayLabel.StartsWith("of", StringComparison.OrdinalIgnoreCase));
+            // [2026-10-07] The fact's real parent, not the first base in its section (t_rm_liability was read under t_lm_due).
+            var sectionBase = FreeMonthlyDigestPrompt.ParentOf(fact, facts);
             var rest = label["of those".Length..].Trim();
             return sectionBase is not null
                 ? $"Of the {InsightCardRules.Count(sectionBase.FactValue)} {Plain(sectionBase.DisplayLabel)}, {value} {rest}."

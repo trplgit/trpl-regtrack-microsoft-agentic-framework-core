@@ -56,12 +56,15 @@ public static partial class FreeMonthlyParagraphOrder
 
     private static Period? Classify(string paragraph)
     {
+        // [FOUND LIVE 2026-10-09] "There is still work that can be done on time this month. Before the end
+        // of October, 1,179 compliances fall due ..." sorted as PRESENT on "this month" and landed second.
+        // A paragraph that says "before the end of the month" / "fall due" is about what is still to come.
+        if (Future().IsMatch(paragraph) && !Regex.IsMatch(paragraph, @"\bso far\b", RegexOptions.IgnoreCase))
+            return Period.Future;
         if (Present().IsMatch(paragraph))
             return Period.Present;
         if (Past().IsMatch(paragraph))
             return Period.Past;
-        if (Future().IsMatch(paragraph))
-            return Period.Future;
         if (Stock().IsMatch(paragraph))
             return Period.Stock;
         return null;
@@ -73,7 +76,7 @@ public static partial class FreeMonthlyParagraphOrder
     [GeneratedRegex(@"\{\{PREV_MONTH\}\}|\blast month\b", RegexOptions.IgnoreCase)]
     private static partial Regex Past();
 
-    [GeneratedRegex(@"\bfalls? due\b|before \{\{CURR_MONTH\}\} ends|between today and|\bexpir(?:e|es|ing)\b|\bdue before\b|\bstill to come\b|\bnot yet late\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bfalls? due\b|before \{\{CURR_MONTH\}\} ends|before the end of \{\{CURR_MONTH\}\}|between today and|\bexpir(?:e|es|ing)\b|\bdue before\b|\bstill to come\b|\bnot yet late\b", RegexOptions.IgnoreCase)]
     private static partial Regex Future();
 
     [GeneratedRegex(@"\bbacklog\b|\bcurrently\b|\boverdue\b|\bexpired\b|\bopen obligations?\b|\brests? with\b|\bassigned\b|\bno renewal\b|\bstanding\b", RegexOptions.IgnoreCase)]
