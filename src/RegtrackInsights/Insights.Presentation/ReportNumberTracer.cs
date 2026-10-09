@@ -48,7 +48,14 @@ public static partial class ReportNumberTracer
         IEnumerable<Assertion>? assertions,
         IEnumerable<string?>? trustedTexts)
     {
-        var text = ReportClaimExtractor.VisibleText(html);
+        // [FIX 2026-10-09, found live on prod tenant 1271 - Location + Departments refused on every
+        // attempt of 3 runs] Two kinds of model-typed text are method, not data, and are dropped
+        // before numbers are read: the mini illustration of a "How to read this chart" panel
+        // (.hr-viz - the render prompts define it as an "optional mini inline-SVG illustration";
+        // a sample scale "1 / 10 / 100 / 1,000" there teaches the reader, it claims nothing), and the
+        // "x 100" multiplier of a percentage formula ("669 / 927 x 100"). The panel's written
+        // explanation and every number in the formula itself are still checked.
+        var text = TimesHundred().Replace(ReportClaimExtractor.VisibleText(HowToReadIllustration().Replace(html, " ")), " ");
         var numbers = ReportClaimExtractor.ExtractNumbers(text, ReportClaimExtractor.NumbersToIgnore(rowsJson));
         if (numbers.Count == 0)
             return [];
@@ -111,6 +118,12 @@ public static partial class ReportNumberTracer
         foreach (var part in totalCounts)
             foreach (var whole in totalCounts)
                 if (part < whole) { Share(part, whole); C(whole - part); }
+        // [FIX 2026-10-09, found live] A plain sum of two totals - "all due dates" written as
+        // AssignedInstances + UnassignedInstances (7,202 + 33 = 7,235 on Departments 1271). The
+        // class doc already promises sums; only differences and shares of totals were built.
+        for (var i = 0; i < totalCounts.Count; i++)
+            for (var j = i + 1; j < totalCounts.Count; j++)
+                C(totalCounts[i] + totalCounts[j]);
         var totalPcts = totals.Where(t => IsPercentName(t.Key)).Select(t => t.Value).ToList();
 
         var rows = new List<Dictionary<string, double>>();
@@ -356,4 +369,12 @@ public static partial class ReportNumberTracer
 
     [GeneratedRegex(@"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")]
     private static partial Regex NumberInText();
+
+    // The .hr-viz illustration block of a "How to read this chart" panel (one inline SVG, no nested div).
+    [GeneratedRegex(@"<div\b[^>]*\bclass\s*=\s*[""'][^""']*\bhr-viz\b[^""']*[""'][^>]*>.*?</div>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex HowToReadIllustration();
+
+    // "x 100" / "* 100" - the percentage multiplier of a formula, in visible text (&times; already decoded).
+    [GeneratedRegex(@"[×✕✖*]\s*100(?![\d.,%])")]
+    private static partial Regex TimesHundred();
 }
