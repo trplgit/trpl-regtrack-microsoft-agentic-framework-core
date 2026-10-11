@@ -7,7 +7,7 @@ namespace Insights.Presentation;
 /// [ADDED 2026-09-30, TRIAL] Deterministically appends a small "How your numbers are worked out"
 /// reference block just before &lt;/body&gt;, one hover-link entry per real figure it is given.
 /// Reuses the render prompt's own `.hr` checkbox/panel mechanism (section 7 of
-/// prompts/05_report_html_dimension_selection_licence_v10.md - every chart already requires it),
+/// prompts/05_report_html_dimension_selection_licence_v11.md - every chart already requires it),
 /// but this class does not depend on that CSS/script actually having been emitted this run - it
 /// carries its own minimal, self-contained copy so it renders correctly even on a document with
 /// zero charts.

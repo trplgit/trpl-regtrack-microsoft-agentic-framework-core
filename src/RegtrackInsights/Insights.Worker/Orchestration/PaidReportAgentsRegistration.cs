@@ -201,7 +201,9 @@ public static class PaidReportAgentsRegistration
                 // longer a finding (RegTrack parity: every obligation has an active performer, so the
                 // ownership fields are always 0). v3 files stay untouched.
                 ["Departments"] = Build("Departments", "02_composition_freehand_departments_v5.md"),
-                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v8.md"),
+                // [ADDED 2026-10-11] v9 - period status cards get a scope label; the all-licences
+                // context line names both scopes (tenant 1271: "12 are Active" read as contradicting "Active 0").
+                ["Licence"] = Build("Licence", "02_composition_freehand_licence_v9.md"),
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
                 ["Location"] = Build("Location", "02_composition_freehand_location_v5.md"),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
@@ -442,9 +444,10 @@ public static class PaidReportAgentsRegistration
                 // (never once fired across 3 real trials); the "How your numbers are worked out"
                 // hover-link strip is now added deterministically instead, see
                 // InsightsReportOrchestrator's node 8i / NumberFormulaInjector / LicenceNumberFormulas.
+                // [ADDED 2026-10-11] v11 - same two-scopes rule as composition v9 above.
                 ["dimension_selection:Licence"] = Build(
                     "DimensionSelectionLicenceReportHtmlAgent", "Renders a freehand-composed Licence insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_licence_v10.md", freehandModel),
+                    "05_report_html_dimension_selection_licence_v11.md", freehandModel),
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
