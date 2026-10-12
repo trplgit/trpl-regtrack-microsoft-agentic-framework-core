@@ -12,7 +12,7 @@ public class FreeTierReaderTermsTests
     [InlineData("1 obligation is overdue", "1 compliance is overdue")]
     [InlineData("an obligation with no reviewer", "a compliance with no reviewer")]
     [InlineData("An obligation was missed.", "A compliance was missed.")]
-    [InlineData("281 obligations in your scope; 3 overdue obligations", "281 compliances in your scope. 3 overdue compliances")]
+    [InlineData("281 obligations in your scope; 3 overdue obligations", "281 compliances in your organisation. 3 overdue compliances")]
     [InlineData("No change here.", "No change here.")]
     [InlineData("**No other licence type shares this position.**.", "**No other licence type shares this position.**")]
     [InlineData("Where it sits - personal exposure", "Where it sits - personal liability")]
@@ -135,5 +135,24 @@ public class ExampleUnitTests
         var body = "Good morning,\n\nHere is your update. The figures below are as of {{AS_AT}}.\n\nUnder " + eg + ", 21 of its 22 sites where it applies have it overdue. This work was due last month and is not finished.";
         var review = FreeMonthlyDigestValidator.Validate(body, prompt);
         Assert.Contains(review.FailedChecks, f => f.Contains("counts COMPLIANCES, not sites"));
+    }
+}
+
+public class ReaderCosmeticsTests
+{
+    [Theory]
+    [InlineData("Work from September remains still open today under 101 Acts.", "Work from September is still open today under 101 Acts.")]
+    [InlineData("588 compliances are still open across your scope.", "588 compliances are still open across your organisation.")]
+    [InlineData("14 are overdue. Of these, 10,101 of the 14 are old.", "14 are overdue. 10,101 of the 14 are old.")]
+    [InlineData("14 are overdue. Also, 4,742 carry liability.", "14 are overdue. 4,742 carry liability.")]
+    public void RemovesCosmeticSlips(string input, string expected) =>
+        Assert.Equal(expected, FreeTierReaderTerms.Apply(input));
+
+    [Fact]
+    public void DropsASentenceRepeatedAnywhereInTheEmail()
+    {
+        var body = "Currently, 19 licences are expired. Until a licence is renewed, there is no valid licence on record for that activity. 18 of 64 locations hold one. **Until a licence is renewed, there is no valid licence on record for that activity.**\n\nNext paragraph.";
+        Assert.Equal("Currently, 19 licences are expired. Until a licence is renewed, there is no valid licence on record for that activity. 18 of 64 locations hold one.\n\nNext paragraph.",
+            FreeTierReaderTerms.WithoutDuplicateSentences(body));
     }
 }

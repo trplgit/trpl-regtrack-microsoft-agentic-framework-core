@@ -82,6 +82,8 @@ public static partial class FreeMonthlyDigestValidator
             {{NAME_1}}." / "Personal liability is high for {{NAME_3}}." - a verdict tail after a figure
             that already said it, with no number a tester can match.                              */
         "rests heavily", "liability is high for", "a large share rests", "is heavily",
+        // [2026-10-09] "MVASPL and Spark Minda are also included in the full list" - count the rest, do not list them.
+        "included in the full list", "also included",
     ];
 
     /*  [MEASURED 2026-09-20] This list is anti-fabrication ONLY - claims no result set supports.
@@ -363,6 +365,12 @@ public static partial class FreeMonthlyDigestValidator
 
     [GeneratedRegex(@"^\W*so far (?:in|this)\b", RegexOptions.IgnoreCase)]
     private static partial Regex SoFarThisMonth();
+
+    /// <summary>One of the five period phrases the shared rules allow, anywhere in the paragraph.</summary>
+    // "overdue", "expired", "open compliance", "rests with one person", "performer and reviewer" are all-months by
+    // definition (shared rules Sec.3), so a later all-months paragraph that starts on its figure still names its period.
+    [GeneratedRegex(@"\bIn \{\{PREV_MONTH\}\}\b|\bSo far in \{\{CURR_MONTH\}\}\b|\bin total, from all months\b|\bCurrently\b|\bBefore the end of \{\{CURR_MONTH\}\}\b|\{\{PREV_MONTH\}\}|\boverdue\b|\bexpired?\b|\bexpir(?:es|ing)\b|\bopen compliances?\b|\brests? with one person\b|\bperformer and reviewer\b|\bend date\b", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex PeriodPhrase();
 
     /// <summary>A sentence boundary followed by a lowercase word (bold marker allowed in between).</summary>
     [GeneratedRegex(@"(?<=[.!?]\s+)(?:\*\*)?[a-z]")]
@@ -730,6 +738,19 @@ public static partial class FreeMonthlyDigestValidator
             if (numberTokens > 0 && sentencesInParagraph.Count > 0
                 && Regex.IsMatch(WithoutOrdinals(Placeholder().Replace(sentencesInParagraph[^1], "ph")), @"\d"))
                 failures.Add($"a paragraph ends on a figure (\"...{sentencesInParagraph[^1][..Math.Min(50, sentencesInParagraph[^1].Length)]}\") - every paragraph ends with its closing line from section 4a, saying what the figures mean");
+
+            /*  [FOUND LIVE on PROD tenant 1008, 2026-10-09, Overview] "18 of the 62 locations have a higher overdue
+                rate ... including Minda Silica with 887 overdue compliances ... These are the places where last
+                month's work was most often left unfinished." - an ALL-MONTHS paragraph with no period phrase,
+                placed after the September paragraph and closed with September's line. The reader took it as
+                September. Every figure paragraph names its period; a "last month" closing line may only end a
+                paragraph that is about last month.                                                         */
+            if (numberTokens > 0 && !PeriodPhrase().IsMatch(paragraph))
+                advisories.Add($"a paragraph with figures names no period (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - start it with \"In {{{{PREV_MONTH}}}},\", \"So far in {{{{CURR_MONTH}}}},\", \"In total, from all months,\", \"Currently,\" or \"Before the end of {{{{CURR_MONTH}}}},\"");
+            if (numberTokens > 0 && Regex.IsMatch(paragraph, @"last month'?s? work (?:was|were) most often left unfinished|This work was due last month and is not finished", RegexOptions.IgnoreCase)
+                && !Regex.IsMatch(paragraph, @"\{\{PREV_MONTH\}\}|\blast month\b.*\d", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                && !Regex.IsMatch(paragraph, @"^\W*(?:\*\*)?In \{\{PREV_MONTH\}\}|\bdue in \{\{PREV_MONTH\}\}|\bfrom \{\{PREV_MONTH\}\}|\bwork due in \{\{PREV_MONTH\}\}", RegexOptions.IgnoreCase))
+                failures.Add($"ends an all-months paragraph with last month's closing line (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - the closing line must match the paragraph's period");
 
             // 12: two named findings (count, base, %) plus a top-3 share and a residual count - the Act prompt's Sec.3.
             if (numberTokens > 12)

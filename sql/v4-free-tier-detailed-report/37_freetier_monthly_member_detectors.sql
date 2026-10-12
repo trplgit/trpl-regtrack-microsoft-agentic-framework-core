@@ -1,23 +1,23 @@
 /*===========================================================================
   RegTrack Insights - v4 free tier: follow RegTrack's Detailed Report
-  02_usp_Insights_FreeMonthly_MemberDetectors.sql - CREATE OR ALTER
+  37_freetier_monthly_member_detectors.sql - CREATE OR ALTER
   usp_Insights_FreeMonthly_MemberDetectors.
 
-  Run AFTER 01_slot_procs.sql: this proc reads its callers' #sched (through
+  Run AFTER the slot procs (36, 38, 39, 40, 41): this proc reads its callers' #sched (through
   #smap) and now references #sched.ExportRows, which only exists once the
-  callers (Users, Location, Act) create it. Installing 02 before 01 would
+  callers (Users, Location, Act) create it. Installing 37 before them would
   make every Users / Location / Act run fail at run time.
 
-  WHAT CHANGED vs the prod base (sql/v4-free-tier-detailed-report/_current_prod/,
+  WHAT CHANGED vs the prod base (the procedure as deployed on prod and UAT,
   snapshotted 2026-10-06) - nothing else; every other line is byte-identical:
 
   Why: from 2026-10-06 the free tier counts at RegTrack Detailed Report
   EXPORT-ROW grain (testers count rows of the Detailed Report Excel export,
   Statutory + Statutory Checklist). #sched keeps one row per schedule; its
   ExportRows column carries how many export rows that schedule produces. The
-  weight is filled by the loader (LoadFacts, file 04). The callers declare it
+  weight is filled by the loader (LoadFacts, file 34). The callers declare it
   with DEFAULT 1, which keeps the OLD loader valid mid-deploy: every row then
-  weighs 1 and every number equals today's until 04 lands.
+  weighs 1 and every number equals today's until 34 lands.
   Design: ADR "free tier = RegTrack Detailed Report export", Sec. 5, 7.3, 8, 9.
 
   1. No DDL change here (#sched / #smap / #mm are caller-created).
@@ -33,7 +33,7 @@
   Unchanged: parameter list, every fact key and DisplayLabel text, the
   #cand / #eg / #facts / #detector shapes, every error code.
 
-  Install order: 00 -> 01 -> 02 -> 03 -> 04. Rollback: 99_rollback.sql.
+  Install order: 00 -> 36, 38, 39, 40, 41 -> 37 -> 35 -> 34. Rollback: 99_rollback.sql.
   SQL source is pure ASCII (CLAUDE.md Sec. 5a).
 ===========================================================================*/
 SET NOCOUNT ON;

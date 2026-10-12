@@ -480,6 +480,15 @@ public static partial class FreeMonthlyDraftRepair
                 if (!HasWords(sentence))
                     continue;
 
+                /*  [FOUND LIVE 2026-10-09] "Of those 588." - a figure with no verb. As a validator failure it
+                    cost the Overview its written version (redraft also failed, fallback shipped). A fragment
+                    carries no claim, so it is simply dropped here; the validator stays as the backstop.   */
+                if (FreeMonthlyDigestValidator.FragmentProblems(sentence).Any())
+                {
+                    removed.Add($"fragment (no verb): {sentence.Trim()}");
+                    continue;
+                }
+
                 /*  The same point, said twice. Wording alone identifies it - the figures differ.
 
                     [CONSIDERED AND REJECTED 2026-09-21] Adding the figures to this key was proposed
@@ -602,12 +611,28 @@ public static partial class FreeMonthlyDraftRepair
         var stripped = Placeholders().Replace(paragraph, "ph");
         if (!stripped.Any(char.IsDigit))
             return paragraph;                                   // greeting, introduction, a quiet-month paragraph
-        if (!Placeholders().Replace(sentences[^1], "ph").Any(char.IsDigit))
+
+        var last = sentences[^1].Replace("**", string.Empty).Trim();
+        if (!Placeholders().Replace(last, "ph").Any(char.IsDigit))
+        {
+            /*  [FOUND LIVE 2026-10-09, twice] An ALL-MONTHS paragraph ("Across all months, 18 of 62 locations
+                have a higher overdue rate ...") closed with LAST MONTH's line ("These are the places where last
+                month's work was most often left unfinished."), which made the reader take it as September.
+                The validator rejected it, the redraft did it again, and the fallback shipped. The wrong line
+                is swapped for the right one here instead - the figures are untouched.                    */
+            var body = string.Join(" ", sentences.Take(sentences.Count - 1));
+            var aboutLastMonth = Regex.IsMatch(body, @"\{\{PREV_MONTH\}\}|\blast month\b", RegexOptions.IgnoreCase);
+            if (!aboutLastMonth && LastMonthClosingLine().IsMatch(last) && ClosingLineFor(body) is { } right)
+                return body.TrimEnd() + " " + right;
             return paragraph;                                   // already ends on a line without a figure
+        }
 
         var line = ClosingLineFor(paragraph);
         return line is null ? paragraph : paragraph.TrimEnd() + " " + line;
     }
+
+    [GeneratedRegex(@"last month'?s? work (?:was|were) most often left unfinished|This work was due last month and is not finished|whose work was most often left unfinished", RegexOptions.IgnoreCase)]
+    private static partial Regex LastMonthClosingLine();
 
     private static string? ClosingLineFor(string p)
     {

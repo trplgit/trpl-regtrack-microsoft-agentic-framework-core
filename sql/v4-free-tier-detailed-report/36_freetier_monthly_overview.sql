@@ -1,4 +1,66 @@
-CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Overview
+/*===========================================================================
+  RegTrack Insights - v4 free tier: follow RegTrack's Detailed Report
+  36_freetier_monthly_overview.sql - CREATE OR ALTER usp_Insights_FreeMonthly_Overview.
+  One of the five slot procs (files 36, 38, 39, 40, 41).
+
+  Run AFTER 00_precheck.sql (which must report every row MATCH), and BEFORE
+  37 (MemberDetectors), 35 (LoadLicences) and 34 (LoadFacts).
+
+  WHAT CHANGED vs the prod base (the procedures as deployed on prod and UAT,
+  snapshotted 2026-10-06) - nothing else; every other line is byte-identical:
+
+  Why: from 2026-10-06 the free tier counts at RegTrack Detailed Report
+  EXPORT-ROW grain (testers count rows of the Detailed Report Excel export,
+  Statutory + Statutory Checklist). One #sched row is still one schedule and
+  one #lic row is still one licence; the new ExportRows column carries how
+  many export rows that schedule / licence produces. The weight is filled by
+  the loaders (LoadFacts / LoadLicences, files 34 / 35). DEFAULT 1 keeps the
+  OLD loaders valid mid-deploy: they insert without naming ExportRows, so
+  every row weighs 1 and every number equals today's until 35 / 34 land.
+  Design: ADR "free tier = RegTrack Detailed Report export", Sec. 5, 7.3, 8, 9.
+
+  1. DDL - ExportRows INT NOT NULL DEFAULT 1 added as the LAST column of the
+     caller-created temp table(s): Overview #sched and #lic; Users, Location,
+     Act #sched; Licence #lic. Unnamed inline default on purpose: a NAMED
+     constraint on a temp table collides across concurrent sessions.
+
+  2. Item counts weighted - every COUNT(*) / SUM(CASE ... THEN 1 ...) over
+     #sched / #lic rows that feeds a fact, candidate count, detector rate,
+     control total or reconciliation invariant is now the ExportRows sum
+     (ISNULL(SUM(...), 0) where the set can be empty or is LEFT-joined):
+       Overview : #wp window decomposition; overdue stock; licence totals;
+                  #liabLoc.LiabOverdueItems
+       Users    : OpenItems / OpenItemsUnowned (control totals, u_open_items,
+                  u_open_no_owner); #selfRev.Items; @tOverdue;
+                  u_open_no_reviewer
+       Location : #site.OpenItems / OpenUnowned; @tOverdue;
+                  open_items_no_owner_anywhere
+       Act      : @tOverdue; open_items_no_owner_anywhere
+       Licence  : the totals block; #licLoc / #licType Licences and
+                  ExpiredUnrenewed
+     Reconciliations weighted on BOTH sides, so they stay balanced:
+     51251, 51252, 51253, 51301, 51302, 51303.
+     Untouched (structural, row-level): 51281, 51282, 51291, 51292.
+
+  3. NOT weighted (deliberately): COUNT(DISTINCT ...); member and instance
+     counts (#inst, #site.Obligations, #liabLoc LiabInst / LiabOverdueInst,
+     #cat, row counts of #licLoc / #licType / #mm / #mem); SchedulesLoaded
+     (still distinct schedules); schedules_no_owner_anywhere.
+
+  Unchanged: parameter lists, every result set, its column names and order,
+  every fact key and DisplayLabel text, every error code. No new objects.
+
+  Install order: 00 -> 36, 38, 39, 40, 41 -> 37 -> 35 -> 34. Rollback: 99_rollback.sql.
+  SQL source is pure ASCII (CLAUDE.md Sec. 5a).
+===========================================================================*/
+/*  [2026-10-07] Licence windows (LapsesRestOfMonth / LapsedThisMonth / LapsedLastMonth) count by END DATE
+    only, any status (35), to equal the licence report. Every 'no renewal filed' figure and named licence
+    built on them adds LicenceState <> 'ended_other', so a Renewed / Terminated / Not Applicable licence is
+    never reported as 'no renewal filed'.                                                                  */
+SET NOCOUNT ON;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Insights_FreeMonthly_Overview
     @UserID              INT,
     @CustomerID          INT,
     @CurrMonthStart      DATE,
@@ -41,7 +103,8 @@ BEGIN
         Outcome                VARCHAR(20)  NOT NULL,
         IsOverdue              BIT          NOT NULL,
         DaysPastDue            INT          NULL,
-        AgeBand                VARCHAR(10)  NULL
+        AgeBand                VARCHAR(10)  NULL,
+        ExportRows             INT          NOT NULL DEFAULT 1
     );
 
     IF OBJECT_ID('tempdb..#lic') IS NOT NULL DROP TABLE #lic;
@@ -56,7 +119,8 @@ BEGIN
         RenewalInProgress  BIT           NOT NULL,
         LapsesRestOfMonth  BIT           NOT NULL,
         LapsedThisMonth    BIT           NOT NULL,
-        LapsedLastMonth    BIT           NOT NULL
+        LapsedLastMonth    BIT           NOT NULL,
+        ExportRows         INT           NOT NULL DEFAULT 1
     );
 
     /*  Both loaders validate the window, the scope and the dictionary, and
@@ -93,18 +157,18 @@ BEGIN
                 Critical, NoOwner, OpenLiability, OpenCritical, OpenUntouched)
     SELECT
         p.WindowPart,
-        COUNT(s.ComplianceScheduleOnID),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'completed_on_time' THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'completed_late'    THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'completed_untimed' THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'resolved_terminal' THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'open'              THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN i.Imprisonment = 1              THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN i.RiskClass = N'Critical'       THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.PerformerSource = 'none'      THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'open' AND i.Imprisonment = 1        THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'open' AND i.RiskClass = N'Critical' THEN 1 ELSE 0 END), 0),
-        ISNULL(SUM(CASE WHEN s.Outcome = 'open' AND s.NeverTouched = 1        THEN 1 ELSE 0 END), 0)
+        ISNULL(SUM(s.ExportRows), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'completed_on_time' THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'completed_late'    THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'completed_untimed' THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'resolved_terminal' THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'open'              THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN i.Imprisonment = 1              THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN i.RiskClass = N'Critical'       THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.PerformerSource = 'none'      THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'open' AND i.Imprisonment = 1        THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'open' AND i.RiskClass = N'Critical' THEN s.ExportRows ELSE 0 END), 0),
+        ISNULL(SUM(CASE WHEN s.Outcome = 'open' AND s.NeverTouched = 1        THEN s.ExportRows ELSE 0 END), 0)
     FROM (VALUES ('prev_month'), ('curr_elapsed'), ('curr_remaining')) AS p(WindowPart)
     LEFT JOIN #sched s ON s.WindowPart = p.WindowPart
     LEFT JOIN #inst  i ON i.ComplianceInstanceID = s.ComplianceInstanceID
@@ -141,15 +205,15 @@ BEGIN
     DECLARE @odTotal INT, @od0030 INT, @od3160 INT, @od6190 INT, @od91p INT,
             @od91pLiab INT, @odLiab INT, @odUntouched INT, @odNoOwner INT;
 
-    SELECT @odTotal     = COUNT(*),
-           @od0030      = ISNULL(SUM(CASE WHEN s.AgeBand = 'd000_030' THEN 1 ELSE 0 END), 0),
-           @od3160      = ISNULL(SUM(CASE WHEN s.AgeBand = 'd031_060' THEN 1 ELSE 0 END), 0),
-           @od6190      = ISNULL(SUM(CASE WHEN s.AgeBand = 'd061_090' THEN 1 ELSE 0 END), 0),
-           @od91p       = ISNULL(SUM(CASE WHEN s.AgeBand = 'd091_plus' THEN 1 ELSE 0 END), 0),
-           @od91pLiab   = ISNULL(SUM(CASE WHEN s.AgeBand = 'd091_plus' AND i.Imprisonment = 1 THEN 1 ELSE 0 END), 0),
-           @odLiab      = ISNULL(SUM(CASE WHEN i.Imprisonment = 1 THEN 1 ELSE 0 END), 0),
-           @odUntouched = ISNULL(SUM(CASE WHEN s.NeverTouched = 1 THEN 1 ELSE 0 END), 0),
-           @odNoOwner   = ISNULL(SUM(CASE WHEN s.PerformerSource = 'none' THEN 1 ELSE 0 END), 0)
+    SELECT @odTotal     = ISNULL(SUM(s.ExportRows), 0),
+           @od0030      = ISNULL(SUM(CASE WHEN s.AgeBand = 'd000_030' THEN s.ExportRows ELSE 0 END), 0),
+           @od3160      = ISNULL(SUM(CASE WHEN s.AgeBand = 'd031_060' THEN s.ExportRows ELSE 0 END), 0),
+           @od6190      = ISNULL(SUM(CASE WHEN s.AgeBand = 'd061_090' THEN s.ExportRows ELSE 0 END), 0),
+           @od91p       = ISNULL(SUM(CASE WHEN s.AgeBand = 'd091_plus' THEN s.ExportRows ELSE 0 END), 0),
+           @od91pLiab   = ISNULL(SUM(CASE WHEN s.AgeBand = 'd091_plus' AND i.Imprisonment = 1 THEN s.ExportRows ELSE 0 END), 0),
+           @odLiab      = ISNULL(SUM(CASE WHEN i.Imprisonment = 1 THEN s.ExportRows ELSE 0 END), 0),
+           @odUntouched = ISNULL(SUM(CASE WHEN s.NeverTouched = 1 THEN s.ExportRows ELSE 0 END), 0),
+           @odNoOwner   = ISNULL(SUM(CASE WHEN s.PerformerSource = 'none' THEN s.ExportRows ELSE 0 END), 0)
     FROM #sched s
     JOIN #inst  i ON i.ComplianceInstanceID = s.ComplianceInstanceID
     WHERE s.IsOverdue = 1;
@@ -164,17 +228,17 @@ BEGIN
             @licLapsingRom INT, @licLapsingUnrenewed INT, @licLapsedLastMonth INT,
             @licLapsedThisMonth INT, @licLapsedUnrenewed INT;
 
-    SELECT @licTotal            = COUNT(*),
-           @licValid            = ISNULL(SUM(CASE WHEN LicenceState = 'valid'       THEN 1 ELSE 0 END), 0),
-           @licLapsed           = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed'      THEN 1 ELSE 0 END), 0),
-           @licEndedOther       = ISNULL(SUM(CASE WHEN LicenceState = 'ended_other' THEN 1 ELSE 0 END), 0),
-           @licNoEnd            = ISNULL(SUM(CASE WHEN LicenceState = 'no_end_date' THEN 1 ELSE 0 END), 0),
-           @licOtherStatus      = ISNULL(SUM(CASE WHEN LicenceState = 'other_status' THEN 1 ELSE 0 END), 0),   -- 2026-09-29, sql/35
-           @licLapsingRom       = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 THEN 1 ELSE 0 END), 0),
-           @licLapsingUnrenewed = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
-           @licLapsedLastMonth  = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 THEN 1 ELSE 0 END), 0),
-           @licLapsedThisMonth  = ISNULL(SUM(CASE WHEN LapsedThisMonth = 1 THEN 1 ELSE 0 END), 0),
-           @licLapsedUnrenewed  = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0)
+    SELECT @licTotal            = ISNULL(SUM(ExportRows), 0),
+           @licValid            = ISNULL(SUM(CASE WHEN LicenceState = 'valid'       THEN ExportRows ELSE 0 END), 0),
+           @licLapsed           = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed'      THEN ExportRows ELSE 0 END), 0),
+           @licEndedOther       = ISNULL(SUM(CASE WHEN LicenceState = 'ended_other' THEN ExportRows ELSE 0 END), 0),
+           @licNoEnd            = ISNULL(SUM(CASE WHEN LicenceState = 'no_end_date' THEN ExportRows ELSE 0 END), 0),
+           @licOtherStatus      = ISNULL(SUM(CASE WHEN LicenceState = 'other_status' THEN ExportRows ELSE 0 END), 0),   -- 2026-09-29, sql/35
+           @licLapsingRom       = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 THEN ExportRows ELSE 0 END), 0),
+           @licLapsingUnrenewed = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 0 AND LicenceState <> 'ended_other' THEN ExportRows ELSE 0 END), 0),
+           @licLapsedLastMonth  = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 THEN ExportRows ELSE 0 END), 0),
+           @licLapsedThisMonth  = ISNULL(SUM(CASE WHEN LapsedThisMonth = 1 THEN ExportRows ELSE 0 END), 0),
+           @licLapsedUnrenewed  = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 0 THEN ExportRows ELSE 0 END), 0)
     FROM #lic;
 
     IF @licTotal <> @licValid + @licLapsed + @licEndedOther + @licNoEnd + @licOtherStatus
@@ -238,7 +302,7 @@ BEGIN
     UPDATE ll
        SET LiabOverdueItems = x.Items
     FROM #liabLoc ll
-    JOIN (SELECT s.BranchID, COUNT(*) AS Items
+    JOIN (SELECT s.BranchID, SUM(s.ExportRows) AS Items
           FROM #sched s
           JOIN #inst  i ON i.ComplianceInstanceID = s.ComplianceInstanceID
           WHERE s.IsOverdue = 1 AND i.Imprisonment = 1
@@ -565,7 +629,7 @@ BEGIN
                @licLapsingUnrenewed, @licLapsingRom
         FROM #lic l
         JOIN CustomerBranch cb ON cb.ID = l.BranchID
-        WHERE l.LapsesRestOfMonth = 1 AND l.RenewalInProgress = 0
+        WHERE l.LapsesRestOfMonth = 1 AND l.RenewalInProgress = 0 AND l.LicenceState <> 'ended_other'
           AND l.LicenseTypeName IS NOT NULL
         ORDER BY l.EndDate ASC, l.LicenseId ASC;
 
@@ -700,3 +764,6 @@ BEGIN
     FROM #eg
     ORDER BY PatternFactKey, ExampleRank;
 END
+GO
+PRINT 'usp_Insights_FreeMonthly_Overview installed';
+GO

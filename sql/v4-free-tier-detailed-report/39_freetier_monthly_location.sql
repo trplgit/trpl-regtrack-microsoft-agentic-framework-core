@@ -1,4 +1,66 @@
-CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Location
+/*===========================================================================
+  RegTrack Insights - v4 free tier: follow RegTrack's Detailed Report
+  39_freetier_monthly_location.sql - CREATE OR ALTER usp_Insights_FreeMonthly_Location.
+  One of the five slot procs (files 36, 38, 39, 40, 41).
+
+  Run AFTER 00_precheck.sql (which must report every row MATCH), and BEFORE
+  37 (MemberDetectors), 35 (LoadLicences) and 34 (LoadFacts).
+
+  WHAT CHANGED vs the prod base (the procedures as deployed on prod and UAT,
+  snapshotted 2026-10-06) - nothing else; every other line is byte-identical:
+
+  Why: from 2026-10-06 the free tier counts at RegTrack Detailed Report
+  EXPORT-ROW grain (testers count rows of the Detailed Report Excel export,
+  Statutory + Statutory Checklist). One #sched row is still one schedule and
+  one #lic row is still one licence; the new ExportRows column carries how
+  many export rows that schedule / licence produces. The weight is filled by
+  the loaders (LoadFacts / LoadLicences, files 34 / 35). DEFAULT 1 keeps the
+  OLD loaders valid mid-deploy: they insert without naming ExportRows, so
+  every row weighs 1 and every number equals today's until 35 / 34 land.
+  Design: ADR "free tier = RegTrack Detailed Report export", Sec. 5, 7.3, 8, 9.
+
+  1. DDL - ExportRows INT NOT NULL DEFAULT 1 added as the LAST column of the
+     caller-created temp table(s): Overview #sched and #lic; Users, Location,
+     Act #sched; Licence #lic. Unnamed inline default on purpose: a NAMED
+     constraint on a temp table collides across concurrent sessions.
+
+  2. Item counts weighted - every COUNT(*) / SUM(CASE ... THEN 1 ...) over
+     #sched / #lic rows that feeds a fact, candidate count, detector rate,
+     control total or reconciliation invariant is now the ExportRows sum
+     (ISNULL(SUM(...), 0) where the set can be empty or is LEFT-joined):
+       Overview : #wp window decomposition; overdue stock; licence totals;
+                  #liabLoc.LiabOverdueItems
+       Users    : OpenItems / OpenItemsUnowned (control totals, u_open_items,
+                  u_open_no_owner); #selfRev.Items; @tOverdue;
+                  u_open_no_reviewer
+       Location : #site.OpenItems / OpenUnowned; @tOverdue;
+                  open_items_no_owner_anywhere
+       Act      : @tOverdue; open_items_no_owner_anywhere
+       Licence  : the totals block; #licLoc / #licType Licences and
+                  ExpiredUnrenewed
+     Reconciliations weighted on BOTH sides, so they stay balanced:
+     51251, 51252, 51253, 51301, 51302, 51303.
+     Untouched (structural, row-level): 51281, 51282, 51291, 51292.
+
+  3. NOT weighted (deliberately): COUNT(DISTINCT ...); member and instance
+     counts (#inst, #site.Obligations, #liabLoc LiabInst / LiabOverdueInst,
+     #cat, row counts of #licLoc / #licType / #mm / #mem); SchedulesLoaded
+     (still distinct schedules); schedules_no_owner_anywhere.
+
+  Unchanged: parameter lists, every result set, its column names and order,
+  every fact key and DisplayLabel text, every error code. No new objects.
+
+  Install order: 00 -> 36, 38, 39, 40, 41 -> 37 -> 35 -> 34. Rollback: 99_rollback.sql.
+  SQL source is pure ASCII (CLAUDE.md Sec. 5a).
+===========================================================================*/
+/*  [2026-10-07] Licence windows (LapsesRestOfMonth / LapsedThisMonth / LapsedLastMonth) count by END DATE
+    only, any status (35), to equal the licence report. Every 'no renewal filed' figure and named licence
+    built on them adds LicenceState <> 'ended_other', so a Renewed / Terminated / Not Applicable licence is
+    never reported as 'no renewal filed'.                                                                  */
+SET NOCOUNT ON;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Insights_FreeMonthly_Location
     @UserID              INT,
     @CustomerID          INT,
     @CurrMonthStart      DATE,
@@ -28,7 +90,8 @@ BEGIN
         BranchID INT NOT NULL, ScheduleOn DATETIME NOT NULL, WindowPart VARCHAR(14) NULL,
         PerformerID BIGINT NULL, PerformerSource VARCHAR(10) NOT NULL, ReviewerID BIGINT NULL,
         ReviewerSource VARCHAR(10) NOT NULL, NeverTouched BIT NOT NULL, Outcome VARCHAR(20) NOT NULL,
-        IsOverdue BIT NOT NULL, DaysPastDue INT NULL, AgeBand VARCHAR(10) NULL);
+        IsOverdue BIT NOT NULL, DaysPastDue INT NULL, AgeBand VARCHAR(10) NULL,
+        ExportRows INT NOT NULL DEFAULT 1);
 
     IF OBJECT_ID('tempdb..#mem') IS NOT NULL DROP TABLE #mem;
     CREATE TABLE #mem (MemberId BIGINT NOT NULL PRIMARY KEY, MemberLabel NVARCHAR(MAX) NULL);
@@ -143,9 +206,9 @@ BEGIN
     FROM #mem m
     LEFT JOIN (SELECT BranchID, COUNT(*) AS Obligations FROM #inst GROUP BY BranchID) o
            ON o.BranchID = m.MemberId
-    LEFT JOIN (SELECT s.BranchID, COUNT(*) AS OpenItems,
+    LEFT JOIN (SELECT s.BranchID, SUM(s.ExportRows) AS OpenItems,
                       COUNT(DISTINCT s.PerformerID) AS OpenPerformers,  -- NULLs not counted
-                      SUM(CASE WHEN s.PerformerID IS NULL THEN 1 ELSE 0 END) AS OpenUnowned
+                      SUM(CASE WHEN s.PerformerID IS NULL THEN s.ExportRows ELSE 0 END) AS OpenUnowned
                FROM #sched s WHERE s.Outcome = 'open'
                GROUP BY s.BranchID) w
            ON w.BranchID = m.MemberId;
@@ -214,7 +277,7 @@ BEGIN
     DECLARE @locIn       INT = (SELECT COUNT(*) FROM #site);
     DECLARE @locWithObl  INT = (SELECT COUNT(*) FROM #site WHERE Obligations > 0);
     DECLARE @locOverdue  INT = (SELECT COUNT(*) FROM #mm WHERE OverdueItems >= 1);
-    DECLARE @tOverdue    INT = (SELECT COUNT(*) FROM #sched WHERE IsOverdue = 1);
+    DECLARE @tOverdue    INT = (SELECT ISNULL(SUM(ExportRows), 0) FROM #sched WHERE IsOverdue = 1);
     DECLARE @top3        INT = (SELECT ISNULL(SUM(t.OverdueItems), 0)
                                 FROM (SELECT TOP 3 x.OverdueItems FROM #mm x ORDER BY x.OverdueItems DESC) t);
 
@@ -340,7 +403,7 @@ BEGIN
     FROM (VALUES
         ('locations_without_obligations', @ghostF,
          N'Authorised locations with no obligation configured. Included as members so the coverage gap is visible, never dropped.'),
-        ('open_items_no_owner_anywhere', (SELECT COUNT(*) FROM #sched WHERE Outcome = 'open' AND PerformerSource = 'none'),
+        ('open_items_no_owner_anywhere', (SELECT ISNULL(SUM(ExportRows), 0) FROM #sched WHERE Outcome = 'open' AND PerformerSource = 'none'),
          N'Open items with no performer anywhere. Not counted as single-point-of-failure; reported separately.'),
         ('prev_month_not_settled', (SELECT ISNULL(SUM(LmDue), 0) FROM #mm),
          N'Last-month figures are as at the run date; late closures can still arrive.')
@@ -353,3 +416,6 @@ BEGIN
     FROM #eg
     ORDER BY PatternFactKey, ExampleRank;
 END
+GO
+PRINT 'usp_Insights_FreeMonthly_Location installed';
+GO

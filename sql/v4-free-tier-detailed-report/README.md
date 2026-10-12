@@ -23,8 +23,8 @@ column (Minda, September: report 2, earlier v4 said 1, now 2). Every "no renewal
 every named licence still leaves out licences already Renewed / Terminated / Not Applicable, so the
 email never calls a renewed licence "not renewed". Proven on prod read-only (1008, 1216, 1810): only
 those window totals and the "of M" of named findings change; the same licences are named with the
-same counts, and every detector and pattern is identical. Changes 3 procedures: Overview, Licence
-(file 01) and LoadLicences (file 03).
+same counts, and every detector and pattern is identical. Changes 3 procedures: Overview (file 36),
+Licence (file 41) and LoadLicences (file 35).
 
 Why: product decision 2026-10-06 - the Detailed Report is the testing team's source of truth.
 This reverses the 2026-09-29 "match the dashboard" decision **for the free tier only**.
@@ -46,17 +46,31 @@ Consequences to know:
 
 | # | File | What it does | Changes data? |
 |---|---|---|---|
+File names follow the main `sql/` numbering (34-41) used by the free-tier SQL objects reference.
+The run order is NOT numeric: the five slot procs go first, then the three helpers they call.
+
+| Run | File | What it does | Changes data? |
+|---|---|---|---|
 | 0 | `00_precheck.sql` | Confirms the database still has exactly the procedures this pack was built from, plus 4 reference-data checks. Read-only. | No |
-| 1 | `01_slot_procs.sql` | Overview, Users, Location, Act, Licence: count export rows (`ExportRows`) | Procedures only |
-| 2 | `02_usp_Insights_FreeMonthly_MemberDetectors.sql` | Same, for the shared detector proc | Procedures only |
-| 3 | `03_usp_Insights_FreeMonthly_LoadLicences.sql` | Licence loader follows the licence report | Procedures only |
-| 4 | `04_usp_Insights_FreeMonthly_LoadFacts.sql` | Compliance loader follows the Detailed Report | Procedures only |
+| 1 | `36_freetier_monthly_overview.sql` | Overview slot proc: counts export rows (`ExportRows`) | Procedures only |
+| 2 | `38_freetier_monthly_users.sql` | Users slot proc: same | Procedures only |
+| 3 | `39_freetier_monthly_location.sql` | Location slot proc: same | Procedures only |
+| 4 | `40_freetier_monthly_act.sql` | Act slot proc: same | Procedures only |
+| 5 | `41_freetier_monthly_licence.sql` | Licence slot proc: same | Procedures only |
+| 6 | `37_freetier_monthly_member_detectors.sql` | Same, for the shared detector proc | Procedures only |
+| 7 | `35_freetier_monthly_licence_loader.sql` | Licence loader follows the licence report | Procedures only |
+| 8 | `34_freetier_monthly_core.sql` | Compliance loader (LoadFacts) follows the Detailed Report | Procedures only |
 | - | `05_verify_deployed.sql` | Read-only status check, any time: per procedure NEW / OLD / OTHER, last line DEPLOYED / NOT DEPLOYED / MIXED | No |
 | - | `99_rollback.sql` | Undo: restores all 8 procedures exactly as they were on 2026-10-06, re-applies their grants, verifies hashes | Procedures only |
-| - | `_current_prod/` | Byte-exact copies of the 8 procedures as deployed on prod and UAT on 2026-10-06 (identical on both). Reference only - do not run. | - |
 
-No table, column, index or data is changed. Files 1-4 use `CREATE OR ALTER`, so existing
-grants (prod: `reginsights_sql_readonly_user`) are kept.
+Why this order: 37, 35 and 34 read the temp tables their callers (36, 38-41) create, and the new
+versions use the `ExportRows` column only the new callers declare. Running 34/35 before the slot
+procs on a database that still has OLD slot procs would make those runs fail until the slot procs land.
+
+No table, column, index or data is changed. Files 34-41 use `CREATE OR ALTER`, so existing
+grants (prod: `reginsights_sql_readonly_user`) are kept. These are not the same files as
+`sql/34`-`sql/41` in the main folder: those are the pre-v4 versions and `sql/34` also creates
+other objects. Install this pack from THIS folder.
 
 ## Steps for Vinay (UAT first, then prod, then demo)
 
@@ -65,10 +79,9 @@ grants (prod: `reginsights_sql_readonly_user`) are kept.
    version: **OLD** (before v4 - expected on demo), **V4 EARLY** (v4 of 2026-10-06 without the
    licence fix - expected on prod and UAT) or **V4** (already done). If it THROWs (51181-51185),
    **stop** and send the message to the author - do not run anything else.
-3. Run `01`, `02`, `03`, `04` in that order, in one sitting. Each ends with `... installed`.
-   On prod/UAT only `01` and `03` actually change (Overview, Licence, LoadLicences); `02` and `04`
-   re-install the identical text, which is harmless - running all four keeps one procedure for
-   every environment. Any error: stop and run `99_rollback.sql`.
+3. Run `36`, `38`, `39`, `40`, `41`, then `37`, then `35`, then `34`, in one sitting. Each ends
+   with `... installed`. Re-running a file that is already current re-installs the identical text,
+   which is harmless. Any error: stop and run `99_rollback.sql`.
 4. Run `05_verify_deployed.sql` - last line must be `DEPLOYED - all 8 procedures are this v4 pack`.
 4. Run the encoding check (CLAUDE.md Sec.5a) - must return zero rows:
    ```sql
@@ -102,7 +115,7 @@ Never use `sql/v2/99_rollback_v2.sql` for this - it restores an older LoadFacts.
 - **Licence parity** - new LoadLicences vs `SP_LicenseMyReport_V2`: tenant 1216 / user 20515 = 1530 = 1530.
   (Tenant 1810: RegTrack's own licence report fails with "String or binary data would be truncated"
   at its line 301 - a RegTrack bug; licence numbers for 1810 cannot be checked until it is fixed.)
-- **Safe install order** - files 01 + 02 run with TODAY's loaders give byte-identical output to today's
+- **Safe install order** - the slot procs (36, 38-41) + 37 run with TODAY's loaders give byte-identical output to today's
   procedures (5 tenants x 5 emails, 25/25 identical), so a partial install changes nothing.
 - **Insights intact** - all 5 emails on 1916, 1490, 1403, 29, 1216: no errors, every detector present.
   Some `pat_*` (aggregate pattern) facts change to named candidates and back: that is the emission

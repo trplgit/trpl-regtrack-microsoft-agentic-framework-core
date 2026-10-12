@@ -1,15 +1,15 @@
 /*===========================================================================
   RegTrack Insights - v4 free tier: follow RegTrack's Detailed Report
-  04_usp_Insights_FreeMonthly_LoadFacts.sql
+  34_freetier_monthly_core.sql
 
   Free tier follows RegTrack Detailed Report export, 2026-10-06.
   Design: ADR "Free tier monthly digest = RegTrack Detailed Report export"
   (Sec. 7.1). Reference: Kendo_DetailedReport_Details_Pagination_2 (DR),
   MGMT path, tabs 'Statutory' + 'StatutoryChecklist', as called by the
-  Detailed Report Excel export. Base: _current_prod/usp_Insights_FreeMonthly_LoadFacts.sql
+  Detailed Report Excel export. Base: the procedure as deployed on prod and UAT
   (the management-dashboard parity version, 2026-09-29). Rollback: 99_rollback.sql.
 
-  Install order: 00 -> 01 -> 02 -> 03 -> 04 (this file LAST - its callers must
+  Install order: 00 -> 36, 38, 39, 40, 41 -> 37 -> 35 -> 34 (this file LAST - its callers must
   already create #sched with the ExportRows column).
 
   WHAT CHANGED vs the prod base, and why

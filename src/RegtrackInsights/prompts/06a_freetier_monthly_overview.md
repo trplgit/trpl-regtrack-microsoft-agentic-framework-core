@@ -17,15 +17,19 @@ from the shared rules (section 4a). Figures without their meaning sentence are n
    figures in this paragraph - nothing from all months.
 3. **In total, from all months** - its own paragraph: the overdue total, how many are overdue
    for more than 90 days, how many carry personal liability, then the meaning sentence.
-4. **Where it sits** - the two pattern facts, each with its FIRST example only, then the
-   paid-report line: "N of the M locations have a higher overdue rate for compliances with
-   personal liability than your company average, including your {{EG_1}} site with N
-   overdue compliances carrying personal liability. N of the M compliance categories have a
-   higher overdue rate than your company average, including {{EG_3}} with N of its M
+4. **Where it sits** - ALL-MONTHS figures, so the paragraph says so and comes AFTER the
+   all-months total, never straight after the {{PREV_MONTH}} paragraph: "Across all months,
+   N of the M locations have a higher overdue rate for compliances with personal liability
+   than your company average, including your {{EG_1}} site with N overdue compliances
+   carrying personal liability." Its closing line is the personal-liability one ("The overdue
+   work here carries more personal risk..."), never the last-month one. Then the categories
+   and the paid-report line: N of the M compliance categories have a
+   higher overdue rate than your company average, including {{EG_c}} with N of its M
    compliances overdue. The full list, with each one's figures, is in RegInsights Ultimate."
-   Never name {{EG_2}}. An example is only ever given for its own pattern: a location
+   Never name a second location example. An example is only ever given for its own pattern: a location
    example ({{EG_1}}, {{EG_2}}) is never written as a compliance category, and a category
-   example ({{EG_3}}) is never written as a site. Licences go in their own paragraph (item 5),
+   example is never written as a site. {{EG_c}} means the example whose `EntityKind` is
+   category - look it up, it is not always {{EG_3}}. Licences go in their own paragraph (item 5),
    never in this one.
 5. **Currently** - licences expired with no renewal in progress, in the same paragraph as
    item 4 or with item 6: "Currently, N licences are expired with no renewal in progress."

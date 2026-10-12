@@ -1,6 +1,6 @@
 /*===========================================================================
   RegTrack Insights - v4 free tier (2026-10-06)
-  03 - dbo.usp_Insights_FreeMonthly_LoadLicences
+  35 - dbo.usp_Insights_FreeMonthly_LoadLicences
 
   WHY: the free tier now follows the RegTrack Detailed Report / licence report
   export (2026-10-06), not the management dashboard. For licences the
@@ -8,7 +8,7 @@
   "Free tier monthly digest = RegTrack Detailed Report export",
   Sec. 3 decision 7, Sec. 5.3, Sec. 6, Sec. 7.2.
 
-  WHAT CHANGED vs the prod base (_current_prod/usp_Insights_FreeMonthly_LoadLicences.sql):
+  WHAT CHANGED vs the prod base (the procedure as deployed on prod and UAT):
    1. @AsOfDate = CAST(@AsOf AS DATE). The licence windows split at the as-at
       DATE, not the @AsOf instant:
         LapsesRestOfMonth = EndDate in [@AsOfDate, @NextMonthStart)
@@ -53,8 +53,8 @@
   result set is emitted. No new error codes (block 51240-51249; 51242/51243
   are retired and not used).
 
-  DEPENDENCY: install AFTER 01_slot_procs.sql. The INSERT names
-  #lic.ExportRows, which the callers' #lic has only after 01; a reversed
+  DEPENDENCY: install AFTER the slot procs (36, 38, 39, 40, 41). The INSERT names
+  #lic.ExportRows, which the callers' #lic has only after those; a reversed
   install compiles (deferred name resolution) but fails at RUN time.
 
   ASCII only (CLAUDE.md Sec. 5a). No join hints. No subquery inside an
