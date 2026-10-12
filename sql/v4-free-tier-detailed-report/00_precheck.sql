@@ -116,4 +116,4 @@ BEGIN
 END
 PRINT 'PRECHECK 5/5 OK - ComplianceStatus names as expected.';
 
-PRINT 'PRECHECK OK - safe to run the install (01 -> 02 -> 03 -> 04).';
+PRINT 'PRECHECK OK - safe to run the install (36, 38, 39, 40, 41 -> 37 -> 35 -> 34).';

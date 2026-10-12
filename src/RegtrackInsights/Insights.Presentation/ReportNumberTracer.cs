@@ -48,13 +48,58 @@ public static partial class ReportNumberTracer
         IEnumerable<Assertion>? assertions,
         IEnumerable<string?>? trustedTexts)
     {
-        var text = ReportClaimExtractor.VisibleText(html);
+        // [FIX 2026-10-09, found live on prod tenant 1271 - Location + Departments refused on every
+        // attempt of 3 runs] Two kinds of model-typed text are method, not data, and are dropped
+        // before numbers are read: the mini illustration of a "How to read this chart" panel
+        // (.hr-viz - the render prompts define it as an "optional mini inline-SVG illustration";
+        // a sample scale "1 / 10 / 100 / 1,000" there teaches the reader, it claims nothing), and the
+        // "x 100" multiplier of a percentage formula ("669 / 927 x 100"). The panel's written
+        // explanation and every number in the formula itself are still checked.
+        var text = TimesHundred().Replace(ReportClaimExtractor.VisibleText(HowToReadIllustration().Replace(html, " ")), " ");
+        // [FIX 2026-10-09, found live after the fix above] A model-typed chart axis - "0 256 512 768
+        // 1,024": a run of 4+ numbers starting at 0 in equal steps. The steps between 0 and the end
+        // are scale marks (fractions of the axis end), not claims; the end itself is still checked.
+        text = EvenScale().Replace(text, m => DropScaleSteps(m.Value));
         var numbers = ReportClaimExtractor.ExtractNumbers(text, ReportClaimExtractor.NumbersToIgnore(rowsJson));
         if (numbers.Count == 0)
             return [];
 
         var candidates = BuildCandidates(rowsJson, totalsJson, assertions, trustedTexts);
         return numbers.Where(n => !IsTraced(n, candidates, IsPointsGap(text, n))).ToList();
+    }
+
+    /// <summary>
+    /// "0 256 512 768 1,024 28" -> "0 1,024 28": the stretch that climbs from 0 in equal steps (4+
+    /// numbers) loses its inner steps; its end and anything after it stay. Unchanged otherwise.
+    /// </summary>
+    private static string DropScaleSteps(string run)
+    {
+        var tokens = run.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var values = tokens.Select(t => double.Parse(t.Replace(",", ""), CultureInfo.InvariantCulture)).ToArray();
+        var kept = new List<string>();
+        var i = 0;
+        while (i < tokens.Length)
+        {
+            var end = i;
+            if (values[i] == 0 && i + 1 < values.Length && values[i + 1] > 0)
+            {
+                var step = values[i + 1];
+                end = i + 1;
+                while (end + 1 < values.Length && Math.Abs(values[end + 1] - values[end] - step) < 1e-9) end++;
+            }
+            if (end - i + 1 >= 4)
+            {
+                kept.Add(tokens[i]);
+                kept.Add(tokens[end]);
+                i = end + 1;
+            }
+            else
+            {
+                kept.Add(tokens[i]);
+                i++;
+            }
+        }
+        return string.Join(" ", kept);
     }
 
     /// <summary>"15.2 points", "3 pp" - a percentage gap written without a % sign.</summary>
@@ -111,6 +156,12 @@ public static partial class ReportNumberTracer
         foreach (var part in totalCounts)
             foreach (var whole in totalCounts)
                 if (part < whole) { Share(part, whole); C(whole - part); }
+        // [FIX 2026-10-09, found live] A plain sum of two totals - "all due dates" written as
+        // AssignedInstances + UnassignedInstances (7,202 + 33 = 7,235 on Departments 1271). The
+        // class doc already promises sums; only differences and shares of totals were built.
+        for (var i = 0; i < totalCounts.Count; i++)
+            for (var j = i + 1; j < totalCounts.Count; j++)
+                C(totalCounts[i] + totalCounts[j]);
         var totalPcts = totals.Where(t => IsPercentName(t.Key)).Select(t => t.Value).ToList();
 
         var rows = new List<Dictionary<string, double>>();
@@ -356,4 +407,16 @@ public static partial class ReportNumberTracer
 
     [GeneratedRegex(@"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")]
     private static partial Regex NumberInText();
+
+    // The .hr-viz illustration block of a "How to read this chart" panel (one inline SVG, no nested div).
+    [GeneratedRegex(@"<div\b[^>]*\bclass\s*=\s*[""'][^""']*\bhr-viz\b[^""']*[""'][^>]*>.*?</div>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex HowToReadIllustration();
+
+    // 4+ whole numbers (no %, no decimals) separated only by whitespace - a candidate axis/scale run.
+    [GeneratedRegex(@"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\s+(?:\d{1,3}(?:,\d{3})+|\d+)){3,}(?![\w.,%])")]
+    private static partial Regex EvenScale();
+
+    // "x 100" / "* 100" - the percentage multiplier of a formula, in visible text (&times; already decoded).
+    [GeneratedRegex(@"[×✕✖*]\s*100(?![\d.,%])")]
+    private static partial Regex TimesHundred();
 }

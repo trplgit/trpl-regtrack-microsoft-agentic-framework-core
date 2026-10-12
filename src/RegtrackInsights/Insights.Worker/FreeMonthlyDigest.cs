@@ -218,8 +218,9 @@ public sealed class FreeMonthlyDigestComposer(
                 // The validated text is what the reader gets.
                 // [2026-10-07] Reader wording ("compliance", never "obligation") - applied after every check.
                 // [2026-10-08] Then a sentence that only repeats the one before it is dropped.
-                var body = FreeTierReaderTerms.WithoutRepeatedFigures(
-                    FreeTierReaderTerms.Apply(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(prepared.Body, prompt), prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition)));
+                // [2026-10-09] And a sentence repeated anywhere in the email is said once.
+                var body = FreeTierReaderTerms.WithoutDuplicateSentences(FreeTierReaderTerms.WithoutRepeatedFigures(
+                    FreeTierReaderTerms.Apply(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(prepared.Body, prompt), prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition))));
 
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body accepted on attempt {Attempt}. Tokens: {InputTokens} in / {OutputTokens} out.",

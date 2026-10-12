@@ -1,4 +1,66 @@
-CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Users
+/*===========================================================================
+  RegTrack Insights - v4 free tier: follow RegTrack's Detailed Report
+  38_freetier_monthly_users.sql - CREATE OR ALTER usp_Insights_FreeMonthly_Users.
+  One of the five slot procs (files 36, 38, 39, 40, 41).
+
+  Run AFTER 00_precheck.sql (which must report every row MATCH), and BEFORE
+  37 (MemberDetectors), 35 (LoadLicences) and 34 (LoadFacts).
+
+  WHAT CHANGED vs the prod base (the procedures as deployed on prod and UAT,
+  snapshotted 2026-10-06) - nothing else; every other line is byte-identical:
+
+  Why: from 2026-10-06 the free tier counts at RegTrack Detailed Report
+  EXPORT-ROW grain (testers count rows of the Detailed Report Excel export,
+  Statutory + Statutory Checklist). One #sched row is still one schedule and
+  one #lic row is still one licence; the new ExportRows column carries how
+  many export rows that schedule / licence produces. The weight is filled by
+  the loaders (LoadFacts / LoadLicences, files 34 / 35). DEFAULT 1 keeps the
+  OLD loaders valid mid-deploy: they insert without naming ExportRows, so
+  every row weighs 1 and every number equals today's until 35 / 34 land.
+  Design: ADR "free tier = RegTrack Detailed Report export", Sec. 5, 7.3, 8, 9.
+
+  1. DDL - ExportRows INT NOT NULL DEFAULT 1 added as the LAST column of the
+     caller-created temp table(s): Overview #sched and #lic; Users, Location,
+     Act #sched; Licence #lic. Unnamed inline default on purpose: a NAMED
+     constraint on a temp table collides across concurrent sessions.
+
+  2. Item counts weighted - every COUNT(*) / SUM(CASE ... THEN 1 ...) over
+     #sched / #lic rows that feeds a fact, candidate count, detector rate,
+     control total or reconciliation invariant is now the ExportRows sum
+     (ISNULL(SUM(...), 0) where the set can be empty or is LEFT-joined):
+       Overview : #wp window decomposition; overdue stock; licence totals;
+                  #liabLoc.LiabOverdueItems
+       Users    : OpenItems / OpenItemsUnowned (control totals, u_open_items,
+                  u_open_no_owner); #selfRev.Items; @tOverdue;
+                  u_open_no_reviewer
+       Location : #site.OpenItems / OpenUnowned; @tOverdue;
+                  open_items_no_owner_anywhere
+       Act      : @tOverdue; open_items_no_owner_anywhere
+       Licence  : the totals block; #licLoc / #licType Licences and
+                  ExpiredUnrenewed
+     Reconciliations weighted on BOTH sides, so they stay balanced:
+     51251, 51252, 51253, 51301, 51302, 51303.
+     Untouched (structural, row-level): 51281, 51282, 51291, 51292.
+
+  3. NOT weighted (deliberately): COUNT(DISTINCT ...); member and instance
+     counts (#inst, #site.Obligations, #liabLoc LiabInst / LiabOverdueInst,
+     #cat, row counts of #licLoc / #licType / #mm / #mem); SchedulesLoaded
+     (still distinct schedules); schedules_no_owner_anywhere.
+
+  Unchanged: parameter lists, every result set, its column names and order,
+  every fact key and DisplayLabel text, every error code. No new objects.
+
+  Install order: 00 -> 36, 38, 39, 40, 41 -> 37 -> 35 -> 34. Rollback: 99_rollback.sql.
+  SQL source is pure ASCII (CLAUDE.md Sec. 5a).
+===========================================================================*/
+/*  [2026-10-07] Licence windows (LapsesRestOfMonth / LapsedThisMonth / LapsedLastMonth) count by END DATE
+    only, any status (35), to equal the licence report. Every 'no renewal filed' figure and named licence
+    built on them adds LicenceState <> 'ended_other', so a Renewed / Terminated / Not Applicable licence is
+    never reported as 'no renewal filed'.                                                                  */
+SET NOCOUNT ON;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Insights_FreeMonthly_Users
     @UserID              INT,
     @CustomerID          INT,
     @CurrMonthStart      DATE,
@@ -28,7 +90,8 @@ BEGIN
         BranchID INT NOT NULL, ScheduleOn DATETIME NOT NULL, WindowPart VARCHAR(14) NULL,
         PerformerID BIGINT NULL, PerformerSource VARCHAR(10) NOT NULL, ReviewerID BIGINT NULL,
         ReviewerSource VARCHAR(10) NOT NULL, NeverTouched BIT NOT NULL, Outcome VARCHAR(20) NOT NULL,
-        IsOverdue BIT NOT NULL, DaysPastDue INT NULL, AgeBand VARCHAR(10) NULL);
+        IsOverdue BIT NOT NULL, DaysPastDue INT NULL, AgeBand VARCHAR(10) NULL,
+        ExportRows INT NOT NULL DEFAULT 1);
 
     IF OBJECT_ID('tempdb..#mem') IS NOT NULL DROP TABLE #mem;
     CREATE TABLE #mem (MemberId BIGINT NOT NULL PRIMARY KEY, MemberLabel NVARCHAR(MAX) NULL);
@@ -148,9 +211,9 @@ BEGIN
         the schedules with a performer), so it is REPORTED in control_totals,
         not asserted - an assertion that cannot fail tests nothing. The real
         tie (member sums vs mapped schedules) is sql/37's 51263.             */
-    DECLARE @openAll   INT = (SELECT COUNT(*) FROM #sched WHERE Outcome = 'open');
+    DECLARE @openAll   INT = (SELECT ISNULL(SUM(ExportRows), 0) FROM #sched WHERE Outcome = 'open');
     DECLARE @openOwned INT = (SELECT ISNULL(SUM(OpenItems), 0) FROM #mm);
-    DECLARE @openNone  INT = (SELECT COUNT(*) FROM #sched WHERE Outcome = 'open' AND PerformerID IS NULL);
+    DECLARE @openNone  INT = (SELECT ISNULL(SUM(ExportRows), 0) FROM #sched WHERE Outcome = 'open' AND PerformerID IS NULL);
 
     /*===================================================================
       3. USERS-ONLY DETECTORS
@@ -164,7 +227,7 @@ BEGIN
 
     /*-- self_review: performer = reviewer on an open item ------------------------*/
     IF OBJECT_ID('tempdb..#selfRev') IS NOT NULL DROP TABLE #selfRev;
-    SELECT s.PerformerID AS UserID, COUNT(*) AS Items
+    SELECT s.PerformerID AS UserID, SUM(s.ExportRows) AS Items
     INTO #selfRev
     FROM #sched s
     WHERE s.Outcome = 'open'
@@ -222,7 +285,7 @@ BEGIN
       4. FACTS
     ===================================================================*/
     DECLARE @withOverdue INT = (SELECT COUNT(*) FROM #mm WHERE OverdueItems >= 1);
-    DECLARE @tOverdue    INT = (SELECT COUNT(*) FROM #sched WHERE IsOverdue = 1);
+    DECLARE @tOverdue    INT = (SELECT ISNULL(SUM(ExportRows), 0) FROM #sched WHERE IsOverdue = 1);
     DECLARE @top3        INT = (SELECT ISNULL(SUM(t.OverdueItems), 0)
                                 FROM (SELECT TOP 3 x.OverdueItems FROM #mm x ORDER BY x.OverdueItems DESC) t);
 
@@ -232,7 +295,7 @@ BEGIN
      ('u_people_with_overdue',         @withOverdue,    N'of those hold at least one overdue item',                                      'people', 110, 'stock', 'volume',                 4, 0, NULL),
      ('u_open_items',                  @openAll,        N'open items in your scope (overdue or not yet due)',                            'people', 120, 'stock', 'volume',                 5, 0, NULL),
      ('u_open_no_owner',               @openNone,       N'open items with no one assigned to do them',                                   'people', 130, 'stock', 'operational_continuity', 2, 0, 7),
-     ('u_open_no_reviewer',            (SELECT COUNT(*) FROM #sched WHERE Outcome = 'open' AND ReviewerSource = 'none'),
+     ('u_open_no_reviewer',            (SELECT ISNULL(SUM(ExportRows), 0) FROM #sched WHERE Outcome = 'open' AND ReviewerSource = 'none'),
                                                         N'open items with no reviewer assigned',                                         'people', 140, 'stock', 'operational_continuity', 3, 0, NULL),
      ('u_open_self_reviewed',          @selfRevItems,   N'open items where the same person is both performer and reviewer',              'people', 150, 'stock', 'operational_continuity', 2, 0, NULL),
      ('u_people_self_reviewing',       @selfRevPeople,  N'people are both performer and reviewer on at least one open item',             'people', 155, 'stock', 'operational_continuity', 2, 0, NULL),
@@ -382,3 +445,6 @@ BEGIN
     FROM #eg
     ORDER BY PatternFactKey, ExampleRank;
 END
+GO
+PRINT 'usp_Insights_FreeMonthly_Users installed';
+GO

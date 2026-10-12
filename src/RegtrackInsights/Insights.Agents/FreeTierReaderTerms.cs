@@ -38,6 +38,13 @@ public static partial class FreeTierReaderTerms
         // [2026-10-08] One measure per sentence: "...2,240 overdue compliances; 9 other locations ..." becomes two sentences.
         text = Semicolon().Replace(text, m => ". " + m.Groups[1].Value + char.ToUpperInvariant(m.Groups[2].Value[0]));
 
+        // [OWNER, 2026-10-09] Cosmetic slips seen in real output, each removed deterministically:
+        text = Regex.Replace(text, @"\bremains? still open\b", m => m.Value.StartsWith("remains", StringComparison.OrdinalIgnoreCase) ? "is still open" : "are still open", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\b(across|in|within) your scope\b", "$1 your organisation", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bOf (?:these|those), (\**\d)", "$1", RegexOptions.IgnoreCase);          // "Of these, 10,101 of the 13,820" -> "10,101 of the 13,820"
+        text = Regex.Replace(text, @"(?<=[.!?]\s+|\n)(?:Also|Additionally|Furthermore|Moreover), (\**)(\w)", m => m.Groups[1].Value + char.ToUpperInvariant(m.Groups[2].Value[0]));
+        text = Regex.Replace(text, @"\s+(?:is|are) also included in the full list\.", " are also above your company average.", RegexOptions.IgnoreCase);
+
         // Article first: "an obligation" -> "a compliance".
         text = AnObligation().Replace(text, m => (char.IsUpper(m.Value[0]) ? "A" : "a") + " compliance");
         text = Obligation().Replace(text, m =>
@@ -82,14 +89,48 @@ public static partial class FreeTierReaderTerms
     /// </summary>
     public static string ForPeople(string text, FreeMonthlyDigestPrompt prompt)
     {
-        foreach (var finding in prompt.NamedFindings)
+        var people = prompt.NamedFindings
+            .Where(f => f.NamePlaceholder is not null && f.Candidate.EntityKind is "user" or "person")
+            .Select(f => f.NamePlaceholder!)
+            .Concat(prompt.Examples.Where(e => e.Example.EntityKind is "user" or "person").Select(e => e.Placeholder))
+            .ToList();
+
+        foreach (var placeholder in people)
         {
-            if (finding.NamePlaceholder is not { } placeholder || finding.Candidate.EntityKind is not ("user" or "person"))
-                continue;
             text = Regex.Replace(text, $@"\b([Aa])t (\*\*)?{Regex.Escape(placeholder)}",
                 m => (m.Groups[1].Value == "A" ? "For " : "for ") + m.Groups[2].Value + placeholder);
+
+            // [2026-10-09] "{{EG_1}} (61 of its 61)" - "its" for a person. Within any sentence that names a
+            // person, "its" is "their".
+            text = Regex.Replace(text, $@"[^.!?\n]*{Regex.Escape(placeholder)}[^.!?\n]*",
+                m => Regex.Replace(m.Value, @"\bits\b", "their"));
         }
         return text;
+    }
+
+    /// <summary>
+    /// [OWNER, 2026-10-09] "Until a licence is renewed, there is no valid licence on record for that activity."
+    /// twice in one paragraph. A sentence that already appeared anywhere in the body, ignoring bold and
+    /// spacing, is dropped the second time. Runs on the final text, after validation - removing a repeat
+    /// cannot make the email untrue.
+    /// </summary>
+    public static string WithoutDuplicateSentences(string body)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var paragraphs = body.Replace("\r\n", "\n").Split("\n\n");
+        for (var p = 0; p < paragraphs.Length; p++)
+        {
+            var kept = new List<string>();
+            foreach (var sentence in SentenceEnd().Split(paragraphs[p]))
+            {
+                var key = Regex.Replace(sentence.Replace("**", string.Empty), @"\s+", " ").Trim().ToLowerInvariant();
+                if (key.Length > 0 && Regex.IsMatch(key, @"[a-z]") && !seen.Add(key))
+                    continue;
+                kept.Add(sentence);
+            }
+            paragraphs[p] = string.Join(" ", kept);
+        }
+        return string.Join("\n\n", paragraphs);
     }
 
     /// <summary>

@@ -1,4 +1,66 @@
-CREATE PROCEDURE dbo.usp_Insights_FreeMonthly_Licence
+/*===========================================================================
+  RegTrack Insights - v4 free tier: follow RegTrack's Detailed Report
+  41_freetier_monthly_licence.sql - CREATE OR ALTER usp_Insights_FreeMonthly_Licence.
+  One of the five slot procs (files 36, 38, 39, 40, 41).
+
+  Run AFTER 00_precheck.sql (which must report every row MATCH), and BEFORE
+  37 (MemberDetectors), 35 (LoadLicences) and 34 (LoadFacts).
+
+  WHAT CHANGED vs the prod base (the procedures as deployed on prod and UAT,
+  snapshotted 2026-10-06) - nothing else; every other line is byte-identical:
+
+  Why: from 2026-10-06 the free tier counts at RegTrack Detailed Report
+  EXPORT-ROW grain (testers count rows of the Detailed Report Excel export,
+  Statutory + Statutory Checklist). One #sched row is still one schedule and
+  one #lic row is still one licence; the new ExportRows column carries how
+  many export rows that schedule / licence produces. The weight is filled by
+  the loaders (LoadFacts / LoadLicences, files 34 / 35). DEFAULT 1 keeps the
+  OLD loaders valid mid-deploy: they insert without naming ExportRows, so
+  every row weighs 1 and every number equals today's until 35 / 34 land.
+  Design: ADR "free tier = RegTrack Detailed Report export", Sec. 5, 7.3, 8, 9.
+
+  1. DDL - ExportRows INT NOT NULL DEFAULT 1 added as the LAST column of the
+     caller-created temp table(s): Overview #sched and #lic; Users, Location,
+     Act #sched; Licence #lic. Unnamed inline default on purpose: a NAMED
+     constraint on a temp table collides across concurrent sessions.
+
+  2. Item counts weighted - every COUNT(*) / SUM(CASE ... THEN 1 ...) over
+     #sched / #lic rows that feeds a fact, candidate count, detector rate,
+     control total or reconciliation invariant is now the ExportRows sum
+     (ISNULL(SUM(...), 0) where the set can be empty or is LEFT-joined):
+       Overview : #wp window decomposition; overdue stock; licence totals;
+                  #liabLoc.LiabOverdueItems
+       Users    : OpenItems / OpenItemsUnowned (control totals, u_open_items,
+                  u_open_no_owner); #selfRev.Items; @tOverdue;
+                  u_open_no_reviewer
+       Location : #site.OpenItems / OpenUnowned; @tOverdue;
+                  open_items_no_owner_anywhere
+       Act      : @tOverdue; open_items_no_owner_anywhere
+       Licence  : the totals block; #licLoc / #licType Licences and
+                  ExpiredUnrenewed
+     Reconciliations weighted on BOTH sides, so they stay balanced:
+     51251, 51252, 51253, 51301, 51302, 51303.
+     Untouched (structural, row-level): 51281, 51282, 51291, 51292.
+
+  3. NOT weighted (deliberately): COUNT(DISTINCT ...); member and instance
+     counts (#inst, #site.Obligations, #liabLoc LiabInst / LiabOverdueInst,
+     #cat, row counts of #licLoc / #licType / #mm / #mem); SchedulesLoaded
+     (still distinct schedules); schedules_no_owner_anywhere.
+
+  Unchanged: parameter lists, every result set, its column names and order,
+  every fact key and DisplayLabel text, every error code. No new objects.
+
+  Install order: 00 -> 36, 38, 39, 40, 41 -> 37 -> 35 -> 34. Rollback: 99_rollback.sql.
+  SQL source is pure ASCII (CLAUDE.md Sec. 5a).
+===========================================================================*/
+/*  [2026-10-07] Licence windows (LapsesRestOfMonth / LapsedThisMonth / LapsedLastMonth) count by END DATE
+    only, any status (35), to equal the licence report. Every 'no renewal filed' figure and named licence
+    built on them adds LicenceState <> 'ended_other', so a Renewed / Terminated / Not Applicable licence is
+    never reported as 'no renewal filed'.                                                                  */
+SET NOCOUNT ON;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.usp_Insights_FreeMonthly_Licence
     @UserID              INT,
     @CustomerID          INT,
     @CurrMonthStart      DATE,
@@ -16,7 +78,8 @@ BEGIN
         LicenseId BIGINT NOT NULL PRIMARY KEY, BranchID INT NOT NULL, LicenseTypeID BIGINT NULL,
         LicenseTypeName NVARCHAR(MAX) NULL, EndDate DATETIME NULL, StatusBucket NVARCHAR(200) NULL,
         LicenceState VARCHAR(12) NOT NULL, RenewalInProgress BIT NOT NULL, LapsesRestOfMonth BIT NOT NULL,
-        LapsedThisMonth BIT NOT NULL, LapsedLastMonth BIT NOT NULL);
+        LapsedThisMonth BIT NOT NULL, LapsedLastMonth BIT NOT NULL,
+        ExportRows INT NOT NULL DEFAULT 1);
 
     IF OBJECT_ID('tempdb..#detector') IS NOT NULL DROP TABLE #detector;
     CREATE TABLE #detector (
@@ -64,23 +127,23 @@ BEGIN
             @lapsedLm INT, @lapsedLmUnrenewed INT, @lapsedTm INT, @lapsedTmUnrenewed INT,
             @untyped INT, @noStatusRow INT;
 
-    SELECT @total             = COUNT(*),
-           @valid             = ISNULL(SUM(CASE WHEN LicenceState = 'valid'       THEN 1 ELSE 0 END), 0),
-           @lapsed            = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed'      THEN 1 ELSE 0 END), 0),
-           @endedOther        = ISNULL(SUM(CASE WHEN LicenceState = 'ended_other' THEN 1 ELSE 0 END), 0),
-           @noEnd             = ISNULL(SUM(CASE WHEN LicenceState = 'no_end_date' THEN 1 ELSE 0 END), 0),
-           @otherStatus       = ISNULL(SUM(CASE WHEN LicenceState = 'other_status' THEN 1 ELSE 0 END), 0),   -- 2026-09-29, sql/35
-           @lapsedUnrenewed   = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
-           @lapsedRenewing    = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 1 THEN 1 ELSE 0 END), 0),
-           @expRom            = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 THEN 1 ELSE 0 END), 0),
-           @expRomUnrenewed   = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
-           @expRomRenewing    = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 1 THEN 1 ELSE 0 END), 0),
-           @lapsedLm          = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 THEN 1 ELSE 0 END), 0),
-           @lapsedLmUnrenewed = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
-           @lapsedTm          = ISNULL(SUM(CASE WHEN LapsedThisMonth = 1 THEN 1 ELSE 0 END), 0),
-           @lapsedTmUnrenewed = ISNULL(SUM(CASE WHEN LapsedThisMonth = 1 AND RenewalInProgress = 0 THEN 1 ELSE 0 END), 0),
-           @untyped           = ISNULL(SUM(CASE WHEN LicenseTypeID IS NULL THEN 1 ELSE 0 END), 0),
-           @noStatusRow       = ISNULL(SUM(CASE WHEN StatusBucket IS NULL THEN 1 ELSE 0 END), 0)
+    SELECT @total             = ISNULL(SUM(ExportRows), 0),
+           @valid             = ISNULL(SUM(CASE WHEN LicenceState = 'valid'       THEN ExportRows ELSE 0 END), 0),
+           @lapsed            = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed'      THEN ExportRows ELSE 0 END), 0),
+           @endedOther        = ISNULL(SUM(CASE WHEN LicenceState = 'ended_other' THEN ExportRows ELSE 0 END), 0),
+           @noEnd             = ISNULL(SUM(CASE WHEN LicenceState = 'no_end_date' THEN ExportRows ELSE 0 END), 0),
+           @otherStatus       = ISNULL(SUM(CASE WHEN LicenceState = 'other_status' THEN ExportRows ELSE 0 END), 0),   -- 2026-09-29, sql/35
+           @lapsedUnrenewed   = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 0 THEN ExportRows ELSE 0 END), 0),
+           @lapsedRenewing    = ISNULL(SUM(CASE WHEN LicenceState = 'lapsed' AND RenewalInProgress = 1 THEN ExportRows ELSE 0 END), 0),
+           @expRom            = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 THEN ExportRows ELSE 0 END), 0),
+           @expRomUnrenewed   = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 0 AND LicenceState <> 'ended_other' THEN ExportRows ELSE 0 END), 0),
+           @expRomRenewing    = ISNULL(SUM(CASE WHEN LapsesRestOfMonth = 1 AND RenewalInProgress = 1 THEN ExportRows ELSE 0 END), 0),
+           @lapsedLm          = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 THEN ExportRows ELSE 0 END), 0),
+           @lapsedLmUnrenewed = ISNULL(SUM(CASE WHEN LapsedLastMonth = 1 AND RenewalInProgress = 0 AND LicenceState <> 'ended_other' THEN ExportRows ELSE 0 END), 0),
+           @lapsedTm          = ISNULL(SUM(CASE WHEN LapsedThisMonth = 1 THEN ExportRows ELSE 0 END), 0),
+           @lapsedTmUnrenewed = ISNULL(SUM(CASE WHEN LapsedThisMonth = 1 AND RenewalInProgress = 0 AND LicenceState <> 'ended_other' THEN ExportRows ELSE 0 END), 0),
+           @untyped           = ISNULL(SUM(CASE WHEN LicenseTypeID IS NULL THEN ExportRows ELSE 0 END), 0),
+           @noStatusRow       = ISNULL(SUM(CASE WHEN StatusBucket IS NULL THEN ExportRows ELSE 0 END), 0)
     FROM #lic;
 
     IF @total <> @valid + @lapsed + @endedOther + @noEnd + @otherStatus
@@ -96,8 +159,8 @@ BEGIN
         IsFlagged          BIT           NOT NULL DEFAULT 0
     );
     INSERT #licLoc (BranchID, BranchName, Licences, ExpiredUnrenewed)
-    SELECT l.BranchID, MAX(cb.Name), COUNT(*),      -- group by id only: never GROUP BY a name column
-           SUM(CASE WHEN l.LicenceState = 'lapsed' AND l.RenewalInProgress = 0 THEN 1 ELSE 0 END)
+    SELECT l.BranchID, MAX(cb.Name), SUM(l.ExportRows),      -- group by id only: never GROUP BY a name column
+           SUM(CASE WHEN l.LicenceState = 'lapsed' AND l.RenewalInProgress = 0 THEN l.ExportRows ELSE 0 END)
     FROM #lic l
     JOIN CustomerBranch cb ON cb.ID = l.BranchID
     GROUP BY l.BranchID;
@@ -117,8 +180,8 @@ BEGIN
         IsFlagged          BIT           NOT NULL DEFAULT 0
     );
     INSERT #licType (LicenseTypeID, LicenseTypeName, Licences, ExpiredUnrenewed)
-    SELECT l.LicenseTypeID, MAX(l.LicenseTypeName), COUNT(*),
-           SUM(CASE WHEN l.LicenceState = 'lapsed' AND l.RenewalInProgress = 0 THEN 1 ELSE 0 END)
+    SELECT l.LicenseTypeID, MAX(l.LicenseTypeName), SUM(l.ExportRows),
+           SUM(CASE WHEN l.LicenceState = 'lapsed' AND l.RenewalInProgress = 0 THEN l.ExportRows ELSE 0 END)
     FROM #lic l
     WHERE l.LicenseTypeID IS NOT NULL
     GROUP BY l.LicenseTypeID;
@@ -182,7 +245,7 @@ BEGIN
            'expires_on', CAST(l.EndDate AS DATE), @expRomUnrenewed, @expRom
     FROM #lic l
     JOIN CustomerBranch cb ON cb.ID = l.BranchID
-    WHERE l.LapsesRestOfMonth = 1 AND l.RenewalInProgress = 0
+    WHERE l.LapsesRestOfMonth = 1 AND l.RenewalInProgress = 0 AND l.LicenceState <> 'ended_other'
     ORDER BY l.EndDate ASC, l.LicenseId ASC;
 
     /*  P2 - lapsed last month or so far this month, still no renewal;
@@ -196,7 +259,7 @@ BEGIN
            @lapsedLmUnrenewed + @lapsedTmUnrenewed, @lapsedLm + @lapsedTm
     FROM #lic l
     JOIN CustomerBranch cb ON cb.ID = l.BranchID
-    WHERE (l.LapsedLastMonth = 1 OR l.LapsedThisMonth = 1) AND l.RenewalInProgress = 0
+    WHERE (l.LapsedLastMonth = 1 OR l.LapsedThisMonth = 1) AND l.RenewalInProgress = 0 AND l.LicenceState <> 'ended_other'
     ORDER BY l.EndDate ASC, l.LicenseId ASC;
 
     IF @locMode = 'individual'
@@ -373,3 +436,6 @@ BEGIN
     FROM #eg
     ORDER BY PatternFactKey, ExampleRank;
 END
+GO
+PRINT 'usp_Insights_FreeMonthly_Licence installed';
+GO
