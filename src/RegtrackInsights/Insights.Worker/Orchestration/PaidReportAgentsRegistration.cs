@@ -200,7 +200,10 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-29] v4 on Departments/Location/Risk/Nature/Internal - ownership is no
                 // longer a finding (RegTrack parity: every obligation has an active performer, so the
                 // ownership fields are always 0). v3 files stay untouched.
-                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v5.md"),
+                // [ADDED 2026-10-13] v6 - every visual must earn its place: QUESTION/TAKEAWAY per
+                // visual, no "at least four visuals" quota, mark budget, waffle capped at one square
+                // per hundredth (Lumax review: a 10,749-box waffle told the reader nothing).
+                ["Departments"] = Build("Departments", "02_composition_freehand_departments_v6.md"),
                 ["Licence"] = Build("Licence", "02_composition_freehand_licence_v8.md"),
                 // [ADDED 2026-09-25] v2 - same window data_quality fix as Departments above.
                 ["Location"] = Build("Location", "02_composition_freehand_location_v5.md"),
@@ -421,9 +424,11 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Location above.
                 // [ADDED 2026-09-30] v7 - percentage hover-link (section 7b), same proven
                 // mechanism as the Licence dimension's own version.
+                // [ADDED 2026-10-13] v8 - section 9b: chart title = takeaway, mark budget, two-way
+                // splits as one 100% bar or a single 10 x 10 waffle, same mark size when comparing areas.
                 ["dimension_selection:Departments"] = Build(
                     "DimensionSelectionDepartmentReportHtmlAgent", "Renders a freehand-composed Departments insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_department_v7.md", freehandModel),
+                    "05_report_html_dimension_selection_department_v8.md", freehandModel),
                 // [ADDED 2026-09-30] v6 - percentage hover-link (section 7b), same proven
                 // mechanism as the Licence dimension's own version.
                 ["dimension_selection:BacklogAging"] = Build(
