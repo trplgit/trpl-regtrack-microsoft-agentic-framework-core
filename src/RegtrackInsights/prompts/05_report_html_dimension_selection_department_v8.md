@@ -471,8 +471,9 @@ has, not to show that data exists.
   digit-and-percent figure, since only real values from the data may appear as numbers.
 - **Same scale when comparing areas.** Two quantities compared by area share one grid with the same
   mark size. Never two side-by-side panels whose different widths change the size of a mark.
-- **Drop a chart that adds nothing.** If the composition's chart would only repeat one number the
-  page already states, show that number as a tile with its sentence instead.
+- **Keep every chart the composition planned** (it plans at least four, each with a real takeaway).
+  If one would only repeat a number the page already states, build it in the form that shows more -
+  never the one-square-per-occurrence grid.
 
 
 **10. Look and colour - clean white cards, colour where it means something (v4, REVISED 2026-09-27).**

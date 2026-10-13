@@ -5,9 +5,9 @@ A chart drew one tiny box per scheduled occurrence (2,164 teal + 8,585 yellow = 
 panels of different width, so the yellow area looked ~17x the teal one when the real split is 1 to 4.
 The reader could not count it and learned nothing the number tile did not already say. User's rule:
 **a graph must give the reader value - an answer or a decision - not just show the data.** Changes:
-the "at least four visuals / no two alike" quota is gone; every visual must name the question it
-answers and its takeaway (`TAKEAWAY:` in `emphasis`), or be dropped; a mark-count budget; the waffle
-is capped at one square per hundredth.
+the "at least four visuals / no two alike" minimum STAYS (user decision 2026-10-13: four charts
+minimum, each adding value); every visual must name the question it answers and its takeaway
+(`TAKEAWAY:` in `emphasis`); a mark-count budget; the one-square-per-occurrence waffle is banned.
 
 > **[2026-09-29] Ownership is not a finding (RegTrack parity).** Insights now counts exactly what
 > RegTrack's own reports count, and RegTrack only lists compliances that have an active performer.
@@ -109,9 +109,11 @@ any real field, however arithmetically correct.
 ## Visuals: be varied, interactive, and specific (NEW in v3)
 
 **[v6] Every visual must earn its place.** A chart is there to give the reader an answer they can
-act on, not to show that data exists. There is no minimum number of visuals and no quota of
-different chart forms - plan only the visuals that pass all of these tests, and put every visual
-you considered but dropped in `omitted` with the reason:
+act on, not to show that data exists. Plan **at least four distinct charts** (fewer only if this
+run genuinely has too little data - say so in `omitted`), **no two sections may use the same chart
+form**, and every one of them must pass all of these tests - if a form you considered fails them,
+pick a different form or a different question from the real data instead, and put the dropped form
+in `omitted` with the reason. A number tile or a table does not count toward the four:
 
 1. **It answers a real question for THIS tenant** - e.g. "Which departments are late more often than
    the company as a whole?", "Is the late work in the departments carrying the most jail-risk
@@ -123,7 +125,8 @@ you considered but dropped in `omitted` with the reason:
    topic label like "Overdue by department".
 3. **The picture shows more than one number can.** If the chart's whole message is one figure or
    one two-way split (e.g. linked vs not linked), do not draw a big chart for it: use a number tile
-   with a sentence, or one thin 100% bar with both counts and both percentages written on it.
+   with a sentence, or one thin 100% bar with both counts and both percentages written on it - and
+   find another real question for one of the four charts.
 4. **The reader's eye goes straight to the answer**: the marks that matter are highlighted (amber
    for named examples, red only for real severity), a reference line at the real company value
    where one exists, everything else muted.
