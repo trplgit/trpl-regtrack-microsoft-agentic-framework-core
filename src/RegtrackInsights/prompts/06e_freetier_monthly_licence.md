@@ -1,42 +1,52 @@
 # Free Monthly Insights - Licence
 
-About the reader's licences: their right to operate. Everything turns on one distinction: a
-renewal filed, or nothing filed. A licence is "expired", "expiring" or "renewed" - never
+About the reader's licences: their right to operate. Everything turns on one distinction -
+a renewal filed, or nothing filed. A licence is "expired", "expiring" or "renewed"; never
 "overdue", "due" or "lapsed".
 
-## What this email states, in this order
+Introduction subject: "your licences".
 
-Every item below is a paragraph: its figures, each with its base, then ONE meaning sentence
-from the shared rules (section 4a). Figures without their meaning sentence are not enough.
+## Paragraphs, in this order
 
-1. **Currently** - "Currently, N licences are expired with no renewal in progress across
-   your organisation. Until a licence is renewed, there is no valid licence on record for
-   that activity." Never write "N of the N expired licences" - say it once as above. Then the locations in ONE plain sentence using only
-   `loc_with_expired_unrenewed` of `loc_with_licences`, with the examples named: "N of your
-   M locations that hold licences have at least one expired licence with no renewal in
-   progress, including your {{EG_1}} site (N of its M licences)."
-2. **The named licence type or site** - "The {{NAME_1}} licence type has N of its M
-   licences expired with no renewal in progress, or P%, compared with P% across your
-   organisation." Then the residual in its own sentence, or that no other type is in that
-   situation.
-3. **In {{PREV_MONTH}} and so far in {{CURR_MONTH}}** - licences that reached their end date
-   in that period, followed in the same sentence by how many still have no renewal, from the
-   matching `_unrenewed` fact only: "N licences reached their end date in {{PREV_MONTH}}. N of
-   them still have no renewal filed." When no `_unrenewed` fact is given for that period,
-   write: "All of them have since been renewed or have a renewal filed." Never a bare "N
-   licences reached their end date" with nothing after it. Never "expired in {{PREV_MONTH}}", never
-   "whatever their status", never tie these to the expired total with "of these" or
-   "including".
-4. **Before the end of {{CURR_MONTH}}** - every licence expiring with no renewal, named with
+Each is built as shared rules section 5 says, answers its own question, and ends on its
+closing line from section 6.
+Leave out a paragraph whose facts are not in the input.
+
+1. **Currently - what is expired right now.** "Currently, {{F:lic_expired_unrenewed}} licences are expired with no
+   renewal in progress across your organisation." State it once; never as a part of the
+   expired total. Then the locations in one sentence: `loc_with_expired_unrenewed` of
+   `loc_with_licences`, with `{{EG_1}}` and its own count of its total: "...including your
+   {{EG_1}} site ({{EG_1:item}} of its {{EG_1:base}} licences)." Closing line for expired
+   licences.
+2. **Where expired licences gather.** "The {{NAME_1}} licence type has {{NAME_1:item}} of
+   its {{NAME_1:base}} licences expired with no renewal in progress, or {{NAME_1:pct}},
+   compared with {{NAME_1:tenant_pct}} across your organisation." Then its own `others` count,
+   or that no other type is in that situation. Closing line for a higher share of expired
+   licences.
+3. **In {{PREV_MONTH}}, and so far in {{CURR_MONTH}} - how renewals are kept up.** Licences that reached their end date
+   in that period (`lic_lapsed_last_month`, `lic_lapsed_this_month`). Each period is ONE
+   sentence that says, in the same sentence, what became of them: "In {{PREV_MONTH}},
+   {{F:lic_lapsed_last_month}} licences reached their end date, and all of them have since
+   been renewed or have a renewal filed." - or, when its `_unrenewed` fact is given, "...,
+   and {{F:lic_lapsed_last_month_unrenewed}} of those still have no renewal in progress."
+   The second period uses different words, never the same sentence again. When its
+   `FactValue` is 1: "So far in {{CURR_MONTH}}, {{F:lic_lapsed_this_month}} more licence has
+   reached its end date, and it is already renewed or has a renewal filed." When it is more
+   than 1: "So far in {{CURR_MONTH}}, {{F:lic_lapsed_this_month}} more licences have reached
+   their end date, and each is already renewed or has a renewal filed." Never "expired in {{PREV_MONTH}}", never tie these
+   to the expired total.
+   Closing line for licences reaching their end date in the period: the "renewed" one when all
+   of them were renewed, otherwise the "left without a renewal" one.
+4. **Before the end of {{CURR_MONTH}} - what is coming.** Each licence expiring with no renewal, named with
    its site and date: "{{NAME_2}} expires on {{DATE_2}} at your {{NAME_2_AT}} site and has no
-   renewal in progress."
+   renewal in progress." Closing line for a licence reaching its end date.
 
 ## Units
 
-Counts are licences unless the label says sites or licence types. Never state
-`pat_expired_unrenewed_location` or any comparison between locations. A licence finding
+Counts are licences unless the label says locations or licence types. Never state
+`pat_expired_unrenewed_location` or compare locations with each other. A licence finding
 with no `Placeholder` is written from its site and date, or left out; never invent a name.
-If `lic_total` is 0, write two sentences: no licences are tracked in RegTrack for them, and
-any recorded there will appear in this email when they come up for renewal.
+If `lic_total` is not in the input, write two sentences: no licences are tracked in RegTrack
+for them, and any recorded there will appear in this email when they come up for renewal.
 
-**Length:** about 250 words after `Good morning,`, 4 or 5 paragraphs.
+**Length:** about 250 words after `Good morning,`.

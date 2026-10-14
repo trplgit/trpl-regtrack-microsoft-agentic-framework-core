@@ -1,41 +1,45 @@
 # Free Monthly Insights - Users
 
-About the people doing the work. It answers: who holds the overdue work, whose overdue work
-carries the most personal liability, and where does work depend on one person? A person is
-named because their share is high and the reader should know whose desk it is on. State it
-and stop; never grade anyone.
+About the people doing the work. It answers: whose work slipped last month, whose desk the
+overdue work sits on, and where the work depends on one person? A person is named because
+the reader should know whose desk the work is on. State the facts and stop; never grade
+anyone.
 
-## What this email states, in this order
+Introduction subject: "the people responsible for compliance work across your organisation".
 
-Every item below is a paragraph: its figures, each with its base, then ONE meaning sentence
-from the shared rules (section 4a). Figures without their meaning sentence are not enough.
+## Paragraphs, in this order
 
-1. **In {{PREV_MONTH}}** - the slippage pattern with its examples: "N of the M people with
-   work due in {{PREV_MONTH}} still have a higher share of it open than the rest, including
-   {{EG_1}} (N of their M) and {{EG_2}} (N of their M)."
-2. **In total, from all months** - the overdue total, the part overdue for more than 90 days
-   and the part with personal liability. Then the meaning sentence. Nothing else in this
-   paragraph.
-2a. **The one strongest pattern of people** - its own short paragraph: EITHER the
-   self-reviewed work ("N of the M open compliances have the same person as performer and
-   reviewer.") OR work held by someone no longer active OR the 3-people share - the one with
-   the largest count - then the meaning sentence. The others stay in RegInsights Ultimate.
-3. **The named people** - {{NAME_1}} and {{NAME_2}} in full, one paragraph; {{NAME_3}} and {{NAME_4}} counted with the others and pointed at RegInsights Ultimate (shared rules section 6):
-   - liability share: "For {{NAME_1}}, N of their M overdue compliances carry personal
-     liability, or P%, compared with P% across your organisation." Then the residual in its
-     own sentence: "N other people also have a higher share than your company average."
-   - concentration: "{{NAME_2}} holds N of the M overdue compliances across your
-     organisation, or P%." Then ITS OWN residual: "N other people also hold a large share of
-     all overdue compliances." A residual count always belongs to the finding it came with -
-     never attach the liability-share residual to the concentration sentence or the other
-     way round, and never name {{NAME_3}} or {{NAME_4}}.
-4. **Before the end of {{CURR_MONTH}}** - what still falls due, and the part with personal
-   liability.
+Each is built as shared rules section 5 says, answers its own question, and ends on its
+closing line from section 6. Leave out a paragraph whose facts are not in the input.
+
+1. **In {{PREV_MONTH}} - whose work slipped.** The people who left a higher share of last
+   month's work open: the pattern's `flagged` of `compared` (or its `pat_` fact of its `_of`
+   total), with `{{EG_1}}` and their own count of their total in the same sentence. Closing
+   line for members that left last month's work open.
+2. **In total, from all months - how much is overdue and how serious.** The overdue total
+   (`t_od_total`), the part overdue for more than 90 days and the part with personal liability
+   (`t_od_liability`). Closing line for whichever of those two parts is larger.
+3. **Where work depends on one person or no check.** The one strongest pattern, and only
+   one: the open compliances with the same person as performer and reviewer
+   (`u_open_self_reviewed` of `u_open_items`), OR the open compliances held by people no
+   longer active (`u_open_items_inactive_owner`), OR the 3-person share
+   (`u_top3_overdue_share_pct`) - the one with the largest count. Its closing line.
+4. **The named people.** `{{NAME_1}}` and `{{NAME_2}}`, each in one sentence with their own
+   figures, written for their own `Detector`, each followed by its own `others` count; then ONE
+   RegInsights Ultimate line at the end of the paragraph:
+   - personal-liability share: "For {{NAME_1}}, {{NAME_1:item}} of their {{NAME_1:base}}
+     overdue compliances carry personal liability, or {{NAME_1:pct}}, compared with
+     {{NAME_1:tenant_pct}} across your organisation."
+   - largest part of all overdue work: "{{NAME_2}} holds {{NAME_2:item}} of the
+     {{NAME_2:base}} overdue compliances across your organisation, or {{NAME_2:pct}}."
+   Closing line for the first finding's subject.
+5. **Before the end of {{CURR_MONTH}} - what is coming.** What still falls due (`t_rm_due`).
+   No personal-liability figure here. Closing line for work falling due.
 
 ## Units
 
-People and compliances never share a clause. A finding's `BaseCount` is that person's own
-total, except under `overdue_concentration`, where it is the organisation's overdue total.
-If `u_open_items` is 0, say in one sentence that there is no open work, and stop.
+People and compliances never share a clause: `u_people_*` facts count people, `u_open_*`
+facts count compliances. If `u_open_items` is not in the input, say in one sentence that
+there is no open work, and stop.
 
-**Length:** about 300 words after `Good morning,`, 5 paragraphs.
+**Length:** about 300 words after `Good morning,`.

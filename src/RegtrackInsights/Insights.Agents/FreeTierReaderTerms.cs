@@ -26,6 +26,14 @@ public static partial class FreeTierReaderTerms
         // [2026-10-08] "are **overdue **." - a space left inside the closing bold marker.
         text = SpaceInsideBold().Replace(text, "**");
 
+        // [2026-10-14, Minda Users] A token bound to 1 under a plural sentence: "1 people are both performer and
+        // reviewer". Figures are tokens, so the model cannot see the number it is agreeing with; the agreement is
+        // fixed here, for the people/person case only, where the singular is unambiguous.
+        text = OnePeople().Replace(text, m => m.Groups["b"].Value + "1 person" + m.Groups["b2"].Value + (m.Groups["v"].Value switch
+        {
+            "are" => " is", "have" => " has", "hold" => " holds", "were" => " was", _ => " " + m.Groups["v"].Value,
+        }));
+
         // [2026-10-08] Card titles ("Where it sits - personal exposure") are fixed text; "exposure" is jargon.
         text = text.Replace("personal exposure", "personal liability").Replace("Personal exposure", "Personal liability");
         // [2026-10-08] Card title "Where it sits - lapsed licences": the emails say "expired".
@@ -165,15 +173,30 @@ public static partial class FreeTierReaderTerms
 
                 // [2026-10-08] "In total, from all months, ... In total, from all months, ..." - the period
                 // opener is said once per paragraph; the sentences after it keep their own base figure.
-                kept.Add(kept.Count > 0 && PeriodOpener().IsMatch(kept[0]) ? PeriodOpener().Replace(sentence, m => m.Groups["bold"].Value + char.ToUpperInvariant(m.Groups["first"].Value[0]), 1) : sentence);
+                // [FOUND 2026-10-14, Minda Licence] Only the SAME opener is dropped. "In September, 2 licences
+                // ... So far in October, 1 more ..." lost "So far in October," and the reader took October's
+                // licence as September's. A different period in the same paragraph is information, not repetition.
+                var paragraphOpener = kept.Count > 0 ? OpenerText(kept[0]) : null;
+                kept.Add(paragraphOpener is not null && OpenerText(sentence) == paragraphOpener
+                    ? PeriodOpener().Replace(sentence, m => m.Groups["bold"].Value + char.ToUpperInvariant(m.Groups["first"].Value[0]), 1)
+                    : sentence);
             }
             paragraphs[p] = string.Join(" ", kept);
         }
         return string.Join("\n\n", paragraphs);
     }
 
+    [GeneratedRegex(@"(?<b>\*\*)?\b1 people(?<b2>\*\*)? (?<v>are|have|hold|were)\b")]
+    private static partial Regex OnePeople();
+
     [GeneratedRegex(@"^(?:In total, from all months,|Currently,|So far in [A-Z][a-z]+,|In [A-Z][a-z]+,)\s+(?<bold>\*\*)?(?<first>\S)")]
     private static partial Regex PeriodOpener();
+
+    private static string? OpenerText(string sentence)
+    {
+        var m = PeriodOpener().Match(sentence);
+        return m.Success ? sentence[..m.Groups["first"].Index].Replace("**", string.Empty).Trim() : null;
+    }
 
     [GeneratedRegex(@"^In total, from all months,\s+(?<bold>\*\*)?(?<first>\S)")]
     private static partial Regex AllMonthsOpener();

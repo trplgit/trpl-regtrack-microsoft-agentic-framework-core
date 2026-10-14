@@ -363,7 +363,9 @@ public sealed class FreeMonthlyDigestPromptTests
     {
         var prompt = FreeMonthlyDigestPrompt.Build(MonthlyExamples.LocationWithAggregateExamples());
 
-        Assert.Contains("\"must_use\":[\"{{NAME_1}}\",\"{{NAME_2}}\",\"{{EG_1}}\",\"{{EG_2}}\",\"{{EG_3}}\"]", prompt.UserMessage);
+        // [2026-10-13] Only the first example of each pattern is required - listing all three made the
+        // model name every one of them, against "name the first, count the rest" (Minda Overview).
+        Assert.Contains("\"must_use\":[\"{{NAME_1}}\",\"{{NAME_2}}\",\"{{EG_1}}\"]", prompt.UserMessage);
     }
 
     /// <summary>
@@ -2441,8 +2443,10 @@ public sealed class ComposeDigestActivityTests
             .ReturnsAsync(data);
 
         const string bad = "Good morning,\n\nThis is alarming: **777 items** are open.";
-        var good = "Good morning,\n\n**5 items** from last month carry personal criminal liability as at {{AS_AT}}.\n\n"
-                   + "{{NAME_1}} at {{NAME_1_AT}} expires on {{DATE_1}} with no renewal filed. {{NAME_2}} holds 6 of them.";
+        // [2026-10-12] Figures are fact tokens now - a typed figure is itself a rejection.
+        var good = "Good morning,\n\nHere is your monthly update on compliance work across your organisation. The figures below are as of {{AS_AT}}.\n\n"
+                   + "In {{PREV_MONTH}}, **{{F:lm_open_liability}} compliances** that carry personal criminal liability were still open.\n\n"
+                   + "Currently, {{NAME_1}} at {{NAME_1_AT}} expires on {{DATE_1}} with no renewal filed, and {{NAME_2}} has {{NAME_2:item}} overdue compliances that carry personal liability.";
 
         var messages = new List<string>();
         var llm = new Mock<IClaudeClient>();

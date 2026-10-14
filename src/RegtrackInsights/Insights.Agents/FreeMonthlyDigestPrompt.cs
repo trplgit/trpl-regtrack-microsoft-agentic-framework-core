@@ -186,6 +186,13 @@ public sealed partial class FreeMonthlyDigestPrompt
     public required IReadOnlyList<MonthlyBoundExample> Examples { get; init; }
 
     public required IReadOnlySet<int> AllowedNumbers { get; init; }
+
+    /// <summary>
+    /// [2026-10-12] Every figure the model may write, as a token (<see cref="FreeMonthlyFactTokens"/>).
+    /// Kept OUT of <see cref="Bindings"/> and <see cref="AllowedNumbers"/>: the card lane reads both.
+    /// Empty for prompts built before tokens existed, which turns every token step into a no-op.
+    /// </summary>
+    public IReadOnlyDictionary<string, FactToken> FactTokens { get; init; } = new Dictionary<string, FactToken>();
     public required IReadOnlySet<int> AllowedPercentages { get; init; }
 
     /// <summary>
@@ -422,9 +429,14 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// <para>Roughly forty tokens, and unlike a rule it lets the model work the judgement out for
     /// itself. Only non-null members are serialised, so a slot without a count omits it.</para>
     /// </summary>
-    private static object ScopeOf(IReadOnlyList<MonthlyFact> facts)
+    private static object ScopeOf(IReadOnlyList<MonthlyFact> facts, Func<string, string?>? tokenOf = null)
     {
-        int? Value(string key) => facts.FirstOrDefault(f => f.FactKey == key)?.FactValue;
+        /*  [2026-10-12] With tokens, a scope size the model may quote is shown as its token plus the
+            value ("{{F:loc_in_scope}} = 79"); one it has no token for is shown as a size only. */
+        object? Value(string key) =>
+            facts.FirstOrDefault(f => f.FactKey == key) is { } f
+                ? tokenOf?.Invoke(key) is { } t ? $"{t} = {f.FactValue}" : f.FactValue
+                : null;
 
         return new
         {
@@ -808,6 +820,11 @@ public sealed partial class FreeMonthlyDigestPrompt
             routinely named only the first: three of five emails in one run failed on "never uses
             {{NAME_2}}". A requirement stated in the DATA the model is reading is followed; the same
             requirement stated in prose two thousand tokens earlier is not.                       */
+        var factTokens = FreeMonthlyFactTokens.Build(data, sentFacts, named, examples, RatioWorthStating, BoundsAFigure.Contains);
+        string? TokenOf(string key) => factTokens.ContainsKey("{{F:" + key + "}}") ? "{{F:" + key + "}}" : null;
+        string? FieldToken(string? owner, string field) =>
+            owner is null ? null : factTokens.ContainsKey(owner[..^2] + ":" + field + "}}") ? owner[..^2] + ":" + field + "}}" : null;
+
         var message = new
         {
             slot = SlotName(edition.Slot),
@@ -817,8 +834,11 @@ public sealed partial class FreeMonthlyDigestPrompt
                 single-person-site pattern as a bare count. The same lesson as the names - a
                 requirement stated in the data is followed - so they are listed here too. The
                 validator still never counts an example as a finding.                          */
-            must_use = named.Select(n => n.NamePlaceholder).Where(p => p is not null)
-                .Concat(examples.Select(e => e.Placeholder)).ToList(),
+            /*  [FOUND 2026-10-13, Minda Overview] Listing EVERY example here made the model name all six
+                (three sites, three categories) against the rule "name the first, count the rest". Only
+                {{NAME_1}}, {{NAME_2}} and the first example of each pattern are required.             */
+            must_use = named.Where(n => n.NamePlaceholder is "{{NAME_1}}" or "{{NAME_2}}").Select(n => n.NamePlaceholder)
+                .Concat(examples.GroupBy(e => e.Example.PatternFactKey).Select(g => g.First().Placeholder)).ToList(),
             /*  [2026-09-21] Section and SeverityTier are NOT sent. Both appeared only in the
                 prompt's "what you are given" list and were never referenced by any instruction -
                 the data layer has already used severity to choose the headline and to decide what
@@ -826,13 +846,18 @@ public sealed partial class FreeMonthlyDigestPrompt
                 across twenty facts is real input cost on every call; these two were paying nothing
                 back. Everything below IS load-bearing: WindowScope drives tense, ImpactClass picks
                 the consequence, AsAtRequired the "as at" line, Backlog the ordering rules.      */
-            scope = ScopeOf(data.Facts),
+            scope = ScopeOf(data.Facts, TokenOf),
             signals = SignalsFrom(data.Facts),
-            not_assessable = NotAssessable(data.DataQuality),
+            not_assessable = data.DataQuality
+                .Where(d => d.ItemCount > 0 && BoundsAFigure.Contains(d.Code))
+                .Select(d => new { d.Code, Token = "{{Q:" + d.Code + "}}", d.ItemCount, d.Detail })
+                .ToList(),
             allowed_consequences = ConsequencesAvailable(data.Facts, named),
             facts = sentFacts.Select(f => new
             {
                 f.FactKey,
+                /*  [2026-10-12] The token is what the model writes; FactValue stays so it can judge size. */
+                Token = TokenOf(f.FactKey),
                 f.FactValue,
                 DisplayLabel = FactLabels.For(f.FactKey, f.DisplayLabel),
                 f.WindowScope,
@@ -866,6 +891,17 @@ public sealed partial class FreeMonthlyDigestPrompt
                 n.Candidate.AsAtRequired,
                 Backlog = IsBacklogDetector(n.Candidate.Detector),
                 IsHeadline = ReferenceEquals(n, headlineFinding),
+                /*  [2026-10-12] The tokens for this finding's figures - written instead of the numbers above. */
+                Tokens = new
+                {
+                    item = FieldToken(n.NamePlaceholder, "item"),
+                    @base = FieldToken(n.NamePlaceholder, "base"),
+                    pct = FieldToken(n.NamePlaceholder, "pct"),
+                    tenant_pct = FieldToken(n.NamePlaceholder, "tenant_pct"),
+                    others = FieldToken(n.NamePlaceholder, "others"),
+                    flagged = FieldToken(n.NamePlaceholder, "flagged"),
+                    compared = FieldToken(n.NamePlaceholder, "compared"),
+                },
             }),
             /*  Examples travel keyed to the fact they illustrate. No Means, no MetricPct, no
                 TenantPct, no ProblemCount: those belong to the pattern fact, and giving an example
@@ -879,6 +915,7 @@ public sealed partial class FreeMonthlyDigestPrompt
                 e.Example.ItemCount,
                 e.Example.BaseCount,
                 Counts = FactLabels.Unit(e.Example.UnitLabel),
+                Tokens = new { item = FieldToken(e.Placeholder, "item"), @base = FieldToken(e.Placeholder, "base") },
             }),
         };
 
@@ -891,6 +928,7 @@ public sealed partial class FreeMonthlyDigestPrompt
             Examples = examples,
             AllowedNumbers = numbers,
             AllowedPercentages = percentages,
+            FactTokens = factTokens,
             HeadlineMarker = headlineFact is not null
                 ? headlineFact.FactValue.ToString(CultureInfo.InvariantCulture)
                 : headlineFinding!.NamePlaceholder,

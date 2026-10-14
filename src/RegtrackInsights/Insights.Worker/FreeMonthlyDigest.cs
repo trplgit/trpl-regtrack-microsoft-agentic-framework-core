@@ -199,7 +199,17 @@ public sealed class FreeMonthlyDigestComposer(
                 break;
             }
 
-            var prepared = FreeMonthlyDraftPipeline.Prepare(draft.Body, prompt);
+            /*  [2026-10-12] Fact-bound figures. The model writes a token for every figure; the token
+                checks run on its raw draft, then the tokens become digits and everything downstream -
+                repair, normaliser, validator, binder - runs exactly as before on the bound text. A
+                sentence repair shortens is mapped back to its tokens and checked again. Every failure,
+                token and validator alike, goes to the one redraft together, each figure annotated
+                with its token so the model can fix it without typing a number.                     */
+            var tokenProblems = FreeMonthlyFactTokens.Problems(draft.Body, prompt);
+            var prepared = FreeMonthlyDraftPipeline.Prepare(FreeMonthlyFactTokens.Bind(draft.Body, prompt), prompt);
+            var afterRepair = tokenProblems.Count == 0
+                ? FreeMonthlyFactTokens.ProblemsAfterRepair(draft.Body, prepared.Body, prompt)
+                : [];
 
             if (prepared.Removed.Count > 0)
                 logger.LogInformation(
@@ -207,21 +217,33 @@ public sealed class FreeMonthlyDigestComposer(
                     tenantId, representativeUserId, edition.Slot, prepared.Removed.Count, string.Join(" | ", prepared.Removed));
 
             var validation = prepared.Review;
+            var failedChecks = tokenProblems.Concat(afterRepair)
+                .Concat(validation.FailedChecks.Select(f => FreeMonthlyFactTokens.Annotate(f, draft.Body, prompt)))
+                .Distinct()
+                .ToList();
+
+            if (tokenProblems.Count + afterRepair.Count > 0)
+                logger.LogInformation(
+                    "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - figure checks failed on attempt {Attempt}: {Problems}",
+                    tenantId, representativeUserId, edition.Slot, attempt, string.Join("; ", tokenProblems.Concat(afterRepair)));
 
             if (validation.Advisories.Count > 0)
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - advisories (email still sent): {Advisories}",
                     tenantId, representativeUserId, edition.Slot, string.Join("; ", validation.Advisories));
 
-            if (validation.IsValid)
-            {
-                // The validated text is what the reader gets.
-                // [2026-10-07] Reader wording ("compliance", never "obligation") - applied after every check.
-                // [2026-10-08] Then a sentence that only repeats the one before it is dropped.
-                // [2026-10-09] And a sentence repeated anywhere in the email is said once.
-                var body = FreeTierReaderTerms.WithoutDuplicateSentences(FreeTierReaderTerms.WithoutRepeatedFigures(
-                    FreeTierReaderTerms.Apply(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(prepared.Body, prompt), prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition))));
+            // The validated text is what the reader gets.
+            // [2026-10-07] Reader wording ("compliance", never "obligation") - applied after every check.
+            // [2026-10-08] Then a sentence that only repeats the one before it is dropped.
+            // [2026-10-09] And a sentence repeated anywhere in the email is said once.
+            var body = FreeTierReaderTerms.WithoutDuplicateSentences(FreeTierReaderTerms.WithoutRepeatedFigures(
+                FreeTierReaderTerms.Apply(FreeMonthlyPlaceholderBinder.Bind(FreeTierReaderTerms.ForPeople(prepared.Body, prompt), prompt.Bindings) + "\n\n" + FreeMonthlyClosing.For(edition))));
 
+            // [2026-10-12] Fail closed: a figure token that survived to the final text would reach the reader as "{{F:od_total}}".
+            failedChecks.AddRange(FreeMonthlyFactTokens.Unbound(body));
+
+            if (failedChecks.Count == 0)
+            {
                 logger.LogInformation(
                     "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - LLM body accepted on attempt {Attempt}. Tokens: {InputTokens} in / {OutputTokens} out.",
                     tenantId, representativeUserId, edition.Slot, attempt, inputTokens, outputTokens);
@@ -229,7 +251,7 @@ public sealed class FreeMonthlyDigestComposer(
                     new ComposeDigestOutput(body, "Llm", null, inputTokens, outputTokens), prompt.Data, prompt.UserMessage, draft.Body);
             }
 
-            reason = "validator rejected the LLM body: " + string.Join("; ", validation.FailedChecks);
+            reason = "validator rejected the LLM body: " + string.Join("; ", failedChecks);
 
             if (attempt >= maxAttempts)
             {
@@ -243,7 +265,7 @@ public sealed class FreeMonthlyDigestComposer(
                 "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - attempt {Attempt} of {MaxAttempts} rejected, redrafting. {Reason}",
                 tenantId, representativeUserId, edition.Slot, attempt, maxAttempts, reason);
 
-            userMessage = FreeMonthlyRedraft.Message(prompt.UserMessage, draft.Body, validation.FailedChecks);
+            userMessage = FreeMonthlyRedraft.Message(prompt.UserMessage, draft.Body, failedChecks);
         }
 
         return Fallback(prompt, reason, draft.Body, inputTokens, outputTokens, tenantId, representativeUserId);
