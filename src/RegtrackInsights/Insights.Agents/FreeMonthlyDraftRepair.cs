@@ -631,7 +631,10 @@ public static partial class FreeMonthlyDraftRepair
         return line is null ? paragraph : paragraph.TrimEnd() + " " + line;
     }
 
-    [GeneratedRegex(@"last month'?s? work (?:was|were) most often left unfinished|This work was due last month and is not finished|whose work was most often left unfinished", RegexOptions.IgnoreCase)]
+    // [FOUND 2026-10-13, Minda Overview] "These are the categories where overdue work was most often left
+    // unfinished." - the last-month line bent to fit an all-months paragraph. Any form of it, old or new wording.
+    // [2026-10-14] Closing lines rewritten to say what the figures MEAN, not that the work is unfinished.
+    [GeneratedRegex(@"most often left unfinished|This work was due last month and is not finished|last month'?s work slipped most|work slipped most", RegexOptions.IgnoreCase)]
     private static partial Regex LastMonthClosingLine();
 
     private static string? ClosingLineFor(string p)
@@ -639,7 +642,7 @@ public static partial class FreeMonthlyDraftRepair
         bool Has(string pattern) => Regex.IsMatch(p, pattern, RegexOptions.IgnoreCase);
 
         if (Has(@"\bfalls? due\b|\bBefore the end of\b"))
-            return "This work can still be completed on time if it is picked up now.";
+            return "Completing these on time keeps your overdue total from growing next month.";
         if (Has(@"\bno renewal\b|\bexpired\b"))
             return "Until a licence is renewed, there is no valid licence on record for that activity.";
         if (Has(@"\bwhere it applies\b|\bat 2 or more locations\b|\bof (?:its|the) [\d,]+ (?:sites|locations)\b"))
@@ -648,18 +651,22 @@ public static partial class FreeMonthlyDraftRepair
             return "If that person is unavailable, the compliance work at that site stops.";
         if (Has(@"\bperformer and reviewer\b"))
             return "No second person checks this work before it is marked complete.";
-        if (Has(@"\bcompared with [\d,]+% across\b") && Has(@"\bliability\b"))
-            return "The overdue work here carries more personal risk for its officer than overdue work elsewhere in your organisation.";
+        if (Has(@"\bcompliance categor(?:y|ies)\b") && Has(@"\bhigher\b"))
+            return "Overdue work is gathered in these categories more than in the rest of your organisation.";
+        if (Has(@"\{\{PREV_MONTH\}\}|\blast month\b") && Has(@"\bhigher share\b"))
+            return "These are the places where last month's work slipped most.";
+        if ((Has(@"\bcompared with [\d,]+% across\b") || Has(@"\bhigher\b")) && Has(@"\bliability\b"))
+            return "This is where your officers' personal risk is gathered.";
         if (Has(@"\baccounts? for\b|\bholds? [\d,]+ of\b|\bwith the most\b"))
             return "Clearing the overdue work at these few places would remove a large part of your whole overdue total.";
         if (Has(@"\bmore than 90 days\b"))
-            return "This part of the overdue work has been waiting for more than a quarter of a year, so it is not a recent slip.";
+            return "Work this old is an established backlog rather than a recent slip.";
         if (Has(@"\bpersonal (?:criminal )?liability\b"))
-            return "If these are not completed, the officer responsible can be held personally liable, not only the company.";
+            return "For each of these, the responsible officer can be held personally liable, not only the company.";
         if (Has(@"\bSo far in\b"))
-            return "This is work that fell due this month and has still not been completed.";
+            return "These are the newest additions to your overdue total.";
         if (Has(@"\{\{PREV_MONTH\}\}|\blast month\b|\bremain(?:ed|s)? open\b|\bstill open\b"))
-            return "This work was due last month and is not finished.";
+            return "Each of these is now overdue and adds to your overdue total for as long as it stays open.";
         return null;
     }
 
@@ -762,7 +769,11 @@ public static partial class FreeMonthlyDraftRepair
          "has still not been completed", "is not finished", "most often left unfinished", "not a recent slip",
          "can be held personally liable", "more personal risk for its officer", "would remove a large part",
          "if that person is unavailable", "no second person checks", "being missed in many places",
-         "no valid licence on record", "where your expired licences are gathered",
+         "no valid licence on record", "where your expired licences are gathered", "gathered in these categories",
+         // [2026-10-14] The rewritten closing lines - each says what the figures mean, not that work is unfinished.
+         "adds to your overdue total", "where last month's work slipped most", "newest additions to your overdue total",
+         "established backlog rather than a recent slip", "officers' personal risk is gathered",
+         "keeps your overdue total from growing", "RegInsights Ultimate lists every one", "no valid licence on record from its end date",
          "can still be completed on time", "highest risk rating",
          // Licence: what became of the licences that reached their end date (no figure when all were renewed).
          "have since been renewed", "renewal filed", "keeps a valid licence on record", "handled in time",

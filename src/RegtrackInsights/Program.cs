@@ -33,7 +33,10 @@ var builder = WebApplication.CreateBuilder(args);
 // The worker previously had no HTTP listener at all; the observed "connection refused" against
 // the deployed pod's containerPort 8080 is exactly the signature of that missing bind, not a
 // misconfigured port mapping - so this is set here, in code, unconditionally.
-builder.WebHost.UseUrls("http://0.0.0.0:8080");
+// [2026-10-12] A second local preview (a worktree beside the main checkout) needs its own port:
+// `dotnet run -- --PreviewUrls http://localhost:8081`. A dedicated key, not `urls` /
+// ASPNETCORE_URLS, so nothing a deployed environment already sets can move the pod off 8080.
+builder.WebHost.UseUrls(builder.Configuration["PreviewUrls"] is { Length: > 0 } previewUrls ? previewUrls : "http://0.0.0.0:8080");
 
 // Every SQL-backed repository, registered against ConnectionStrings:RegTrack.
 //

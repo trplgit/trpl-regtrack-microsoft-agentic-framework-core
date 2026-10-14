@@ -287,7 +287,7 @@ public static partial class FreeMonthlyDigestValidator
                     && Regex.IsMatch(s, @"\b(locations?|sites?)\b", RegexOptions.IgnoreCase)
                     && Regex.IsMatch(s, @"\bexpired\b", RegexOptions.IgnoreCase))
                     yield return $"states {pattern} locations with expired licences - {pattern} is the locations with an unusually high share, a comparison this email never states; "
-                                 + $"write only the locations holding an expired licence with no renewal = {holding} (loc_with_expired_unrenewed)";
+                                 + $"write only the locations holding an expired licence with no renewal, {{{{F:loc_with_expired_unrenewed}}}} (= {holding})";
         }
 
         // Rule 1b - [FOUND LIVE on PROD tenant 1008, 2026-10-08] "18 of your 199 locations that hold
@@ -404,7 +404,7 @@ public static partial class FreeMonthlyDigestValidator
             if (!Regex.IsMatch(sentence, $@"\b{pct}\s*%"))
                 continue;
             if (!Regex.IsMatch(sentence, @"\b3\s+(?:\w+\s+)?(?:locations?|sites?|people|persons?|users?|Acts?|laws?)\b", RegexOptions.IgnoreCase))
-                yield return $"states {pct}% without saying it is the share of the 3 holding the most overdue work - write \"your 3 locations with the most overdue compliances hold {pct}%\"";
+                yield return $"states {pct}% without saying it is the share of the 3 holding the most overdue work - write \"your 3 locations with the most overdue compliances hold {{{{F:{top.FactKey}}}}} of all overdue compliances\"";
             if (Regex.IsMatch(sentence, @"\{\{(?:NAME|EG)_\d+\}\}"))
                 yield return $"puts a name in the same sentence as the top-3 share ({pct}%) - give the named one its own sentence with its own count";
         }
@@ -430,7 +430,7 @@ public static partial class FreeMonthlyDigestValidator
         foreach (var sentence in Regex.Split(text, @"(?<=[.!?])\s+"))
             foreach (Match m in DueCount().Matches(WithoutOrdinals(Placeholder().Replace(sentence, "ph"))))
                 if (int.TryParse(m.Groups["n"].Value.Replace(",", string.Empty), NumberStyles.None, CultureInfo.InvariantCulture, out var v) && openOnly.Contains(v))
-                    yield return $"says {m.Groups["n"].Value} were due - {m.Groups["n"].Value} is the count still OPEN, not the count that fell due; this email has no last-month due total, so say only \"{m.Groups["n"].Value} compliances from last month are still open\"";
+                    yield return $"says {m.Groups["n"].Value} were due - {m.Groups["n"].Value} is the count still OPEN, not the count that fell due; this email has no last-month due total, so say only that those compliances from last month are still open";
     }
 
     /// <summary>"611 compliances were due", "all 611 compliances due in September", "the 611 that fell due".</summary>
@@ -737,7 +737,7 @@ public static partial class FreeMonthlyDigestValidator
             var sentencesInParagraph = Regex.Split(paragraph, @"(?<=[.!?])\s+(?=[A-Z0-9*{])").Where(s => s.Trim().Length > 0).ToList();
             if (numberTokens > 0 && sentencesInParagraph.Count > 0
                 && Regex.IsMatch(WithoutOrdinals(Placeholder().Replace(sentencesInParagraph[^1], "ph")), @"\d"))
-                failures.Add($"a paragraph ends on a figure (\"...{sentencesInParagraph[^1][..Math.Min(50, sentencesInParagraph[^1].Length)]}\") - every paragraph ends with its closing line from section 4a, saying what the figures mean");
+                failures.Add($"a paragraph ends on a figure (\"...{sentencesInParagraph[^1][..Math.Min(50, sentencesInParagraph[^1].Length)]}\") - every paragraph ends with its closing line from section 6 of the shared rules, saying what the figures mean");
 
             /*  [FOUND LIVE on PROD tenant 1008, 2026-10-09, Overview] "18 of the 62 locations have a higher overdue
                 rate ... including Minda Silica with 887 overdue compliances ... These are the places where last
@@ -747,7 +747,7 @@ public static partial class FreeMonthlyDigestValidator
                 paragraph that is about last month.                                                         */
             if (numberTokens > 0 && !PeriodPhrase().IsMatch(paragraph))
                 advisories.Add($"a paragraph with figures names no period (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - start it with \"In {{{{PREV_MONTH}}}},\", \"So far in {{{{CURR_MONTH}}}},\", \"In total, from all months,\", \"Currently,\" or \"Before the end of {{{{CURR_MONTH}}}},\"");
-            if (numberTokens > 0 && Regex.IsMatch(paragraph, @"last month'?s? work (?:was|were) most often left unfinished|This work was due last month and is not finished", RegexOptions.IgnoreCase)
+            if (numberTokens > 0 && Regex.IsMatch(paragraph, @"last month'?s? work (?:was|were) most often left unfinished|This work was due last month and is not finished|last month'?s work slipped most", RegexOptions.IgnoreCase)
                 && !Regex.IsMatch(paragraph, @"\{\{PREV_MONTH\}\}|\blast month\b.*\d", RegexOptions.IgnoreCase | RegexOptions.Singleline)
                 && !Regex.IsMatch(paragraph, @"^\W*(?:\*\*)?In \{\{PREV_MONTH\}\}|\bdue in \{\{PREV_MONTH\}\}|\bfrom \{\{PREV_MONTH\}\}|\bwork due in \{\{PREV_MONTH\}\}", RegexOptions.IgnoreCase))
                 failures.Add($"ends an all-months paragraph with last month's closing line (\"{paragraph[..Math.Min(40, paragraph.Length)]}...\") - the closing line must match the paragraph's period");
