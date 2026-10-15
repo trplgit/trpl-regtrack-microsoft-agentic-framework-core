@@ -613,6 +613,13 @@ public static partial class FreeMonthlyDraftRepair
             return paragraph;                                   // greeting, introduction, a quiet-month paragraph
 
         var last = sentences[^1].Replace("**", string.Empty).Trim();
+
+        /*  [OWNER, 2026-10-15, Minda Location] The named-sites paragraph ended on "RegInsights Ultimate lists
+            every one, ..." - a pointer, not what the figures mean. The pointer is never the closing line;
+            the paragraph's own line is added after it.                                                   */
+        if (last.StartsWith("RegInsights Ultimate lists every one", StringComparison.Ordinal))
+            return ClosingLineFor(paragraph) is { } afterPointer ? paragraph.TrimEnd() + " " + afterPointer : paragraph;
+
         if (!Placeholders().Replace(last, "ph").Any(char.IsDigit))
         {
             /*  [FOUND LIVE 2026-10-09, twice] An ALL-MONTHS paragraph ("Across all months, 18 of 62 locations
@@ -657,6 +664,10 @@ public static partial class FreeMonthlyDraftRepair
             return "These are the places where last month's work slipped most.";
         if ((Has(@"\bcompared with [\d,]+% across\b") || Has(@"\bhigher\b")) && Has(@"\bliability\b"))
             return "This is where your officers' personal risk is gathered.";
+        // [FOUND 2026-10-15, tenant 1708 Users - fell back] The top-3 share and the named holders both took the
+        // holders' line, and the no-repeated-closing-line check rejected both drafts. The top-3 share has its own.
+        if (Has(@"\b3 (?:people|persons|locations|sites|Acts) with the most\b"))
+            return "Between them, they hold that share of your whole overdue total.";
         if (Has(@"\baccounts? for\b|\bholds? [\d,]+ of\b|\bwith the most\b"))
             return "Clearing the overdue work at these few places would remove a large part of your whole overdue total.";
         if (Has(@"\bmore than 90 days\b"))
@@ -774,6 +785,7 @@ public static partial class FreeMonthlyDraftRepair
          "adds to your overdue total", "where last month's work slipped most", "newest additions to your overdue total",
          "established backlog rather than a recent slip", "officers' personal risk is gathered",
          "keeps your overdue total from growing", "RegInsights Ultimate lists every one", "no valid licence on record from its end date",
+         "whose work from last month slipped most", "they hold that share of your whole overdue total",
          "can still be completed on time", "highest risk rating",
          // Licence: what became of the licences that reached their end date (no figure when all were renewed).
          "have since been renewed", "renewal filed", "keeps a valid licence on record", "handled in time",

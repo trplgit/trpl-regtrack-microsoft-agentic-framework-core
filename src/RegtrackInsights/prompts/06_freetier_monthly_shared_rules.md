@@ -159,9 +159,10 @@ Rules for every paragraph:
 ## 6. Closing lines
 
 Each says what the figures MEAN for the reader - never that the work is unfinished, which
-the figures already said. Use them word for word, except that "places" becomes "people" in
-the Users email and "Acts" in the Act email ("These are the Acts where last month's work
-slipped most."; "with these few people", "under these few Acts"). Never write any other sentence without a figure, and never a
+the figures already said. Use them word for word, except in the Users email ("These are the
+people whose work from last month slipped most."; "with these few people") and the Act email
+("These are the Acts where last month's work slipped most."; "under these few Acts"). The
+RegInsights Ultimate line is never a closing line: the paragraph's own closing line follows it. Never write any other sentence without a figure, and never a
 cause, verdict or instruction. No closing line is used twice in one email.
 
 | The paragraph is about | Closing line |
@@ -173,6 +174,7 @@ cause, verdict or instruction. No closing line is used twice in one email.
 | Work with personal liability (overdue, or still open from last month) | "For each of these, the responsible officer can be held personally liable, not only the company." |
 | A member with a higher personal-liability share than the organisation | "This is where your officers' personal risk is gathered." |
 | The members holding the largest part of all overdue work | "Clearing the overdue work at these few places would remove a large part of your whole overdue total." ("with these few people", "under these few Acts") |
+| The share held by the top 3 (people, locations or Acts) | "Between them, they hold that share of your whole overdue total." |
 | Sites where every open compliance rests with one person | "If that person is unavailable, the compliance work at that site stops." |
 | The same person as performer and reviewer | "No second person checks this work before it is marked complete." |
 | An Act overdue at many of its locations | "This Act is being missed in many places at once, which points to the process rather than to a single site." |
@@ -206,7 +208,12 @@ Every site, person, Act, category and licence appears only as its placeholder, e
 given. `{{NAME_1}}` and `{{NAME_2}}` each get one sentence with their own figure, base and,
 when given, comparison. Each pattern names only its FIRST example (the one in `must_use`).
 `{{NAME_3}}`, `{{NAME_4}}` and every other example are never named: the rest of a finding is
-counted in one sentence with its `others` token; the rest of a pattern is simply not named.
+counted in one sentence with its `others` token, saying what they share in the finding's own
+words ("{{NAME_2:others}} other Acts also hold a large share of all overdue compliances") -
+never "are in the same situation". When `{{NAME_1}}` and `{{NAME_2}}` have the same
+`Detector`, write ONE others sentence after both names (with `{{NAME_2:others}}`), never one
+after each; if that `others` token is absent, write "No other person (site, Act) is in that
+situation." The rest of a pattern is simply not named.
 Either is followed by:
 "RegInsights Ultimate lists every one, with its figures and the compliances behind it."
 Write that line once per paragraph at most - after the LAST count in it, never after each
@@ -231,7 +238,11 @@ sentence of your own about where the rest is listed ("also listed in the detaile
 
 - Formal business English, complete sentences, no contractions. A sentence over about 20
   words is split in two.
-- The noun and verb agree with the token's `FactValue`: "1 licence has", "2 licences have".
+- The noun and verb agree with the token's `FactValue`: "1 licence has", "2 licences have",
+  "1 other person also holds", "3 other people also hold".
+- Name each month once per sentence: "Of the compliances due in {{PREV_MONTH}}, N are still
+  open", never "In {{PREV_MONTH}}, N compliances from {{PREV_MONTH}} ...".
+- Never "the group" or "this group": say who they are and what they share.
 - "of those" points only at the figure IMMEDIATELY before it, and only when that figure is
   its whole. Otherwise name the whole: "{{F:<part>}} of the {{F:<whole>}} carry personal
   liability".

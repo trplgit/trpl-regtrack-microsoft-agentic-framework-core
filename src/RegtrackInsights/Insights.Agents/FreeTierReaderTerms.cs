@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Insights.Domain;
 
 namespace Insights.Agents;
 
@@ -29,10 +30,12 @@ public static partial class FreeTierReaderTerms
         // [2026-10-14, Minda Users] A token bound to 1 under a plural sentence: "1 people are both performer and
         // reviewer". Figures are tokens, so the model cannot see the number it is agreeing with; the agreement is
         // fixed here, for the people/person case only, where the singular is unambiguous.
-        text = OnePeople().Replace(text, m => m.Groups["b"].Value + "1 person" + m.Groups["b2"].Value + (m.Groups["v"].Value switch
+        // [2026-10-15, tenant 1708 Act] Same for "1 other Acts also hold" - every member noun the emails count.
+        text = OnePeople().Replace(text, m => m.Groups["b"].Value + "1 " + m.Groups["o"].Value + Singular(m.Groups["n"].Value) + m.Groups["b2"].Value + m.Groups["also"].Value + (m.Groups["v"].Value switch
         {
             "are" => " is", "have" => " has", "hold" => " holds", "were" => " was", _ => " " + m.Groups["v"].Value,
         }));
+        text = OnePeopleNoun().Replace(text, m => "1 " + m.Groups["o"].Value + Singular(m.Groups["n"].Value));
 
         // [2026-10-08] Card titles ("Where it sits - personal exposure") are fixed text; "exposure" is jargon.
         text = text.Replace("personal exposure", "personal liability").Replace("Personal exposure", "Personal liability");
@@ -113,6 +116,22 @@ public static partial class FreeTierReaderTerms
             text = Regex.Replace(text, $@"[^.!?\n]*{Regex.Escape(placeholder)}[^.!?\n]*",
                 m => Regex.Replace(m.Value, @"\bits\b", "their"));
         }
+
+        /*  [OWNER, 2026-10-15, Minda] The closing lines' "places" and "at these few" fit sites only. The
+            prompt asks for the right word per email, and the model still wrote "These are the places
+            where last month's work slipped most" about people and "at these few Acts". The subject of
+            the email is known here, so the noun is set by code: fixed wording, no figure touched.     */
+        switch (prompt.Data.Edition.Slot)
+        {
+            case MonthlyDigestSlot.Users:
+                text = Regex.Replace(text, @"These are the (?:places|people) where last month's work slipped most\.", "These are the people whose work from last month slipped most.");
+                text = Regex.Replace(text, @"\b(?:at|under|in) these few (?:places|people)\b", "with these few people");
+                break;
+            case MonthlyDigestSlot.Act:
+                text = Regex.Replace(text, @"These are the places where last month's work slipped most\.", "These are the Acts where last month's work slipped most.");
+                text = Regex.Replace(text, @"\b(?:at|with|in) these few (?:places|Acts)\b", "under these few Acts");
+                break;
+        }
         return text;
     }
 
@@ -186,8 +205,18 @@ public static partial class FreeTierReaderTerms
         return string.Join("\n\n", paragraphs);
     }
 
-    [GeneratedRegex(@"(?<b>\*\*)?\b1 people(?<b2>\*\*)? (?<v>are|have|hold|were)\b")]
+    // [2026-10-15, tenant 1708] Also "1 other people also hold ..." - the "other"/"more" and "also" are kept.
+    [GeneratedRegex(@"(?<b>\*\*)?\b1 (?<o>other |more )?(?<n>people|Acts|locations|sites|licences|categories)(?<b2>\*\*)?(?<also> also)? (?<v>are|have|hold|were)\b")]
     private static partial Regex OnePeople();
+
+    /// <summary>"... includes 1 other people." - no verb follows, only the noun is singular.</summary>
+    [GeneratedRegex(@"\b1 (?<o>other |more )?(?<n>people|Acts|locations|sites|licences|categories)\b")]
+    private static partial Regex OnePeopleNoun();
+
+    private static string Singular(string plural) => plural switch
+    {
+        "people" => "person", "categories" => "category", _ => plural[..^1],
+    };
 
     [GeneratedRegex(@"^(?:In total, from all months,|Currently,|So far in [A-Z][a-z]+,|In [A-Z][a-z]+,)\s+(?<bold>\*\*)?(?<first>\S)")]
     private static partial Regex PeriodOpener();

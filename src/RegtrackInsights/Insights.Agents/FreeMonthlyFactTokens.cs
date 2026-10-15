@@ -119,8 +119,10 @@ public static partial class FreeMonthlyFactTokens
 
             // A zero is never stated (shared rules Sec.8), so a zero count gets no token: an absent
             // `others` is what tells the model to write "no other site is in that situation".
-            if (c.ResidualCount > 0)
-                tokens[T("others")] = new FactToken(T("others"), owner, "others", c.ResidualCount, false, memberUnit, period, null, c.Detector,
+            // Members already named in this email are not "others" (FreeMonthlyDigestPrompt.UnnamedOthers).
+            var others = FreeMonthlyDigestPrompt.UnnamedOthers(c, named);
+            if (others > 0)
+                tokens[T("others")] = new FactToken(T("others"), owner, "others", others, false, memberUnit, period, null, c.Detector,
                     Empty, null, null, Comparison: true);
             if (c.ProblemCount > 0 && c.PopulationCount > 0)
             {
@@ -403,6 +405,19 @@ public static partial class FreeMonthlyFactTokens
     /// <summary>Everything wrong with how the draft writes its figures. Empty means bind and continue.</summary>
     public static IReadOnlyList<string> Problems(string draft, FreeMonthlyDigestPrompt prompt) => Check(draft, prompt, literalChecks: true);
 
+    /// <summary>
+    /// [OWNER, 2026-10-15, tenant 1708] "In September, 149 compliances from September are still open." - the
+    /// opener names the month and so does the sentence. Rejecting it made the Users email fall back twice
+    /// (the slot prompts ask for "people with work due in {{PREV_MONTH}}" under an "In {{PREV_MONTH}}"
+    /// paragraph), so the redundant opener is dropped instead: the sentence still names its period.
+    /// Runs on the raw draft, before every check.
+    /// </summary>
+    public static string WithoutRedundantMonthOpener(string draft) =>
+        RedundantMonthOpener().Replace(draft, m => m.Groups["b"].Value + char.ToUpperInvariant(m.Groups["first"].Value[0]) + m.Groups["first"].Value[1..]);
+
+    [GeneratedRegex(@"(?<=^|[.!?]\s+|\n)(?<b>\*\*)?(?:In \{\{PREV_MONTH\}\}|So far in \{\{CURR_MONTH\}\}),\s+(?<first>\S+)(?=[^.!?\n]*\{\{(?:PREV|CURR)_MONTH\}\})")]
+    private static partial Regex RedundantMonthOpener();
+
     /// <summary>Any figure token still in text meant for the reader - the fail-closed check on the final body.</summary>
     public static IReadOnlyList<string> Unbound(string finalText) =>
         TokenPattern().Matches(finalText).Select(m => m.Value).Distinct()
@@ -502,6 +517,8 @@ public static partial class FreeMonthlyFactTokens
         (new(@"\brunning well above\b|\byour own average\b", RegexOptions.IgnoreCase), "'higher than your company average'"),
         (new(@"\bin your scope\b|\btracked in your scope\b", RegexOptions.IgnoreCase), "'across your organisation'"),
         (new(@"\bthe population\b|\bwere compared\b", RegexOptions.IgnoreCase), "the reader's words from the shared rules"),
+        // [OWNER, 2026-10-15, tenant 1708] "The group includes 1 other people." - which group? Say what the others share.
+        (new(@"\b(?:the|this|that) group\b", RegexOptions.IgnoreCase), "what the others share, in the finding's own words (\"N other people also hold a large share of all overdue compliances\")"),
     ];
 
     private static IEnumerable<string> Wording(string text)
@@ -523,6 +540,12 @@ public static partial class FreeMonthlyFactTokens
         var liabilityParagraphs = paragraphs.Count(p => Regex.IsMatch(p, @"\bpersonal (?:criminal )?liability\b", RegexOptions.IgnoreCase));
         if (liabilityParagraphs > 3)
             yield return $"mentions personal liability in {liabilityParagraphs} paragraphs - keep it to at most three (the headline, the all-months total and a named finding about it) and give the other paragraphs their own angle";
+
+        /*  [OWNER, 2026-10-15, Minda Act] "The other 32 Acts are in the same situation." - a count of others
+            must say what they share, in the finding's own words ("also hold a large share of all overdue
+            compliances"); "the same situation" leaves the reader to guess which one.                     */
+        foreach (Match m in Regex.Matches(text, @"\{\{(?:NAME|EG)_\d+:others\}\}[^.]*\b(?:in|share) (?:the same|this|that|a similar) (?:situation|position)", RegexOptions.IgnoreCase))
+            yield return $"writes \"{m.Value}\" - say what the others share, in the finding's own words (for example \"also hold a large share of all overdue compliances\"), never \"the same situation\"";
 
         // A closing line said twice reads as boilerplate - each paragraph has its own meaning.
         var repeatedLine = paragraphs

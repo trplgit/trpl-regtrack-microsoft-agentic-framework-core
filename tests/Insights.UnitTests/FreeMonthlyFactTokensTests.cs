@@ -432,4 +432,98 @@ public class FreeMonthlyFactTokensTests
     [InlineData("21 people are both performer and reviewer.", "21 people are both performer and reviewer.")]
     public void OnePersonIsSingular(string input, string expected) =>
         Assert.Equal(expected, FreeTierReaderTerms.Apply(input));
+
+    /// <summary>[OWNER, 2026-10-15, Minda] The closing-line noun follows the email's subject, set by code.</summary>
+    [Fact]
+    public void ClosingLinesNameTheEmailsOwnSubject()
+    {
+        var users = Prompt("users");
+        Assert.Equal("These are the people whose work from last month slipped most. Clearing it with these few people helps.",
+            FreeTierReaderTerms.ForPeople("These are the places where last month's work slipped most. Clearing it at these few people helps.", users));
+
+        var act = Prompt("act");
+        Assert.Equal("These are the Acts where last month's work slipped most. Clearing the overdue work under these few Acts helps.",
+            FreeTierReaderTerms.ForPeople("These are the places where last month's work slipped most. Clearing the overdue work at these few Acts helps.", act));
+    }
+
+    /// <summary>[OWNER, 2026-10-15, Minda Location] The pointer is never the closing line.</summary>
+    [Fact]
+    public void APointerIsFollowedByTheParagraphsOwnClosingLine()
+    {
+        var p = FreeMonthlyDraftRepair.WithClosingLine(
+            "At your Bhiwandi site, 355 of its 455 overdue compliances carry personal liability, or 78%, compared with 34% across your organisation. 7 other locations have a higher share. RegInsights Ultimate lists every one, with its figures and the compliances behind it.");
+        Assert.EndsWith("This is where your officers' personal risk is gathered.", p);
+    }
+
+    [Fact]
+    public void OthersSayWhatTheyShare() =>
+        Assert.Contains(Problems(Prompt("users"), "Good morning,\n\nHere is your monthly update on the people responsible for compliance work across your organisation. The figures below are as of {{AS_AT}}.\n\n"
+                + "In total, from all months, {{NAME_2}} holds {{NAME_2:item}} of the {{NAME_2:base}} overdue compliances, or {{NAME_2:pct}}. {{NAME_2:others}} other people are in the same situation."),
+            x => x.Contains("the same situation"));
+
+    /// <summary>[OWNER, 2026-10-15, tenant 1708] "1 other people also hold", "The group includes 1 other people".</summary>
+    [Theory]
+    [InlineData("1 other people also hold a large share of all overdue compliances.", "1 other person also holds a large share of all overdue compliances.")]
+    [InlineData("It includes 1 other people.", "It includes 1 other person.")]
+    [InlineData("13 other people also hold a large share.", "13 other people also hold a large share.")]
+    [InlineData("1 other Acts also hold a large share.", "1 other Act also holds a large share.")]
+    [InlineData("1 other locations have a higher share.", "1 other location has a higher share.")]
+    public void OneOtherPersonIsSingular(string input, string expected) =>
+        Assert.Equal(expected, FreeTierReaderTerms.Apply(input));
+
+    [Theory]
+    [InlineData("shiva Kumar", "Shiva Kumar")]
+    [InlineData("anne-marie d'souza", "Anne-Marie D'souza")]
+    [InlineData("McDonald", "McDonald")]
+    public void PeoplesNamesStartWithACapital(string input, string expected) =>
+        Assert.Equal(expected, FreeMonthlyDigestPrompt.CapitalisedName(input));
+
+    [Fact]
+    public void VagueGroupAndDoubleMonthAreSentBack()
+    {
+        Assert.Contains(OverviewProblems("In total, from all months, {{F:od_total}} compliances are overdue. The group includes other people."), x => x.Contains("'The group'") || x.Contains("group"));
+        Assert.Equal("{{F:lm_still_open}} compliances from {{PREV_MONTH}} are still open. In {{PREV_MONTH}}, {{F:lm_due}} fell due.",
+            FreeMonthlyFactTokens.WithoutRedundantMonthOpener("In {{PREV_MONTH}}, {{F:lm_still_open}} compliances from {{PREV_MONTH}} are still open. In {{PREV_MONTH}}, {{F:lm_due}} fell due."));
+    }
+
+    /// <summary>[FOUND 2026-10-15, tenant 1708 Users - fell back] The top-3 share has its own closing line.</summary>
+    [Fact]
+    public void TheTopThreeShareHasItsOwnClosingLine() =>
+        Assert.EndsWith("Between them, they hold that share of your whole overdue total.",
+            FreeMonthlyDraftRepair.WithClosingLine("Your 3 people with the most overdue compliances hold 64% of all 146 overdue compliances."));
+
+    /// <summary>
+    /// [FOUND 2026-10-15, tenant 1708 Users - fell back] A closing line said "These three hold ...", and the
+    /// number-word check rejected the model for copying it. No closing line may carry a number, in words or digits.
+    /// </summary>
+    [Fact]
+    public void NoClosingLineCarriesANumber()
+    {
+        var rules = Prompts("06_freetier_monthly_shared_rules.md");
+        var table = rules[rules.IndexOf("## 6. Closing lines", StringComparison.Ordinal)..rules.IndexOf("## 7.", StringComparison.Ordinal)];
+        foreach (Match m in Regex.Matches(table, @"^\|[^|]+\| ""([^""]+)""", RegexOptions.Multiline))
+        {
+            var line = m.Groups[1].Value;
+            Assert.False(Regex.IsMatch(line, @"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|dozen|hundred|thousand)\b", RegexOptions.IgnoreCase)
+                         && !line.Contains("rests with one person") && !line.Contains("If that person"),
+                $"closing line carries a number: {line}");
+        }
+    }
+
+    /// <summary>[FOUND 2026-10-15, tenant 1708] Two named people from one detector: neither is the other's "other".</summary>
+    [Fact]
+    public void ANamedMemberIsNeverCountedAsAnOther()
+    {
+        var users = MonthlyExamples.Users() with
+        {
+            Candidates =
+            [
+                MonthlyExamples.Candidate(1, "overdue_concentration", "person", "Shiva Kumar", 2, 12, item: 2704, baseCount: 4627, metricPct: 58),
+                MonthlyExamples.Candidate(2, "overdue_concentration", "person", "Performer User", 2, 12, item: 1173, baseCount: 4627, metricPct: 25),
+            ],
+        };
+        var p = FreeMonthlyDigestPrompt.Build(users);
+        Assert.DoesNotContain("{{NAME_1:others}}", p.FactTokens.Keys);   // flagged 2, both named: no third person
+        Assert.DoesNotContain("{{NAME_2:others}}", p.FactTokens.Keys);
+    }
 }
