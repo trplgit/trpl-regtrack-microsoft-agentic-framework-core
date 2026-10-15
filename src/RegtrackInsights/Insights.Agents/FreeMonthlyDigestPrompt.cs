@@ -749,6 +749,7 @@ public sealed partial class FreeMonthlyDigestPrompt
             numbers.Add(c.ProblemCount);
             numbers.Add(c.PopulationCount);
             numbers.Add(c.ResidualCount);
+            numbers.Add(UnnamedOthers(c, named));
 
             /*  THE LITERAL 1 IN "one of 19 Acts". [FOUND LIVE on tenant 1082, 2026-09-22] Shared
                 Rule 7 asks for exactly this construction, and the Act email lost its residual count
@@ -814,6 +815,16 @@ public sealed partial class FreeMonthlyDigestPrompt
                      .Where(g => g.Select(p => fullNames[p]).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1))
             foreach (var placeholder in clash)
                 bindings[placeholder] = fullNames[placeholder];
+
+        /*  [OWNER, 2026-10-15, tenant 1708] "shiva Kumar holds 2,704 ..." - a person's name as typed into
+            RegTrack, lower-case first letter and all. A person's name in the email starts each word with
+            a capital; only a lower-case first letter is raised, so "McDonald" or "D'Souza" are untouched. */
+        foreach (var finding in named)
+            if (finding.NamePlaceholder is { } person && IsPerson(finding.Candidate.EntityKind) && bindings.TryGetValue(person, out var personName))
+                bindings[person] = CapitalisedName(personName);
+        foreach (var e in examples)
+            if (IsPerson(e.Example.EntityKind) && bindings.TryGetValue(e.Placeholder, out var exampleName))
+                bindings[e.Placeholder] = CapitalisedName(exampleName);
 
         /*  [MEASURED 2026-09-21] must_use repeats the placeholders as a bare list, right at the top
             of the input. The rule is already in the shared prompt, but with two findings the model
@@ -1268,6 +1279,22 @@ public sealed partial class FreeMonthlyDigestPrompt
     /// 1950" both shortened to "Factories Act, 1948", and the Act email read "including Factories Act,
     /// 1948 and Factories Act, 1948".
     /// </summary>
+    private static bool IsPerson(string? entityKind) => entityKind is "user" or "person";
+
+    /// <summary>
+    /// [FOUND 2026-10-15, tenant 1708] The members a finding's "N other ..." sentence may count. The SQL's
+    /// ResidualCount is ProblemCount - 1: every OTHER flagged member, including a second named finding of
+    /// the same detector. With Shiva Kumar and Performer User both named for overdue_concentration, each
+    /// residual of 1 was the other named person, and the email wrote "1 other person also holds a large
+    /// share" twice - a third person who does not exist. Members named in this email are not "others".
+    /// </summary>
+    internal static int UnnamedOthers(MonthlyCandidate c, IReadOnlyList<MonthlyNamedFinding> named) =>
+        Math.Max(0, c.ResidualCount - (named.Count(n => n.Candidate.Detector == c.Detector) - 1));
+
+    /// <summary>Each word of a person's name starts with a capital; only a lower-case first letter is changed.</summary>
+    internal static string CapitalisedName(string name) =>
+        Regex.Replace(name, @"(?<![\p{L}'])\p{Ll}", m => m.Value.ToUpperInvariant());
+
     internal static string FullCleanLabel(string label) =>
         Capitalised(Whitespace().Replace(label.Replace("*", string.Empty).Replace("{", string.Empty).Replace("}", string.Empty), " ").Trim());
 

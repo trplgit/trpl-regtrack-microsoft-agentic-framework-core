@@ -15,7 +15,9 @@ closing line from section 6. Leave out a paragraph whose facts are not in the in
 1. **In {{PREV_MONTH}} - whose work slipped.** The people who left a higher share of last
    month's work open: the pattern's `flagged` of `compared` (or its `pat_` fact of its `_of`
    total), with `{{EG_1}}` and their own count of their total in the same sentence. Closing
-   line for members that left last month's work open.
+   line for members that left last month's work open. When no such pattern is given, write
+   only "Of the compliances due in {{PREV_MONTH}}, {{F:t_lm_still_open}} are still open." and
+   the closing line for work due last month.
 2. **In total, from all months - how much is overdue and how serious.** The overdue total
    (`t_od_total`), the part overdue for more than 90 days and the part with personal liability
    (`t_od_liability`). Closing line for whichever of those two parts is larger.

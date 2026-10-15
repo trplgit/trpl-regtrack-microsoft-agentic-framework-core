@@ -135,7 +135,7 @@ public static partial class InsightCardBuilder
 
         // The material facts first: another problem, worth a chip of its own.
         Collect(facts
-            .Where(f => !f.IsHeadline && f.FactValue > 0 && f.SeverityTier <= 3 && f.ImpactClass != "volume" && f.WindowScope != "ctx")
+            .Where(f => !f.IsHeadline && f.FactValue > 0 && !IsPercentFact(f) && f.SeverityTier <= 3 && f.ImpactClass != "volume" && f.WindowScope != "ctx")
             .OrderBy(f => f.SeverityTier).ThenBy(f => f.DisplayOrder));
 
         /*  [FOUND LIVE on tenant 23, week 2026-08-24] The Licence card shipped with
@@ -150,7 +150,7 @@ public static partial class InsightCardBuilder
             reader wants. The no-repeat rule still applies, so this can never echo the headline. */
         if (chosen.Count == 0)
             Collect(facts
-                .Where(f => !f.IsHeadline && f.FactValue > 0)
+                .Where(f => !f.IsHeadline && f.FactValue > 0 && !IsPercentFact(f))
                 .OrderBy(f => f.WindowScope == "ctx" ? 1 : 0).ThenBy(f => f.DisplayOrder));
 
         var nameTheUnit = chosen.Select(c => c.Unit).Append(primary.Unit)
@@ -168,6 +168,12 @@ public static partial class InsightCardBuilder
             })
             .ToList();
     }
+
+    /// <summary>
+    /// [FOUND 2026-10-15, tenant 1708 Users card] A chip is a COUNT: "u_top3_overdue_share_pct" = 89 went out as
+    /// "compliances overdue: 89" - an 89% share printed as 89 compliances. A percentage fact is never a chip.
+    /// </summary>
+    private static bool IsPercentFact(MonthlyFact fact) => fact.FactKey.EndsWith("_pct", StringComparison.Ordinal);
 
     private static InsightPrimaryMetric PrimaryFromFact(MonthlyFact fact, string impactClass, MonthlyDigestSlot slot)
     {

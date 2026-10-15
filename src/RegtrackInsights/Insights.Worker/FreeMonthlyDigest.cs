@@ -205,10 +205,11 @@ public sealed class FreeMonthlyDigestComposer(
                 sentence repair shortens is mapped back to its tokens and checked again. Every failure,
                 token and validator alike, goes to the one redraft together, each figure annotated
                 with its token so the model can fix it without typing a number.                     */
-            var tokenProblems = FreeMonthlyFactTokens.Problems(draft.Body, prompt);
-            var prepared = FreeMonthlyDraftPipeline.Prepare(FreeMonthlyFactTokens.Bind(draft.Body, prompt), prompt);
+            var raw = FreeMonthlyFactTokens.WithoutRedundantMonthOpener(draft.Body);   // [2026-10-15] "In September, ... from September"
+            var tokenProblems = FreeMonthlyFactTokens.Problems(raw, prompt);
+            var prepared = FreeMonthlyDraftPipeline.Prepare(FreeMonthlyFactTokens.Bind(raw, prompt), prompt);
             var afterRepair = tokenProblems.Count == 0
-                ? FreeMonthlyFactTokens.ProblemsAfterRepair(draft.Body, prepared.Body, prompt)
+                ? FreeMonthlyFactTokens.ProblemsAfterRepair(raw, prepared.Body, prompt)
                 : [];
 
             if (prepared.Removed.Count > 0)
@@ -218,7 +219,7 @@ public sealed class FreeMonthlyDigestComposer(
 
             var validation = prepared.Review;
             var failedChecks = tokenProblems.Concat(afterRepair)
-                .Concat(validation.FailedChecks.Select(f => FreeMonthlyFactTokens.Annotate(f, draft.Body, prompt)))
+                .Concat(validation.FailedChecks.Select(f => FreeMonthlyFactTokens.Annotate(f, raw, prompt)))
                 .Distinct()
                 .ToList();
 
@@ -265,7 +266,7 @@ public sealed class FreeMonthlyDigestComposer(
                 "FreeMonthlyDigestComposer: tenant {TenantId} user {UserId} {Slot} - attempt {Attempt} of {MaxAttempts} rejected, redrafting. {Reason}",
                 tenantId, representativeUserId, edition.Slot, attempt, maxAttempts, reason);
 
-            userMessage = FreeMonthlyRedraft.Message(prompt.UserMessage, draft.Body, failedChecks);
+            userMessage = FreeMonthlyRedraft.Message(prompt.UserMessage, raw, failedChecks);
         }
 
         return Fallback(prompt, reason, draft.Body, inputTokens, outputTokens, tenantId, representativeUserId);
