@@ -1,4 +1,4 @@
-# Risk / Nature / Internal - parity with the live dimensions (2026-10-27)
+# Risk / Nature / Internal / Event - parity with the live dimensions (2026-10-27)
 
 Brings the three dimensions that did not go live up to the same SQL level as the seven that did
 (Location, Departments, Act, Entity, Users, BacklogAging, Licence). Found by comparing the
@@ -25,7 +25,8 @@ what the live dimensions measured as slow.
 1. `01_usp_Insights_Dimension_Risk_v3.sql` - identical to `sql/v2/38`. Versus production: only adds `ImprisonmentOnCriticalInstances`.
 2. `02_usp_Insights_Dimension_Nature_v3.sql` - identical to `sql/v2/39`. Versus production: only adds `TenantImprisonmentInstances`.
 3. `03_usp_Insights_Dimension_Internal_v3.sql` - identical to `sql/v2/44` (new). Changes 1-4 above for Internal.
-4. `99_rollback_restore_prod_2026-10-27.sql` - ONLY to undo: the exact production definitions of all three as dumped on 2026-10-27.
+4. `04_usp_Insights_Dimension_Event_v2.sql` - identical to `sql/v2/45` (new). Event rebuilt on RegTrack's Event Based tabs - see "Event" below.
+5. `99_rollback_restore_prod_2026-10-27.sql` - ONLY to undo: the exact production definitions of all four as dumped on 2026-10-27.
 
 All files are pure ASCII (CLAUDE.md Sec. 5a). No C# change is needed for the SQL: every column
 name is unchanged or already mapped in `DimensionShapes.cs`.
@@ -85,3 +86,27 @@ data held no 27). Internal: 0 untraced; no hover-link that run because its prose
   `#entassign`, `#assignedInst`, dated 2026-10-05/06) that exists nowhere in the repo, and do NOT
   have the repo's 2026-10-06 real-count columns either. Deploying `sql/v2/37,40-43` from the repo
   would add the columns but replace that production-only version.
+
+## Event (04) - rebuilt on RegTrack's Event Based tabs (product decision 2026-10-27)
+
+v1 counted event SET-UPS (`EventInstance`) whose start date fell in the period. No RegTrack report
+shows that figure, and it was almost always empty. RegTrack shows events as the Detailed Report's
+"Event Based" and "Event Based Checklist" tabs: compliance with `EventFlag = 1`, due once an event
+is triggered. v2 counts exactly those rows with the same rules as every other dimension (scope pairs,
+active performer, visible, Act not deleted, active due dates, latest status Open + past due =
+overdue), grouped by event type (`EventID` 0 = no event recorded). The old "event types not
+triggered" observation is kept as a side fact (`EventTypesNotTriggeredRecently`) with its
+off-system caveat. Contract change: `EventControlTotals` / `EventRow` (DimensionShapes.cs), the
+source map `source-maps/event.json`, prompts composition v4 / render v5.
+
+Verified read-only on production, q2 FY26-27, against an independent raw-table count of the tabs:
+
+| Tenant / user | v1 (prod today) | Event Based tabs (independent) | v2 |
+|---|---|---|---|
+| 1300 / 22426 | 0 events | 34 due dates, 28 overdue, 15 checklist | 34 / 28 / 15, 10 event types + 4 not recorded |
+| 1926 / 56762 | 0 | 3 due dates, 3 overdue | 3 / 3 (all "not recorded") |
+| 29 / 9310 | - | 0 | 0 |
+
+Every check in the new source map (15) returns the procedure's own value on 1300. Deployed to UAT
+2026-10-27 17:22 IST: 0.3 s on Pro tenants 5 (330 due dates, 328 overdue) and 1285 (5 due dates,
+3 event types).

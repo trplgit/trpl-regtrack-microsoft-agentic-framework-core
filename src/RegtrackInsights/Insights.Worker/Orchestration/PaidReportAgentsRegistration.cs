@@ -214,7 +214,9 @@ public static class PaidReportAgentsRegistration
                 ["Nature"] = Build("Nature", "02_composition_freehand_nature_v5.md"),
                 ["Internal"] = Build("Internal", "02_composition_freehand_internal_v5.md"),
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
-                ["Event"] = Build("Event", "02_composition_freehand_event_v3.md"),
+                // [ADDED 2026-10-27] v4 - Event rebuilt on RegTrack's Event Based tabs (sql/v2/45): overdue
+                // event-triggered due dates by event type; carries every live-dimension rule. v3 untouched.
+                ["Event"] = Build("Event", "02_composition_freehand_event_v4.md"),
                 // [ADDED 2026-09-23] Retires Sambram's fixed single-section Users template - see
                 // FreehandDimensions.cs's own doc comment for the real lab-tested evidence behind
                 // this decision.
@@ -467,7 +469,7 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_event_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_event_v5.md", freehandModel),
                 // [ADDED 2026-10-04] Five new standalone freehand dimensions - see
                 // docs/superpowers/specs/2026-10-04-five-dimensions-freehand-design.md.
                 ["dimension_selection:TimelinessFY"] = Build(

@@ -97,6 +97,13 @@ blocks in the output - a real, billed, silently-accepted-as-successful failure u
 check was added. Fixed; `dimension_name` in the input is now the documented sole authority. Check
 that file has no reintroduced closed list before adding any future dimension.
 
+**[REPLACED 2026-10-27] Event counts RegTrack's "Event Based" + "Event Based Checklist" tabs**
+(`sql/v2/45`, prompts composition v4 / render v5): EventFlag = 1 compliance, one row per active due date,
+same scope/performer/overdue rules as every other dimension, rows = event types (EventID 0 = no event
+recorded). v1 counted event SET-UPS started in the period - no RegTrack report shows that and it was
+almost always empty (tenant 1300: v1 0 vs 34 due dates / 28 overdue in the tabs). The tone rule below now
+applies ONLY to the side fact `EventTypesNotTriggeredRecently`; overdue figures are plain facts.
+
 **Event's tone constraint, distinct from every other freehand dimension:** the CONCLUSION that
 event-triggered work is unmanaged must never be stated as settled fact
 (`prompts/02_composition_freehand_event.md`/`05_report_html_dimension_selection_event.md`) - events

@@ -43,9 +43,9 @@ public sealed class EventFreehandLabTest(ITestOutputHelper output)
         var dimensionRepository = new SqlDimensionRepository(connectionString);
         var evt = await dimensionRepository.GetEventAsync(userId, customerId, windowStart, windowEnd);
         output.WriteLine($"[{label}] Fetched {evt.Rows.Count} event-type rows, {evt.Assertions.Count} assertions, {evt.Findings.Count} findings.");
-        output.WriteLine($"[{label}] ControlTotals: ScopedInstances={evt.ControlTotals.ScopedInstances} EventTypesReported={evt.ControlTotals.EventTypesReported} InstancesActiveInWindow={evt.ControlTotals.InstancesActiveInWindow} EventModuleDormant={evt.ControlTotals.EventModuleDormant} BranchesWithoutEventCoverage={evt.ControlTotals.BranchesWithoutEventCoverage}");
-        foreach (var row in evt.Rows.OrderByDescending(r => r.InstanceCount).Take(10))
-            output.WriteLine($"  {row.EventName}: InstanceCount={row.InstanceCount} DistinctStartDates={row.DistinctStartDates} InstancesSinceCutoff={row.InstancesSinceCutoff} Earliest={row.EarliestStart:d} Latest={row.LatestStart:d}");
+        output.WriteLine($"[{label}] ControlTotals: ScopedInstances={evt.ControlTotals.ScopedInstances} SumOfRows={evt.ControlTotals.SumOfRows} OverdueInstances={evt.ControlTotals.OverdueInstances} EventTypesReported={evt.ControlTotals.EventTypesReported} EventTypesNotTriggeredRecently={evt.ControlTotals.EventTypesNotTriggeredRecently}");
+        foreach (var row in evt.Rows.OrderByDescending(r => r.Instances).Take(10))
+            output.WriteLine($"  {row.EventName}: Instances={row.Instances} Overdue={row.Overdue} OverduePct={row.OverduePct}");
 
         var rowsJson = System.Text.Json.JsonSerializer.Serialize(evt.Rows);
         var controlTotalsJson = System.Text.Json.JsonSerializer.Serialize(evt.ControlTotals);
