@@ -34,6 +34,17 @@ public sealed class ReportClaimExtractorTests
     }
 
     [Fact]
+    public void ExtractNumbers_SkipsFiscalYearLabels()
+    {
+        // ReportPeriod's own quarter label - the end year after the hyphen is a label, not a claim.
+        const string text = "Reporting window: Q2 FY26-27 (1 Jul 2026 - 30 Sep 2026). Also Q2 FY2026-27 and FY 2026/27. 27 overdue.";
+
+        var numbers = ReportClaimExtractor.ExtractNumbers(text);
+
+        Assert.Equal(["27"], numbers); // only the real claim; "Q2" is glued to its letter
+    }
+
+    [Fact]
     public void ExtractNumbers_SkipsOldYearsAndNumbersThatArePartOfANameOrAnId()
     {
         const string text = "Essential Commodities Act, 1955 has 2 overdue. Act as on dated 27082026 has 1. Law 2812 row. 14 laws.";
