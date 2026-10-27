@@ -1,4 +1,4 @@
-# Risk / Nature / Internal / Event - parity with the live dimensions (2026-10-27)
+# Risk / Nature / Internal / Event / ForwardPipeline / CoverageGaps - parity with the live dimensions (2026-10-27)
 
 Brings the three dimensions that did not go live up to the same SQL level as the seven that did
 (Location, Departments, Act, Entity, Users, BacklogAging, Licence). Found by comparing the
@@ -26,7 +26,9 @@ what the live dimensions measured as slow.
 2. `02_usp_Insights_Dimension_Nature_v3.sql` - identical to `sql/v2/39`. Versus production: only adds `TenantImprisonmentInstances`.
 3. `03_usp_Insights_Dimension_Internal_v3.sql` - identical to `sql/v2/44` (new). Changes 1-4 above for Internal.
 4. `04_usp_Insights_Dimension_Event_v2.sql` - identical to `sql/v2/45` (new). Event rebuilt on RegTrack's Event Based tabs - see "Event" below.
-5. `99_rollback_restore_prod_2026-10-27.sql` - ONLY to undo: the exact production definitions of all four as dumped on 2026-10-27.
+5. `05_tvfInsightsForwardPipelineSchedules_v3.sql` - identical to `sql/v2/46` (new). ForwardPipeline's estate - see below.
+6. `06_usp_Insights_Dimension_CoverageGaps_v2.sql` - identical to `sql/v2/47` (new). CoverageGaps on the shared estate - see below.
+7. `99_rollback_restore_prod_2026-10-27.sql` - ONLY to undo: the exact production definitions of all six objects as dumped on 2026-10-27.
 
 All files are pure ASCII (CLAUDE.md Sec. 5a). No C# change is needed for the SQL: every column
 name is unchanged or already mapped in `DimensionShapes.cs`.
@@ -110,3 +112,35 @@ Verified read-only on production, q2 FY26-27, against an independent raw-table c
 Every check in the new source map (15) returns the procedure's own value on 1300. Deployed to UAT
 2026-10-27 17:22 IST: 0.3 s on Pro tenants 5 (330 due dates, 328 overdue) and 1285 (5 due dates,
 3 event types).
+
+## ForwardPipeline (05) and CoverageGaps (06) - the shared estate
+
+Both read compliance outside the shared scope function, so neither applied the RegTrack rules the
+live dimensions use (Act not deleted, compliance visible, statutory only, active performer).
+Both feed the holistic report's panels on every run, so the difference already reached customers.
+
+**ForwardPipeline** - `tvfInsightsForwardPipelineSchedules` v3 adds the four rules (only caller:
+usp_Insights_Dimension_ForwardPipeline, checked in sys.sql_modules). Due in the next 90 days,
+production replica, 2026-10-27, versus an independent raw-table count with the same rules:
+
+| Tenant / user | Old | New | Independent |
+|---|---|---|---|
+| 1300 / 22426 | 4,243 | 4,230 | 4,230 |
+| 1926 / 56762 | 2,349 | 2,347 | 2,347 |
+| 29 / 9310 | 40 | 29 | 29 |
+| 691 / 6256 | 55 | 55 | 55 |
+
+**CoverageGaps** - the per-branch Labour list (`#obl`) now comes from tvfInsightsScopedInstances.
+Same result sets and columns. Production replica, 2026-10-27:
+
+| Tenant / user | Labour compliances counted | Peer set | Gaps | Under-configured |
+|---|---|---|---|---|
+| 1216 / 44064 (1,521 leaf branches) | 146,159 -> 117,613 | 1,373 -> 1,373 | 767 -> 729 | 175 -> 151 |
+| 1926 / 56762 | 603 -> 398 (13 branches whose Labour work has nobody assigned -> 0) | 22 -> 9 | 0 -> 0 | 0 -> 0 |
+| 1300 / 22426 | 1,234 -> 1,229 | 13 -> 13 | 0 -> 0 | 0 -> 0 |
+
+Independent check, tenant 1216 branch 56190: raw-table Labour count with all rules = 76; v2 run on
+the production replica = 86, and the 10 extra are exactly the branch's event-based Labour
+compliances - because production's tvfInsightsScopedInstances has its EventFlag filter commented
+out (see "Still open"). With the repo/UAT function, v2 gives 76. This is the first measured effect of
+that production change on a report figure.

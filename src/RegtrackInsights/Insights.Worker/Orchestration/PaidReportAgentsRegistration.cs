@@ -475,9 +475,10 @@ public static class PaidReportAgentsRegistration
                 ["dimension_selection:TimelinessFY"] = Build(
                     "DimensionSelectionTimelinessFYReportHtmlAgent", "Renders a freehand-composed TimelinessFY insight as self-contained HTML.",
                     "05_report_html_dimension_selection_timelinessfy.md", freehandModel),
+                // [ADDED 2026-10-27] v2 - percentage hover-link (section 7b), same mechanism as the live dimensions.
                 ["dimension_selection:ForwardPipeline"] = Build(
                     "DimensionSelectionForwardPipelineReportHtmlAgent", "Renders a freehand-composed ForwardPipeline insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_forwardpipeline.md", freehandModel),
+                    "05_report_html_dimension_selection_forwardpipeline_v2.md", freehandModel),
                 ["dimension_selection:EvidenceIntegrity"] = Build(
                     "DimensionSelectionEvidenceIntegrityReportHtmlAgent", "Renders a freehand-composed EvidenceIntegrity insight as self-contained HTML.",
                     "05_report_html_dimension_selection_evidenceintegrity.md", freehandModel),
