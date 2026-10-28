@@ -231,7 +231,8 @@ public static class PaidReportAgentsRegistration
                 ["TimelinessFY"] = Build("TimelinessFY", "02_composition_freehand_timelinessfy.md"),
                 ["ForwardPipeline"] = Build("ForwardPipeline", "02_composition_freehand_forwardpipeline.md"),
                 ["EvidenceIntegrity"] = Build("EvidenceIntegrity", "02_composition_freehand_evidenceintegrity.md"),
-                ["ForwardRisk"] = Build("ForwardRisk", "02_composition_freehand_forwardrisk.md"),
+                // [ADDED 2026-10-27] v2 - CleanAtRisk = branch stress only (ownership factors retired, sql/v2/48).
+                ["ForwardRisk"] = Build("ForwardRisk", "02_composition_freehand_forwardrisk_v2.md"),
                 ["CoverageGaps"] = Build("CoverageGaps", "02_composition_freehand_coveragegaps.md"),
             };
         });

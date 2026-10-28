@@ -1,4 +1,4 @@
-# Risk / Nature / Internal / Event / ForwardPipeline / CoverageGaps - parity with the live dimensions (2026-10-27)
+# All dimensions on the live-dimension rules - Risk, Nature, Internal, Event, ForwardPipeline, CoverageGaps, TimelinessFY, ForwardRisk (2026-10-27/28)
 
 Brings the three dimensions that did not go live up to the same SQL level as the seven that did
 (Location, Departments, Act, Entity, Users, BacklogAging, Licence). Found by comparing the
@@ -28,7 +28,12 @@ what the live dimensions measured as slow.
 4. `04_usp_Insights_Dimension_Event_v2.sql` - identical to `sql/v2/45` (new). Event rebuilt on RegTrack's Event Based tabs - see "Event" below.
 5. `05_tvfInsightsForwardPipelineSchedules_v3.sql` - identical to `sql/v2/46` (new). ForwardPipeline's estate - see below.
 6. `06_usp_Insights_Dimension_CoverageGaps_v2.sql` - identical to `sql/v2/47` (new). CoverageGaps on the shared estate - see below.
-7. `99_rollback_restore_prod_2026-10-27.sql` - ONLY to undo: the exact production definitions of all six objects as dumped on 2026-10-27.
+7. `07_usp_Insights_Dimension_TimelinessFY_v3.sql` - identical to `sql/v2/49` (new). One row per due date - see below.
+8. `08_usp_Insights_Dimension_ForwardRisk_v2.sql` - identical to `sql/v2/48` (new). Live-dimension rules - see below.
+9. `99_rollback_restore_prod_2026-10-27.sql` - ONLY to undo: the exact production definitions of all eight objects as dumped on 2026-10-27.
+
+EvidenceIntegrity needs no change (already on the shared estate, latest status per due date, active due dates) - checked
+against an independent count: 1300 91 closures / 90 with a review trail, 691 31 / 31, both equal to the deployed procedure.
 
 All files are pure ASCII (CLAUDE.md Sec. 5a). No C# change is needed for the SQL: every column
 name is unchanged or already mapped in `DimensionShapes.cs`.
@@ -144,3 +149,23 @@ the production replica = 86, and the 10 extra are exactly the branch's event-bas
 compliances - because production's tvfInsightsScopedInstances has its EventFlag filter commented
 out (see "Still open"). With the repo/UAT function, v2 gives 76. This is the first measured effect of
 that production change on a report figure.
+
+## TimelinessFY (07) and ForwardRisk (08) - 2026-10-28
+
+**TimelinessFY v3** - on-time share per DUE DATE from its latest transaction. v2 counted every completed
+transaction (a due date closed twice counted twice; one closed then reopened still counted). Production
+replica, q2 window vs the same window last year: tenant 1300 closures 369 / 4,006 -> 368 / 3,857 (on time
+67.2% / 81.3% -> 67.1% / 83.3%), equal to an independent latest-status count; 691 unchanged (6 / 11).
+
+**ForwardRisk v2** - (1) forward window = ForwardPipeline's rule (from today, latest status Open only);
+(2) overdue via the per-instance latest-transaction lookup (#lt), no whole-tenant tvfInsightsOverdueSchedules
+(v1 called it twice); (3) ownership factors F1/F1b/F2 retired - never scored, flagged or narrated, columns
+stay at 0; (4) BranchName NVARCHAR(600); (5) detector `majority_at_risk` fixed (searched a flag name that
+never existed). Production replica: 1300 window 4,219 -> 4,234 due dates = independent 4,234 (3,014
+compliances); CleanAtRisk unchanged (40) - the ownership factors never fired there. UAT, installed: now equal
+to ForwardPipeline for the same user (1285: 38 / 34, was 40 / 36; tenant 5: 22 / 21, was 27 / 25), and about
+twice as fast (5.6 s vs 10.7 s; 31 s vs 62 s). First UAT install failed (UNION column name) and was caught by
+checking the definition - CREATE OR ALTER kept the old procedure until the fixed file installed.
+
+Deployed to UAT 2026-10-28 10:38 / 10:40 IST. Real reports (UAT 1285): TimelinessFY, EvidenceIntegrity,
+ForwardRisk all rendered, 0 untraced numbers. ForwardRisk composition prompt v2 describes the one remaining factor.
