@@ -207,11 +207,16 @@ public static class PaidReportAgentsRegistration
                 // [ADDED 2026-09-22] Closes the gap CLAUDE.md's V1 scope table flagged - same
                 // pattern as the five above, not a new mechanism.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same window data_quality fix.
-                ["Risk"] = Build("Risk", "02_composition_freehand_risk_v4.md"),
-                ["Nature"] = Build("Nature", "02_composition_freehand_nature_v4.md"),
-                ["Internal"] = Build("Internal", "02_composition_freehand_internal_v4.md"),
+                // [ADDED 2026-10-27] v5 on Risk/Nature/Internal - "no vague umbrella labels, say each
+                // fact once", the rule the live dimensions got 2026-09-29 (Internal also gets the
+                // due-date counting note for sql/v2/44). v4 files stay untouched.
+                ["Risk"] = Build("Risk", "02_composition_freehand_risk_v5.md"),
+                ["Nature"] = Build("Nature", "02_composition_freehand_nature_v5.md"),
+                ["Internal"] = Build("Internal", "02_composition_freehand_internal_v5.md"),
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
-                ["Event"] = Build("Event", "02_composition_freehand_event_v3.md"),
+                // [ADDED 2026-10-27] v4 - Event rebuilt on RegTrack's Event Based tabs (sql/v2/45): overdue
+                // event-triggered due dates by event type; carries every live-dimension rule. v3 untouched.
+                ["Event"] = Build("Event", "02_composition_freehand_event_v4.md"),
                 // [ADDED 2026-09-23] Retires Sambram's fixed single-section Users template - see
                 // FreehandDimensions.cs's own doc comment for the real lab-tested evidence behind
                 // this decision.
@@ -226,7 +231,8 @@ public static class PaidReportAgentsRegistration
                 ["TimelinessFY"] = Build("TimelinessFY", "02_composition_freehand_timelinessfy.md"),
                 ["ForwardPipeline"] = Build("ForwardPipeline", "02_composition_freehand_forwardpipeline.md"),
                 ["EvidenceIntegrity"] = Build("EvidenceIntegrity", "02_composition_freehand_evidenceintegrity.md"),
-                ["ForwardRisk"] = Build("ForwardRisk", "02_composition_freehand_forwardrisk.md"),
+                // [ADDED 2026-10-27] v2 - CleanAtRisk = branch stress only (ownership factors retired, sql/v2/48).
+                ["ForwardRisk"] = Build("ForwardRisk", "02_composition_freehand_forwardrisk_v2.md"),
                 ["CoverageGaps"] = Build("CoverageGaps", "02_composition_freehand_coveragegaps.md"),
             };
         });
@@ -449,27 +455,31 @@ public static class PaidReportAgentsRegistration
                 // freehand pattern as the five above.
                 // [ADDED 2026-09-25] v2 on Risk/Nature/Internal - same real "window" data_quality
                 // fix as Location above.
+                // [ADDED 2026-10-27] v6 on Risk/Nature/Internal - "say each fact once" plus the
+                // percentage / point-difference hover-links (sections 7b/7c), each with its own real
+                // field table - the same changes the live dimensions got 2026-09-29/30.
                 ["dimension_selection:Risk"] = Build(
                     "DimensionSelectionRiskReportHtmlAgent", "Renders a freehand-composed Risk insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_risk_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_risk_v6.md", freehandModel),
                 ["dimension_selection:Nature"] = Build(
                     "DimensionSelectionNatureReportHtmlAgent", "Renders a freehand-composed Nature-of-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_nature_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_nature_v6.md", freehandModel),
                 ["dimension_selection:Internal"] = Build(
                     "DimensionSelectionInternalReportHtmlAgent", "Renders a freehand-composed Statutory-vs-Internal insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_internal_v5.md", freehandModel),
+                    "05_report_html_dimension_selection_internal_v6.md", freehandModel),
                 // [ADDED 2026-09-25] v2 - same real "window" data_quality fix as Act above.
                 ["dimension_selection:Event"] = Build(
                     "DimensionSelectionEventReportHtmlAgent", "Renders a freehand-composed Event-triggered-compliance insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_event_v4.md", freehandModel),
+                    "05_report_html_dimension_selection_event_v5.md", freehandModel),
                 // [ADDED 2026-10-04] Five new standalone freehand dimensions - see
                 // docs/superpowers/specs/2026-10-04-five-dimensions-freehand-design.md.
                 ["dimension_selection:TimelinessFY"] = Build(
                     "DimensionSelectionTimelinessFYReportHtmlAgent", "Renders a freehand-composed TimelinessFY insight as self-contained HTML.",
                     "05_report_html_dimension_selection_timelinessfy.md", freehandModel),
+                // [ADDED 2026-10-27] v2 - percentage hover-link (section 7b), same mechanism as the live dimensions.
                 ["dimension_selection:ForwardPipeline"] = Build(
                     "DimensionSelectionForwardPipelineReportHtmlAgent", "Renders a freehand-composed ForwardPipeline insight as self-contained HTML.",
-                    "05_report_html_dimension_selection_forwardpipeline.md", freehandModel),
+                    "05_report_html_dimension_selection_forwardpipeline_v2.md", freehandModel),
                 ["dimension_selection:EvidenceIntegrity"] = Build(
                     "DimensionSelectionEvidenceIntegrityReportHtmlAgent", "Renders a freehand-composed EvidenceIntegrity insight as self-contained HTML.",
                     "05_report_html_dimension_selection_evidenceintegrity.md", freehandModel),

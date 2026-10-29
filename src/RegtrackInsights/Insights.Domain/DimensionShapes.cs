@@ -522,39 +522,51 @@ public sealed record InternalRow
     public string? Flags { get; init; }
 }
 
-// ── Event (sql/14) ─────────────────────────────────────────────────────────────────────
+// ── Event (sql/v2/45, 2026-10-27) ──────────────────────────────────────────────────────
 
 /// <summary>
-/// This dimension counts EVENT instances, not compliance obligations -
-/// <see cref="ScopedInstances"/> is its own population and will not match the other eight.
-/// Every dormancy figure here describes the DATABASE, not the business: events may legitimately
-/// be tracked off-system, which is why the findings carry a narrative guard requiring them to be
-/// put as a question.
+/// [REPLACED 2026-10-27] Event now counts RegTrack's Detailed Report "Event Based" and "Event Based
+/// Checklist" tabs: event-triggered compliance (Compliance.EventFlag = 1), one row per active due date
+/// in the period, with the same scope/active-performer/overdue rules as every other dimension. It used
+/// to count event SET-UPS (EventInstance) started in the period, which no RegTrack report shows and
+/// which was almost always empty. <see cref="ScopedInstances"/> = distinct compliances,
+/// <see cref="SumOfRows"/> = due dates (the rows sum to it, including the EventID 0 "Event not recorded"
+/// row). <see cref="EventTypesNotTriggeredRecently"/> is a database fact only - events may be tracked
+/// off-system, so that finding carries a narrative guard.
 /// </summary>
 public sealed record EventControlTotals
 {
     public int ScopedInstances { get; init; }
     public int SumOfRows { get; init; }
     public bool Reconciled { get; init; }
+    public int OverdueInstances { get; init; }
+    public decimal TenantOverduePct { get; init; }
+    public int ChecklistInstances { get; init; }
+    public int ImprisonmentInstances { get; init; }
+    public int ImprisonmentOverdue { get; init; }
     public int EventTypesReported { get; init; }
-    public int InstancesActiveInWindow { get; init; }
-    public int ActivityWindowMonths { get; init; }
+    public int UnlinkedInstances { get; init; }
     public int BranchesInScope { get; init; }
-    public int BranchesWithEventCoverage { get; init; }
-    public int BranchesWithoutEventCoverage { get; init; }
-    public bool EventModuleDormant { get; init; }
+    public int BranchesWithEventWork { get; init; }
+    public int BranchesWithoutEventWork { get; init; }
+    public int EventTypesConfigured { get; init; }
+    public int EventTypesNotTriggeredRecently { get; init; }
+    public int ActivityWindowMonths { get; init; }
 }
 
+/// <summary>One event type (EventID 0 = due dates with no recorded event). Counts are due dates.</summary>
 public sealed record EventRow
 {
     public long EventID { get; init; }
     public string? EventName { get; init; }
-    public int InstanceCount { get; init; }
+    public int Instances { get; init; }
+    public int Overdue { get; init; }
+    public decimal? OverduePct { get; init; }
+    public int ChecklistInstances { get; init; }
+    public int ImprisonmentInstances { get; init; }
+    public int ImprisonmentOverdue { get; init; }
     public int BranchesCovered { get; init; }
-    public DateTime? EarliestStart { get; init; }
-    public DateTime? LatestStart { get; init; }
-    public int InstancesSinceCutoff { get; init; }
-    public int DistinctStartDates { get; init; }
+    public decimal? VsTenantPP { get; init; }
     public string? Flags { get; init; }
 }
 

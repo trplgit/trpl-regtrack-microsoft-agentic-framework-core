@@ -154,8 +154,11 @@ public static partial class ReportClaimExtractor
     [GeneratedRegex(@"\n\s*\n+")]
     private static partial Regex BlankLines();
 
-    // "27 Sep 2026", "Sep 27, 2026", "2026-09-28"
-    [GeneratedRegex(@"\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b|\b\d{4}-\d{2}-\d{2}\b", RegexOptions.IgnoreCase)]
+    // "27 Sep 2026", "Sep 27, 2026", "2026-09-28", and a fiscal-year label "FY26-27" / "FY2026-27"
+    // [FIX 2026-10-27, found in a real Risk lab render] The quarter label ReportPeriod builds
+    // ("Q2 FY26-27") leaked "27" - "FY26" is glued to letters, but the hyphen leaves the end year
+    // free - so every FY2026-27 report was flagged unless its own data happened to hold a 27.
+    [GeneratedRegex(@"\bFY\s?\d{2,4}\s?[-/]\s?\d{2,4}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b|\b\d{4}-\d{2}-\d{2}\b", RegexOptions.IgnoreCase)]
     private static partial Regex DateLike();
 
     // "09:34", "09:34:12 UTC" - a time of day, not a claim.
