@@ -32,25 +32,20 @@
                           separate, not-yet-scheduled decision).
 
   BODY SLOT CONTRACT - the .slot cell carries the base type ramp (15px/24px,
-  ink #646a73) and white-space:pre-line. The generator may emit plain prose
-  with blank lines between paragraphs and <strong> for emphasis, and it will
-  inherit the design system automatically - no class needed on <strong>.
+  ink #646a73). FreeDigestEmailRenderer.FormatBody turns the generator's plain
+  prose into real HTML: each blank-line-separated paragraph becomes
+  <p style="margin:0 0 16px 0">, a single line break becomes <br>, and **x**
+  becomes <strong>. <strong> needs no class - it inherits the design system.
   The 06_freetier_monthly_* prompts never emit headings or lists (shared
   rules, "Form"), but the .slot h2/h3/ul/ol/li/a
   rules below exist so ANY tag the generator emits stays inside the design
   system rather than falling back to browser defaults - this shell is shared
   chrome, not free-tier-specific markup.
 
-  ONE RULE FOR ANY FUTURE GENERATOR EMITTING BLOCK TAGS: a blank line means
-  "paragraph break" under white-space:pre-line, so do not leave a blank line
-  immediately around a block-level tag - the newline renders literally AND
-  the block's own margin applies, stacking into a visible gap.
-
-  OUTLOOK CAVEAT: Word-engine Outlook ignores white-space:pre-line, so blank
-  lines collapse and free-tier prose arrives as one wall of text. Accepted for
-  now (spec targets Gmail/Apple Mail first) - if Outlook desktop coverage
-  becomes a requirement, the generator needs to emit real <p> tags and this
-  cell needs white-space:pre-line removed.
+  [FIXED 2026-11-02] This cell used white-space:pre-line to show paragraph
+  breaks. Browsers honour it, so every local preview looked right, but Gmail
+  and Outlook drop it and real recipients got the whole body as one wall of
+  text. Do not put white-space:pre-line back - paragraphs are real <p> now.
 
   DESIGN SYSTEM (shared with the RegTrack login / change-communication,
   reminder, monthly report and reconciliation emails)
@@ -163,7 +158,7 @@
        Do not add sibling rows that assume a body height or a body shape. -->
   <tr><td class="px slot" style="padding:22px 40px 0 40px;
              font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
-             font-size:15px; line-height:24px; color:#646a73; white-space:pre-line;">
+             font-size:15px; line-height:24px; color:#646a73;">
 {{Body}}
   </td></tr>
   <!-- ============ /BODY SLOT ============ -->
