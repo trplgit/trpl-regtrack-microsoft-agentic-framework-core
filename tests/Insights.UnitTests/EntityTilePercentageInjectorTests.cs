@@ -237,4 +237,23 @@ public sealed class EntityTilePercentageInjectorTests
         Assert.Contains(".pf-frac{", result);
         Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result, System.Text.RegularExpressions.Regex.Escape(".pf-frac{")).Count);
     }
+
+    /// <summary>[FOUND LIVE 2026-11-03] Demo tenant 1899 Entity page showed "2026.0" / "2095.0".</summary>
+    [Fact]
+    public void Fraction_numbers_are_whole_numbers_with_thousands_separators()
+    {
+        var html = EntityTilePercentageInjector.BuildFractionPanel("x", "96.3",
+            new("Tenant-wide overdue percentage", 2026.0m, 2104.0m, "Overdue due dates", "Due dates counted"));
+        Assert.Contains("pf-num-value\">2,026<", html);
+        Assert.Contains("pf-den-value\">2,104<", html);
+        Assert.DoesNotContain("2026.0", html);
+    }
+
+    [Fact]
+    public void Fraction_keeps_real_decimals()
+    {
+        var html = EntityTilePercentageInjector.BuildFractionPanel("x", "50", new("x", 1.5m, 3m, "a", "b"));
+        Assert.Contains("pf-num-value\">1.5<", html);
+        Assert.Contains("pf-den-value\">3<", html);
+    }
 }

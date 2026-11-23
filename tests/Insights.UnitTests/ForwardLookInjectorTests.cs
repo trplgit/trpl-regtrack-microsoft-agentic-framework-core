@@ -66,8 +66,8 @@ public sealed class ForwardLookInjectorTests
         Assert.Contains("id=\"pf-forward-carried\"", result, StringComparison.Ordinal);
         Assert.Contains("class=\"hr-i pf\"", result, StringComparison.Ordinal);
         Assert.Contains(">29.7<", result, StringComparison.Ordinal);
-        Assert.Contains("pf-num-value\">22132<", result, StringComparison.Ordinal);
-        Assert.Contains("pf-den-value\">74561<", result, StringComparison.Ordinal);
+        Assert.Contains("pf-num-value\">22,132<", result, StringComparison.Ordinal);
+        Assert.Contains("pf-den-value\">74,561<", result, StringComparison.Ordinal);
         // The shared style/script must actually be present - this injector does not assume
         // another one runs afterward and supplies it.
         Assert.Contains(".hr-just-closed", result, StringComparison.Ordinal);

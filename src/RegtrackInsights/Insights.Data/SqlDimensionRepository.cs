@@ -389,7 +389,11 @@ public sealed class SqlDimensionRepository(string connectionString) : IDimension
                 var detectors = (await multi.ReadAsync<DetectorRow>()).Select(ToDetectorPolicy).ToList();
                 var assertions = (await multi.ReadAsync<AssertionRow>()).Select(ToAssertion).ToList();
                 var findings = (await multi.ReadAsync<FindingRow>()).Select(ToFinding).ToList();
-                var dataQuality = (await multi.ReadAsync<DataQualityNote>()).AsList();
+                // [2026-11-03] 'window' note: the proc prints the EXCLUSIVE end date; restate it as
+                // the real last day so no LLM step writes "through <day after>" (WindowNoteWording).
+                var dataQuality = WindowNoteWording.Normalize(
+                    await multi.ReadAsync<DataQualityNote>(),
+                    parameters.GetType().GetProperty("WindowEnd")?.GetValue(parameters) as DateTime?);
 
                 var result = new DimensionResult<TControlTotals, TRow>(
                     dimension, controlTotals, rows, detectors, assertions, findings, dataQuality);

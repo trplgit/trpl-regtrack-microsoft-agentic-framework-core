@@ -167,6 +167,10 @@ public static class EntityTilePercentageInjector
     /// generation time (e.g. <c>ForwardLookInjector</c>) can wrap its own number inline, without
     /// needing a find-and-match pass over its own freshly-built HTML.
     /// </summary>
+    /// <summary>[2026-11-03, FOUND LIVE] "2026.0" -> "2,026"; a real fraction keeps its decimals.</summary>
+    private static string Fmt(decimal value) =>
+        value.ToString("#,##0.##", System.Globalization.CultureInfo.InvariantCulture);
+
     internal static string BuildFractionPanel(string id, string displayText, FractionFigure figure)
     {
         return $"""
@@ -179,8 +183,8 @@ public static class EntityTilePercentageInjector
                 <span class="pf-formula"><span class="pf-formula-label">HOW IT IS CALCULATED</span>
                   <span class="pf-frac">
                     <span class="pf-frac-stack">
-                      <span class="pf-num"><span class="pf-num-value">{figure.Numerator}</span><span class="pf-num-label">{System.Net.WebUtility.HtmlEncode(figure.NumeratorLabel)}</span></span>
-                      <span class="pf-den"><span class="pf-den-value">{figure.Denominator}</span><span class="pf-den-label">{System.Net.WebUtility.HtmlEncode(figure.DenominatorLabel)}</span></span>
+                      <span class="pf-num"><span class="pf-num-value">{Fmt(figure.Numerator)}</span><span class="pf-num-label">{System.Net.WebUtility.HtmlEncode(figure.NumeratorLabel)}</span></span>
+                      <span class="pf-den"><span class="pf-den-value">{Fmt(figure.Denominator)}</span><span class="pf-den-label">{System.Net.WebUtility.HtmlEncode(figure.DenominatorLabel)}</span></span>
                     </span>
                     <span class="pf-times">&times; 100</span>
                   </span>

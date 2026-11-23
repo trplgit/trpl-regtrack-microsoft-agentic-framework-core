@@ -936,9 +936,13 @@ public sealed class InsightsReportOrchestrator : TaskOrchestration<PersistOutput
                 }
                 if (locationResult is not null)
                 {
+                    // [FIX 2026-11-03, FOUND LIVE] Denominator was ScopedInstances (DISTINCT obligations,
+                    // 2,095 on demo tenant 1899) while TenantOverduePct is computed over SumOfRows (due
+                    // dates in the window, 2,104 - the Detailed Report's row count). The panel said
+                    // 2,026 / 2,095 x 100 = 96.3%, which is 96.7%. Same base as the percentage now.
                     entityTileFigures["Backlog · overdue"] = new(
-                        "Tenant-wide overdue percentage", locationResult.ControlTotals.OverdueInstances, locationResult.ControlTotals.ScopedInstances,
-                        "Overdue obligations", "Obligations counted");
+                        "Tenant-wide overdue percentage", locationResult.ControlTotals.OverdueInstances, locationResult.ControlTotals.SumOfRows,
+                        "Overdue due dates", "Due dates counted");
                 }
                 TimelinessFYRow? currentFyRow = null;
                 if (timelinessFYResult is not null)
