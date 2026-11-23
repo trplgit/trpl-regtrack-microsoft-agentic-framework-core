@@ -20,6 +20,8 @@ jobs:
   build-and-push:
     name: Build and Push RegInsights Image
     runs-on: ubuntu-latest
+    # Fail instead of hanging when a package mirror stalls (normal build ~3 min)
+    timeout-minutes: 20
 
     env:
       AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT_NAME }}
