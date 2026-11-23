@@ -57,6 +57,28 @@ public sealed class FreeDigestEmailRendererTests
         Assert.Contains("&lt;img src=x onerror=alert(1)&gt;", html);
     }
 
+    /// <summary>
+    /// [FOUND LIVE 2026-11-02] Paragraphs used to depend on the body cell's CSS
+    /// "white-space:pre-line". Gmail and Outlook drop it, so real recipients (tenant 1300's
+    /// 2 Nov email) got "Good morning, Here is your..." as one run-on paragraph. Each paragraph
+    /// must now be a real &lt;p&gt;, and nothing may depend on pre-line any more.
+    /// </summary>
+    [Fact]
+    public async Task RenderHtmlAsync_TurnsBlankLineParagraphsIntoRealParagraphTags()
+    {
+        var html = await Renderer().RenderHtmlAsync(
+            "Good morning,\r\n\r\nIn October, **2,597** compliances fell due.\n\n\n\nThis briefing names only what stands out.\nRegInsights Ultimate carries the full picture.",
+            "ABC Training",
+            Insights.Domain.MonthlyDigestCalendar.For(new DateOnly(2026, 8, 23)), "https://example.com/upgrade", "https://example.com/unsubscribe");
+
+        Assert.Contains("<p style=\"margin:0 0 16px 0;\">Good morning,</p>", html);
+        Assert.Contains("<p style=\"margin:0 0 16px 0;\">In October, <strong>2,597</strong> compliances fell due.</p>", html);
+        Assert.Contains("<p style=\"margin:0 0 16px 0;\">This briefing names only what stands out.<br>RegInsights Ultimate carries the full picture.</p>", html);
+        var slot = html[html.IndexOf("<!-- ============ BODY SLOT ============ -->", StringComparison.Ordinal)..html.IndexOf("<!-- ============ /BODY SLOT ============ -->", StringComparison.Ordinal)];
+        Assert.Equal(3, slot.Split("<p ").Length - 1);                                  // extra blank lines never make an empty <p>
+        Assert.DoesNotContain("white-space:pre-line;\">", html);                        // the body cell no longer relies on it
+    }
+
     [Fact]
     public async Task RenderHtmlForArtifactAsync_StillFindsExactlyOneUnsubscribeSentinel_WithBoldMarkdownInTheBody()
     {
