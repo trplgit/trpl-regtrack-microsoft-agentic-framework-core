@@ -107,8 +107,19 @@ public sealed partial class FreeDigestEmailRenderer(string templateDirectory, st
     /// </summary>
     /*  [OWNER, 2026-09-23] Emphasis is weight only - no colour, no tint. The insight phrases a
         paragraph carries are chosen in FreeMonthlyDraftNormalizer; here every span renders alike. */
-    private static string FormatBody(string body) =>
-        BoldMarkdown().Replace(WebUtility.HtmlEncode(body), "<strong>$1</strong>");
+    /*  [FOUND LIVE 2026-11-02] Paragraphs used to rely on the body cell's CSS
+        "white-space:pre-line" to show the body's "\n\n" breaks. Browsers honour it, so every
+        local preview looked right - but Gmail and Outlook drop it, and real recipients got the
+        whole email as one run-on paragraph ("Good morning, Here is your..."). Paragraphs are now
+        real <p> elements and single line breaks real <br>, which every mail client renders.  */
+    private static string FormatBody(string body)
+    {
+        var paragraphs = body.Replace("\r\n", "\n")
+            .Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => BoldMarkdown().Replace(WebUtility.HtmlEncode(p), "<strong>$1</strong>")
+                                       .Replace("\n", "<br>"));
+        return string.Concat(paragraphs.Select(p => $"<p style=\"margin:0 0 16px 0;\">{p}</p>"));
+    }
 
     private Task<string> ReadTemplateAsync(string fileName, CancellationToken cancellationToken)
     {
