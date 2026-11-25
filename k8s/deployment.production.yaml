@@ -53,6 +53,11 @@ spec:
               memory: "4Gi"
 
           securityContext:
+            runAsNonRoot: true
+            # numeric = the aspnet image's `app` user (Dockerfile `USER app`), so the
+            # kubelet can verify runAsNonRoot
+            runAsUser: 1654
+            runAsGroup: 1654
             allowPrivilegeEscalation: false
 
             capabilities:

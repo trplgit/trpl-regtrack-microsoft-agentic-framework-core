@@ -79,6 +79,11 @@ spec:
                 command: ["sh", "-c", "sleep 10"]
 
           securityContext:
+            runAsNonRoot: true
+            # numeric = the aspnet image's `app` user (Dockerfile `USER app`), so the
+            # kubelet can verify runAsNonRoot
+            runAsUser: 1654
+            runAsGroup: 1654
             allowPrivilegeEscalation: false
 
             capabilities:

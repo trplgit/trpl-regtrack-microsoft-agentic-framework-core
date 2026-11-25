@@ -54,6 +54,11 @@ RUN apt-get update && \
         fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# SECURITY (CodeAnt IaC CKV_DOCKER_3): run as the aspnet image's built-in
+# unprivileged `app` user (UID/GID 1654); :8080 needs no privileges.
+RUN chown -R app:app /app
+USER app
+
 EXPOSE 8080
 
 ENV ASPNETCORE_URLS=http://+:8080

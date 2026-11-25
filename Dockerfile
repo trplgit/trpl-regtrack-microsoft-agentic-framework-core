@@ -92,7 +92,18 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # Copy Playwright browsers from build image
-COPY --from=build /root/.cache/ms-playwright /root/.cache/ms-playwright
+# Playwright's Chromium lives outside /root so the non-root runtime user can
+# reach it (/root is 0700); PLAYWRIGHT_BROWSERS_PATH tells Microsoft.Playwright
+# where to look.
+COPY --from=build /root/.cache/ms-playwright /ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# SECURITY (CodeAnt IaC CKV_DOCKER_3 / CKV_K8S_23): run as the aspnet image's
+# built-in unprivileged `app` user (UID/GID 1654). /app is handed to it because
+# the worker's optional outputs (FreeDigest preview / capture dirs, tile-QA
+# screenshots) default to paths relative to the working directory.
+RUN chown -R app:app /app
+USER app
 
 
 # ============================================================
