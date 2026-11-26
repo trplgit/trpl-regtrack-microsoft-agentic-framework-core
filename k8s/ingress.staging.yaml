@@ -4,6 +4,7 @@ kind: Ingress
 metadata:
 
   name: trpl-regtrack-insights-worker
+  namespace: staging
 
  
 

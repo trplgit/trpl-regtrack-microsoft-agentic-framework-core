@@ -4,6 +4,9 @@ kind: Deployment
 metadata:
   name: trpl-regtrack-insights-worker
   namespace: production
+  annotations:
+    # Documented exception for the CodeAnt / Checkov Infrastructure Security scan.
+    checkov.io/skip1: CKV_K8S_22=worker writes its optional outputs (FreeDigest preview/capture dirs, tile-QA screenshots) under /app and Playwright/Chromium needs a writable /tmp and user-data dir; a read-only root FS would need an application change
   labels:
     app: trpl-regtrack-insights-worker
 
@@ -22,13 +25,26 @@ spec:
     spec:
       automountServiceAccountToken: false
 
+      # Pod-level hardening (CKV_K8S_29/31/40): the seccomp default profile and the same
+      # 10001 identity as the container; fsGroup gives any mounted volume that group.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
       imagePullSecrets:
         - name: acr-pull-secret
 
       containers:
         - name: trpl-regtrack-insights-worker
 
-          image: conatinerimages.azurecr.io/production/trpl-regtrack-insights-worker:latest
+          # Placeholder only. The deploy workflow replaces it with the image it just pushed,
+          # referenced by immutable digest, before applying this file (CKV_K8S_14 / CKV_K8S_43),
+          # so the cluster never sees this literal.
+          image: placeholder.azurecr.io/trpl-regtrack-insights-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
 
           imagePullPolicy: Always
 
@@ -52,14 +68,62 @@ spec:
               cpu: "1"
               memory: "4Gi"
 
+          # Probes (CKV_K8S_8/9). TCP on purpose, not httpGet on /health/*: when HealthCheckAuth:Token
+          # is set in the deployed appsettings.json (it is, per the staging manifest's note of
+          # 2026-09-19), HealthCheckTokenMiddleware answers every header-less probe with 401 and an
+          # httpGet probe would mark every pod unready / restart it. A TCP check only proves Kestrel
+          # is accepting connections, which the worker always does once started. To get the real
+          # DTFx readiness signal later: put the token in a Secret, expose it as HEALTHCHECK_TOKEN
+          # and switch to an exec probe that sends X-Health-Token over bash /dev/tcp.
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          # readOnlyRootFilesystem is deliberately OFF (see the CKV_K8S_22 exception above).
           securityContext:
             runAsNonRoot: true
-            # numeric = the aspnet image's `app` user (Dockerfile `USER app`), so the
-            # kubelet can verify runAsNonRoot
-            runAsUser: 1654
-            runAsGroup: 1654
+            # numeric = the aspnet image's `app` user, moved by the Dockerfile from the image
+            # default (1654) to 10001 - above the 10000 floor CodeAnt (CKV_K8S_40) requires so
+            # the container UID can never collide with a host account on the node.
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
 
             capabilities:
               drop:
                 - ALL
+---
+# Ingress-only policy (CKV2_K8S_6). The worker is reached through the nginx ingress (the
+# run-status API/SSE stream) and by the Prometheus scraper, so :8080 is open to every pod;
+# nothing else is. Egress is intentionally not restricted (SQL Server, Azure OpenAI, Key Vault,
+# Blob, LangFuse).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpl-regtrack-insights-worker
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: trpl-regtrack-insights-worker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080

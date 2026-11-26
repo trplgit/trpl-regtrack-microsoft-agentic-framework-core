@@ -99,11 +99,21 @@ COPY --from=build /root/.cache/ms-playwright /ms-playwright
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # SECURITY (CodeAnt IaC CKV_DOCKER_3 / CKV_K8S_23): run as the aspnet image's
-# built-in unprivileged `app` user (UID/GID 1654). /app is handed to it because
+# built-in unprivileged `app` user (moved to UID/GID 10001 below). /app is handed to it because
 # the worker's optional outputs (FreeDigest preview / capture dirs, tile-QA
 # screenshots) default to paths relative to the working directory.
-RUN chown -R app:app /app
+# The `app` user is moved to uid/gid 10001 so it cannot collide with a host account on the node
+# (CodeAnt CKV_K8S_40); the k8s manifests pin runAsUser/runAsGroup 10001 to match.
+RUN groupmod -g 10001 app \
+    && usermod -u 10001 -g 10001 app \
+    && chown -R app:app /app /home/app
 USER app
+
+# Container-level health check for `docker run` (CodeAnt CKV_DOCKER_2). Kubernetes ignores it and
+# uses the probes in k8s/deployment.*.yaml. No curl in the image, and /health/* may require
+# X-Health-Token, so this only checks that Kestrel accepts connections on :8080 (bash /dev/tcp).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' || exit 1
 
 
 # ============================================================
