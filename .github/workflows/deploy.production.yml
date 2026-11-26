@@ -30,6 +30,7 @@ jobs:
 
     outputs:
       IMAGE: ${{ steps.set-image.outputs.image }}
+      IMAGE_DIGEST: ${{ steps.set-image.outputs.image_digest }}
 
     steps:
 
@@ -125,7 +126,7 @@ jobs:
           echo "Image: $IMAGE"
           echo "=========================================="
 
-          docker build --no-cache \
+          docker build --pull --no-cache \
             -f Dockerfile \
             -t "$IMAGE" \
             .
@@ -134,7 +135,15 @@ jobs:
 
           docker push "$IMAGE"
 
+          # Immutable digest of what was just pushed: the manifest is applied with it
+          # (CodeAnt CKV_K8S_14 / CKV_K8S_43), so a pod always runs exactly the bytes
+          # this run built.
+          IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")
+          [ -n "$IMAGE_DIGEST" ] || { echo "::error::could not resolve the pushed digest for $IMAGE"; exit 1; }
+          echo "Pushed image digest: $IMAGE_DIGEST"
+
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
           echo "=========================================="
           echo "Image pushed successfully"
@@ -204,32 +213,40 @@ jobs:
       # ========================================================
 
       # --------------------------------------------------------
+      # Render Deployment with this build's digest
+      # --------------------------------------------------------
+      # The manifest carries a digest-form placeholder image; it is replaced with the
+      # digest of the image this run pushed BEFORE the apply, so the apply itself rolls
+      # out the new image in one step (replaces the old apply -> set image -> rollout
+      # restart, which rolled the pods three times per deploy). The file holds two
+      # documents (Deployment + NetworkPolicy), hence sed rather than `kubectl set image --local`.
+      - name: Render Deployment manifest
+        env:
+          PLACEHOLDER: placeholder.azurecr.io/trpl-regtrack-insights-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          IMAGE_DIGEST: ${{ needs.build-and-push.outputs.IMAGE_DIGEST }}
+        run: |
+          [ -n "$IMAGE_DIGEST" ] || { echo "::error::build-and-push produced no image digest"; exit 1; }
+          sed "s|$PLACEHOLDER|$IMAGE_DIGEST|g" k8s/deployment.production.yaml > rendered-deployment.yaml
+          grep -q "placeholder.azurecr.io" rendered-deployment.yaml && { echo "::error::placeholder image left in the manifest"; exit 1; }
+          grep "image:" rendered-deployment.yaml
+
+      # --------------------------------------------------------
       # Validate Deployment YAML
       # --------------------------------------------------------
       - name: Validate Deployment YAML
         run: |
           kubectl apply \
             --dry-run=client \
-            -f k8s/deployment.production.yaml \
+            -f rendered-deployment.yaml \
             -n ${{ inputs.environment }}
 
       # --------------------------------------------------------
-      # Apply Deployment
+      # Apply Deployment (+ NetworkPolicy)
       # --------------------------------------------------------
       - name: Apply Deployment
         run: |
           kubectl apply \
-            -f k8s/deployment.production.yaml \
-            -n ${{ inputs.environment }}
-
-      # --------------------------------------------------------
-      # Update Image
-      # --------------------------------------------------------
-      - name: Update Deployment Image
-        run: |
-          kubectl set image \
-            deployment/trpl-regtrack-insights-worker \
-            trpl-regtrack-insights-worker=${{ needs.build-and-push.outputs.IMAGE }} \
+            -f rendered-deployment.yaml \
             -n ${{ inputs.environment }}
 
       # --------------------------------------------------------
@@ -248,15 +265,6 @@ jobs:
         run: |
           kubectl apply \
             -f k8s/ingress.production.yaml \
-            -n ${{ inputs.environment }}
-
-      # --------------------------------------------------------
-      # Restart Deployment
-      # --------------------------------------------------------
-      - name: Restart Deployment
-        run: |
-          kubectl rollout restart \
-            deployment/trpl-regtrack-insights-worker \
             -n ${{ inputs.environment }}
 
       # --------------------------------------------------------

@@ -54,8 +54,24 @@ RUN apt-get update && \
         fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# SECURITY (CodeAnt IaC CKV_DOCKER_3): run as the aspnet image's built-in
+# unprivileged `app` user (moved to UID/GID 10001 below); :8080 needs no privileges.
+# The `app` user is moved to uid/gid 10001 so it cannot collide with a host account on the node
+# (CodeAnt CKV_K8S_40); the k8s manifests pin runAsUser/runAsGroup 10001 to match.
+RUN groupmod -g 10001 app \
+    && usermod -u 10001 -g 10001 app \
+    && chown -R app:app /app /home/app
+USER app
+
 EXPOSE 8080
 
 ENV ASPNETCORE_URLS=http://+:8080
+
+# Container-level health check for `docker run` (CodeAnt CKV_DOCKER_2). Kubernetes ignores it and
+# uses the probes in k8s/deployment.*.yaml. No curl in the image, and /health/* may require
+# X-Health-Token, so this only checks that Kestrel accepts connections on :8080 (bash /dev/tcp).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' || exit 1
+
 
 ENTRYPOINT ["dotnet", "Insights.ApiDevHost.dll"]
